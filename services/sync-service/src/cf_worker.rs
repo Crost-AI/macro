@@ -1,139 +1,127 @@
+use axum::{
+    Router,
+    body::Bytes,
+    extract::{Path as AxumPath, Request as AxumRequest, State as AxumState},
+    http::HeaderMap,
+    routing::{any, get, post},
+};
 use bebop::{Record, SubRecord};
-use tracing::{Instrument, error};
+use tracing::error;
 use wasm_bindgen::JsValue;
-use worker::{Env, Error, Headers, Method, Request, RequestInit, Response, Result, Stub};
+use worker::{Env, Headers, Method, Request, RequestInit, Response, Result, Stub};
 
 use crate::{
     constants::header_names::{AUTHORIZATION, MACRO_INTERNAL_AUTH_KEY_HEADER_KEY},
-    durable_object::{CopyDocumentRequest, GetSnapshotRequest, response, status_codes},
+    durable_object::{
+        CopyDocumentRequest, GetSnapshotRequest, HandlerResult, cors_layer, response, status_codes,
+    },
     error::ResultExt,
     generated::schema::InitializeFromSnapshotRequest,
     timeit_log,
     timeout::{DEFAULT_TIMEOUT_MS, timeout},
 };
-use std::sync::LazyLock;
 
 const DURABLE_OBJECT_NAMESPACE: &str = "DOCUMENT_SYNC_SESSION";
-mod markers {
-    pub const ROOT: &str = "root";
-    pub const HEALTH: &str = "health";
-    pub const SCHEMA: &str = "schema";
-    pub const COPY: &str = "copy";
-    pub const REST: &str = "rest";
+const SCHEMA: &str = include_str!("../bebop/schema.bop");
+
+/// The worker's top-level axum router. Static endpoints are served directly,
+/// `/document/{id}/copy` is orchestrated here, and everything else under a
+/// document (including the websocket `connect` upgrade) proxies to the durable
+/// object.
+pub fn outer_router(env: Env) -> Router {
+    // Static endpoints get CORS here. Document responses already carry the
+    // durable object's CORS, so the proxy routes must not add it again.
+    let public = Router::new()
+        .route("/", get(|| async { "Hello Sync Service!" }))
+        .route("/health", get(|| async { "healthy" }))
+        .route("/schema", get(|| async { SCHEMA }))
+        .layer(cors_layer());
+
+    let documents = Router::new()
+        .route("/document/{document_id}/copy", post(copy_route))
+        .route("/document/{document_id}/{*rest}", any(proxy_route));
+
+    public.merge(documents).with_state(env)
 }
 
-pub async fn router(env: Env, req: Request) -> Result<Response> {
-    let url = req.url()?;
-    let matched = ROUTER
-        .at(url.path())
-        .with_context(|| format!("MatchError on url [{url}]"))?;
-    match *matched.value {
-        markers::ROOT => Response::builder().ok("Hello Sync Service!"),
-        markers::HEALTH => Response::builder().ok("healthy"),
-        markers::SCHEMA => Response::builder().ok(include_str!("../bebop/schema.bop")),
-        needs_document_id => {
-            let document_id = matched.params.get("document_id").with_context(|| {
-                Error::from(format!(
-                    "Failed to get path parameter [doocument_id] from url: [{}]",
-                    url.as_ref()
-                ))
-            })?;
-            match needs_document_id {
-                markers::COPY => copy_handler(env, req, document_id).await,
-                markers::REST => pass_to_durable_object(&env, req, document_id).await,
-                _ => Ok(response(status_codes::NOT_FOUND)),
-            }
-        }
-    }
+/// Proxy any document request to its durable object. Websocket `connect`
+/// upgrades survive the request/response conversion.
+#[worker::send]
+async fn proxy_route(
+    AxumState(env): AxumState<Env>,
+    AxumPath((document_id, _rest)): AxumPath<(String, String)>,
+    req: AxumRequest,
+) -> HandlerResult {
+    Ok(pass_to_durable_object(&env, Request::try_from(req)?, &document_id)
+        .await?
+        .into())
 }
 
-/// Get the original snapshot then initialize a new document with it.
-/// Copying interacts with multiple durable objects so we orchestrate it from the worker.
-pub async fn copy_handler(env: Env, mut req: Request, document_id: &str) -> Result<Response> {
-    fn mv_header(source: &Headers, dest: &Headers, header_name: &str) -> Result<()> {
-        if let Some(value) = source.get(header_name)? {
-            dest.set(header_name, &value)?;
-        }
-        Ok(())
-    }
-
-    /// build a request to send to a durable object
+/// Copy a document: fetch the source snapshot, then initialize a new document
+/// with it. Orchestrated here because it spans two durable objects.
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/document/{document_id}/copy",
+    operation_id = "copy_document",
+    tag = "sync_service",
+    params(("document_id" = String, Path, description = "Source document to copy from")),
+    request_body = CopyDocumentRequest,
+    responses(
+        (status = 200, description = "Copy succeeded; the new document was initialized"),
+        (status = 404, description = "Source snapshot not found"),
+    ),
+))]
+#[worker::send]
+pub(crate) async fn copy_route(
+    AxumState(env): AxumState<Env>,
+    AxumPath(document_id): AxumPath<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> HandlerResult {
     async fn do_helper(
         env: &Env,
-        new_req_body: Vec<u8>,
-        new_req_path: &str,
-        og_req: &Request,
+        body: Vec<u8>,
+        path: &str,
+        headers: &HeaderMap,
         document_id: &str,
     ) -> Result<Response> {
-        let mut ss_req = RequestInit::new();
-        ss_req.with_method(Method::Post);
-        ss_req.with_body(Some(JsValue::from(new_req_body)));
-
-        let headers = Headers::new();
-        mv_header(og_req.headers(), &headers, AUTHORIZATION)?;
-        mv_header(
-            og_req.headers(),
-            &headers,
-            MACRO_INTERNAL_AUTH_KEY_HEADER_KEY,
-        )?;
-        mv_header(og_req.headers(), &headers, worker_rs_otel::TRACEPARENT)?;
-        ss_req.with_headers(headers);
-
-        let mut url = og_req.url()?;
-        url.set_path(new_req_path);
-        let ss_req = Request::new_with_init(url.as_ref(), &ss_req)?;
-
-        pass_to_durable_object(env, ss_req, document_id).await
+        let out_headers = Headers::new();
+        for name in [AUTHORIZATION, MACRO_INTERNAL_AUTH_KEY_HEADER_KEY] {
+            if let Some(value) = headers.get(name).and_then(|v| v.to_str().ok()) {
+                out_headers.set(name, value)?;
+            }
+        }
+        let mut init = RequestInit::new();
+        init.with_method(Method::Post)
+            .with_body(Some(JsValue::from(body)))
+            .with_headers(out_headers);
+        let req = Request::new_with_init(&format!("http://do{path}"), &init)?;
+        pass_to_durable_object(env, req, document_id).await
     }
 
-    let body: CopyDocumentRequest = serde_json::from_slice(&req.bytes().await?)?;
-    let new_document_id = body.target_document_id;
+    let req: CopyDocumentRequest = serde_json::from_slice(&body)?;
+    let new_document_id = req.target_document_id;
 
     let init_body = {
-        let new_req_body = serde_json::to_vec(&GetSnapshotRequest {
-            version_id: body.version_id,
-        })?;
-        let new_req_path = format!("/document/{}/snapshot", document_id);
+        let snapshot_req = serde_json::to_vec(&GetSnapshotRequest { version_id: req.version_id })?;
+        let snapshot_path = format!("/document/{document_id}/snapshot");
 
-        let mut ss_res = do_helper(&env, new_req_body, &new_req_path, &req, document_id).await?;
-        if ss_res.status_code() != status_codes::OK {
-            return Ok(response(ss_res.status_code()));
+        let mut res = do_helper(&env, snapshot_req, &snapshot_path, &headers, &document_id).await?;
+        if res.status_code() != status_codes::OK {
+            return Ok(response(res.status_code()).into());
         }
 
-        let snapshot_body = InitializeFromSnapshotRequest {
-            snapshot: bebop::SliceWrapper::Raw(&ss_res.bytes().await?),
+        let snapshot = InitializeFromSnapshotRequest {
+            snapshot: bebop::SliceWrapper::Raw(&res.bytes().await?),
         };
-        let mut buf = Vec::with_capacity(snapshot_body.serialized_size());
-        _ = snapshot_body
-            .serialize(&mut buf)
-            .context("Failed to serialize new snapshot")?;
+        let mut buf = Vec::with_capacity(snapshot.serialized_size());
+        _ = snapshot.serialize(&mut buf).context("Failed to serialize new snapshot")?;
         buf
     };
 
-    let initialize_path = format!("/document/{}/initialize", new_document_id);
-    let ss_res = do_helper(&env, init_body, &initialize_path, &req, &new_document_id).await?;
-    Ok(ss_res)
+    let initialize_path = format!("/document/{new_document_id}/initialize");
+    Ok(do_helper(&env, init_body, &initialize_path, &headers, &new_document_id).await?.into())
 }
-
-pub static ROUTER: LazyLock<matchit::Router<&str>> = LazyLock::new(|| {
-    let mut router = matchit::Router::new();
-    router
-        .insert("/", markers::ROOT)
-        .unwrap_context("Router.insert failed");
-    router
-        .insert("/health", markers::HEALTH)
-        .unwrap_context("Router.insert failed");
-    router
-        .insert("/schema", markers::SCHEMA)
-        .unwrap_context("Router.insert failed");
-    router
-        .insert("/document/{document_id}/copy", markers::COPY)
-        .unwrap_context("Router.insert failed");
-    router
-        .insert("/document/{document_id}/{*rest}", markers::REST)
-        .unwrap_context("Router.insert failed");
-    router
-});
 
 pub async fn pass_to_durable_object(
     env: &Env,
@@ -141,19 +129,8 @@ pub async fn pass_to_durable_object(
     document_id: &str,
 ) -> Result<Response> {
     let stub = get_durable_object(env, document_id)?;
-    let span = tracing::info_span!("do.fetch", document.id = %document_id);
-    let req = match worker_rs_otel::traceparent_for_span(&span) {
-        Some(traceparent) => {
-            let mut cloned = req.clone_mut()?;
-            cloned
-                .headers_mut()?
-                .set(worker_rs_otel::TRACEPARENT, &traceparent)?;
-            cloned
-        }
-        None => req,
-    };
 
-    let fut = timeout(stub.fetch_with_request(req), DEFAULT_TIMEOUT_MS).instrument(span);
+    let fut = timeout(stub.fetch_with_request(req), DEFAULT_TIMEOUT_MS);
     let res = timeit_log!("worker -> do_fetch", fut.await);
     Ok(match res {
         crate::timeout::TimeoutResult::Ok(x) => x?,

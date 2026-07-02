@@ -1,12 +1,12 @@
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
 use serde::{Deserialize, Serialize};
 use tracing::error;
-use worker::Error;
 
 use crate::{constants::header_names, error::ResultExt, secrets::Secrets};
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
-#[derive(Default)]
+#[derive(Default, enum_map::Enum)]
 pub enum AccessLevel {
     /// User can view the document
     #[default]
@@ -65,68 +65,35 @@ pub struct WebsocketQueryParams {
     pub token: String,
 }
 
-pub enum TokenFrom {
-    Headers,
-    QueryParams,
+pub fn decode_jwt(token: &str, env: &worker::Env) -> worker::Result<AuthToken> {
+    let secrets = Secrets::from(env);
+
+    let validation = Validation::new(Algorithm::HS256);
+    let key = DecodingKey::from_secret(secrets.document_permissions_secret.to_string().as_bytes());
+    let claims = decode::<AuthToken>(token, &key, &validation)
+        .context("failed to decode `AuthToken`")?
+        .claims;
+    Ok(claims)
 }
 
-pub fn decode_jwt(
-    req: &worker::Request,
-    env: &worker::Env,
-    token_from: TokenFrom,
-) -> worker::Result<AuthToken> {
-    let secrets = Secrets::from(env);
-    let token = match token_from {
-        TokenFrom::Headers => {
-            // NB: rewrite with if/let chain on edition 2024
-            let is_admin = match req
-                .headers()
-                .get(header_names::MACRO_INTERNAL_AUTH_KEY_HEADER_KEY)?
-            {
-                // sholud we warn when false?
-                Some(internal_key) => {
-                    let res = internal_key == secrets.internal_api_secret;
-                    if !res {
-                        error!(
-                            "provided header: {internal_key}
-did not match expected value: {}",
-                            secrets.internal_api_secret
-                        );
-                    }
-                    res
-                }
-                None => false,
-            };
+/// Extract the bearer token from the `Authorization` header (no validation —
+/// pair with [`decode_jwt`]). `None` if the header is absent or not `Bearer …`.
+pub fn extract_jwt_from_headers(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get(header_names::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|header| header.strip_prefix("Bearer "))
+        .map(str::to_string)
+}
 
-            if is_admin {
-                return Ok(AuthToken {
-                    user_id: None,
-                    document_id: "TODO should be option".to_string(),
-                    access_level: AccessLevel::Admin,
-                });
-            }
-
-            match req.headers().get(header_names::AUTHORIZATION)? {
-                Some(header) => match header.strip_prefix("Bearer ") {
-                    Some(token) => token.to_string(),
-                    None => {
-                        return Err(Error::from(
-                            "'Authorization' heard malformed. No 'Bearer ' prefix",
-                        ));
-                    }
-                },
-                None => return Err(Error::from("Missing 'Authorization' header")),
-            }
-        }
-        TokenFrom::QueryParams => req.query::<WebsocketQueryParams>()?.token,
-    };
-
-    let secret = secrets.document_permissions_secret;
-
-    let claims = macro_sync_service_jwt::decode::<AuthToken>(&token, &secret)
-        .context("failed to decode `AuthToken`")?;
-
-    Ok(claims)
+/// True when the request carries the shared internal API key. Internal services
+/// (e.g. the document-copy flow) use it to authenticate as [`AccessLevel::Admin`]
+/// without a user JWT.
+pub fn internal_request(headers: &axum::http::HeaderMap, env: &worker::Env) -> bool {
+    headers
+        .get(header_names::MACRO_INTERNAL_AUTH_KEY_HEADER_KEY)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|key| Secrets::from(env).internal_api_secret == key)
 }
 
 #[cfg(test)]

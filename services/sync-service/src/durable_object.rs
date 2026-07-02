@@ -2,26 +2,42 @@ use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     rc::Rc,
-    sync::{Arc, LazyLock},
+    sync::Arc,
 };
 
+use axum::http::{
+    Method,
+    header::{AUTHORIZATION, CONTENT_TYPE},
+};
+use axum::{
+    body::Bytes,
+    extract::{Path as AxumPath, Query, Request as AxumRequest, State as AxumState},
+    http::{HeaderMap, StatusCode},
+    middleware::{Next, from_fn_with_state},
+    response::{IntoResponse, Response as AxumResponse},
+    routing::{get, post},
+};
 use bebop::Record;
+use enum_map::{EnumMap, enum_map};
 use loro::{ExportMode, awareness::EphemeralStore};
-use matchit::Router;
 use serde::{Deserialize, Serialize};
-use tracing::{Instrument, debug, error, info, instrument, trace, warn};
+use std::collections::HashMap;
+use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_service::Service;
+use tracing::{debug, error, info, instrument, trace, warn};
 use worker::{
-    Cors, Date, DurableObject, Env, Error, Method, Request, Response, ResponseBody,
-    ResponseBuilder, Result, ScheduledTime, State, WebSocket, WebSocketIncomingMessage,
-    WebSocketPair, durable_object,
+    Date, DurableObject, Env, Error, Request, Response, ResponseBody, ResponseBuilder, Result,
+    ScheduledTime, State, WebSocket, WebSocketIncomingMessage, WebSocketPair, durable_object,
+    send::SendWrapper,
 };
 
 use crate::{
-    ai_peer::is_ai_peer,
-    auth::{AccessLevel, TokenFrom, decode_jwt},
+    auth::{
+        AccessLevel, WebsocketQueryParams, decode_jwt, extract_jwt_from_headers, internal_request,
+    },
     constants::USER_PEER_D1_BINDING,
     d1::{PeerWithUserId, get_user_id_from_peer_id, insert_user_mapping},
-    dss_internal::{DssInternal, DssInternalClient, InteractionReason},
+    dss_internal::{DssInternal, DssInternalClient},
     error::ResultExt,
     generated::schema::InitializeFromSnapshotRequest,
     keepalive::{DEFAULT_TIME_TO_LIVE, keepalive},
@@ -41,26 +57,9 @@ pub mod status_codes {
     pub const OK: u16 = 200;
     pub const NOT_FOUND: u16 = 404;
     pub const UNAUTH: u16 = 401;
-    pub const FORBIDDEN: u16 = 403;
 }
 
 const DOCUMENT_ID_KEY: &str = "DOCUMENT_ID";
-
-mod path {
-    pub const CONNECT: &str = "connect";
-    pub const EXISTS: &str = "exists";
-    pub const INITIALIZE: &str = "initialize";
-    pub const RAW: &str = "raw";
-    pub const SNAPSHOT: &str = "snapshot";
-    pub const ACTIVE_PEERS_MARKER: &str = "active_peers";
-    pub const PEER: &str = "peer";
-    pub const METADATA: &str = "metadata";
-    pub const BLAME: &str = "blame";
-    pub const DEBUG_DUMP_OPERATIONS: &str = "debug_dump_operations";
-    pub const DEBUG_DO_KV_GET: &str = "debug_do_kv_get";
-    pub const DEBUG_DO_KV_LIST: &str = "debug_do_kv_list";
-    pub const WAKEUP: &str = "wakeup";
-}
 
 pub fn response(status_code: u16) -> Response {
     Response::builder().with_status(status_code).empty()
@@ -107,6 +106,10 @@ pub type WsMetaMap = BTreeMap<String, WebSocketMetadata>;
 
 #[durable_object]
 pub struct DocumentSyncSession {
+    session: Rc<SessionState>,
+}
+
+pub struct SessionState {
     state: State,
     env: Env,
     /// id of the document, comes from URL path
@@ -119,8 +122,6 @@ pub struct DocumentSyncSession {
     /// a map from websocket's ID's to websocket metadata
     ws_meta_map: Arc<Mutex<WsMetaMap>>,
     msg_buffer: Arc<Mutex<Vec<u8>>>,
-    /// Buffered blame events. Flushed via D1 batch on each alarm tick.
-    pending_blame: Arc<Mutex<Vec<crate::d1::BlameEvent>>>,
 }
 
 mod u64_serde_strings {
@@ -165,12 +166,12 @@ mod u64_serde_strings {
 }
 
 pub struct Wsm<'a> {
-    dss: &'a DocumentSyncSession,
+    dss: &'a SessionState,
     ws: &'a WebSocket,
     ws_id: Option<String>,
 }
 impl<'a> Wsm<'a> {
-    pub fn new(dss: &'a DocumentSyncSession, ws: &'a WebSocket) -> Self {
+    pub fn new(dss: &'a SessionState, ws: &'a WebSocket) -> Self {
         Self {
             dss,
             ws,
@@ -207,7 +208,7 @@ impl<'a> Wsm<'a> {
         }
         Ok(())
     }
-    pub async fn get_peer_ids(&mut self) -> Result<Vec<u64>> {
+    async fn get_peer_ids(&mut self) -> Result<Vec<u64>> {
         self.maybe_update_ws_meta_map().await?;
         let ws_id = self.get_ws_id()?.to_string();
         Ok(self
@@ -268,35 +269,6 @@ pub fn get_ws_id(state: &State, ws: &WebSocket) -> Result<String> {
     get_ws_id_from_tags(&tags)
 }
 
-/// send a shallow snapshot to cache and search service
-/// we should eagerly call this from tiem to time to keep our backend up to date on
-/// the status of the document:
-/// - every few seconds
-/// - on creation
-/// - on everyone being disconnected
-async fn report_new_doc_state(document_id: &str, snapshot: &[u8], env: &Env) {
-    if let Err(err) = DssInternalClient::new(env)
-        .publish_shallow_snapshot(document_id, snapshot)
-        .await
-    {
-        warn!(error=?err, "failed to push snapshot to DSS");
-    }
-    #[cfg(feature = "search-service")]
-    if let Err(err) = crate::sps::update(document_id, env).await {
-        warn!(error=?err, "failed to update search index");
-    }
-}
-
-/// Report an interaction (join/leave/periodic edit) to DSS.
-async fn report_interaction(document_id: &str, env: &Env, reason: InteractionReason) {
-    if let Err(err) = DssInternalClient::new(env)
-        .publish_interaction(document_id, reason)
-        .await
-    {
-        warn!(error=?err, "failed to push interaction to DSS");
-    }
-}
-
 /// Schedule an alarm 5 seconds from now.
 async fn bump_alarm(state: &State) -> Result<()> {
     let current_alarm = state.storage().get_alarm().await?;
@@ -312,125 +284,28 @@ async fn bump_alarm(state: &State) -> Result<()> {
     Ok(())
 }
 
-impl DocumentSyncSession {
+impl SessionState {
     pub fn get_websockets(&self) -> Vec<WebSocket> {
         self.state.get_websockets()
     }
-
-    pub fn push_blame_events(&self, events: Vec<crate::d1::BlameEvent>) {
-        if events.is_empty() {
-            return;
-        }
-        self.pending_blame
-            .lock("DocumentSyncSession::push_blame_events")
-            .extend(events);
+    async fn debug_do_kv_get(&self, key: &str) -> Result<Response> {
+        let value = self.session_storage().await?.debug_do_kv_get(key).await?;
+        Response::from_json(&value)
     }
 
-    /// Drain the pending blame buffer and write all events via a single D1
-    /// batch in the background. Returns immediately; the actual write runs
-    /// inside `wait_until` so the alarm handler doesn't block on D1.
-    fn flush_pending_blame(&self) {
-        let pending: Vec<crate::d1::BlameEvent> = std::mem::take(
-            &mut *self
-                .pending_blame
-                .lock("DocumentSyncSession::flush_pending_blame"),
-        );
-        if pending.is_empty() {
-            return;
-        }
-        let env = self.env.clone();
-        self.state.wait_until(async move {
-            if let Err(e) = crate::d1::insert_blame_many(&env, &pending).await {
-                warn!(error = ?e, "failed to flush pending blame");
-            }
-        });
-    }
-    async fn inner_fetch(&self, req: Request) -> Result<Response> {
-        let url = req.url()?;
-        let matched = ROUTER
-            .at(url.path())
-            .with_context(|| format!("Failed to route url: [{url}]"))?;
-
-        match (
-            *matched.value,
-            matched.params.get("document_id").inspect(|document_id| {
-                tracing::Span::current().record("document.id", *document_id);
-                trace!(route =? matched.value, document_id = document_id, "matched route");
-            }),
-        ) {
-            // connect authenticates via jwt in query
-            (path::CONNECT, Some(document_id)) => {
-                return self.connect_handler(req, document_id).await;
-            }
-
-            // EXIST, PEER, and WAKEUP don't require auth
-            (path_needs_claims, Some(document_id)) => match path_needs_claims {
-                path::EXISTS => return self.exists_handler(document_id).await,
-                path::PEER => {
-                    return self
-                        .peer_handler(document_id, matched.params.get("peer_id"))
-                        .await;
-                }
-                path::WAKEUP => return self.wakeup(document_id).await,
-                // These need auth
-                rest => {
-                    let claims = or_unauth!(decode_jwt(&req, &self.env, TokenFrom::Headers).ok());
-                    or_unauth!(claims.has_document_id_access(document_id).then_some(()));
-                    match rest {
-                        path::METADATA => return self.metadata_handler(document_id).await,
-                        path::BLAME => {
-                            return self.blame_handler(matched.params.get("node_id")).await;
-                        }
-                        path::RAW => return self.raw_handler(document_id).await,
-                        path::SNAPSHOT => return self.snapshot_handler(req, document_id).await,
-                        path::ACTIVE_PEERS_MARKER => {
-                            // `?include_ai=false` filters out AI editors; default keeps them.
-                            let include_ai = req
-                                .url()?
-                                .query_pairs()
-                                .find(|(k, _)| k == "include_ai")
-                                .is_none_or(|(_, v)| !matches!(v.as_ref(), "false" | "0"));
-                            return self.active_peer_ids_handler(include_ai).await;
-                        }
-                        path::INITIALIZE => {
-                            or_unauth!(claims.has_permission(&AccessLevel::Edit).then_some(()));
-                            return self.initialize_handler(req, document_id).await;
-                        }
-                        path::DEBUG_DUMP_OPERATIONS => {
-                            or_unauth!(claims.has_permission(&AccessLevel::Admin).then_some(()));
-                            return self.dump_operations(document_id).await;
-                        }
-                        path::DEBUG_DO_KV_GET => {
-                            or_unauth!(claims.has_permission(&AccessLevel::Admin).then_some(()));
-                            let key = matched.params.get("key").context("missing key argoument")?;
-                            let value = self.session_storage().await?.debug_do_kv_get(key).await?;
-                            Response::from_json(&value)
-                        }
-                        path::DEBUG_DO_KV_LIST => {
-                            or_unauth!(claims.has_permission(&AccessLevel::Admin).then_some(()));
-                            let prefix = matched
-                                .params
-                                .get("prefix")
-                                .context("missing prefix argoument")?;
-                            let kvs: Vec<(String, Vec<u8>)> = self
-                                .session_storage()
-                                .await?
-                                .debug_list_do_kv(prefix)
-                                .await?
-                                .into_iter()
-                                .filter_map(|kv| kv.ok())
-                                .collect();
-                            Response::from_json(&kvs)
-                        }
-                        _ => Ok(response(status_codes::NOT_FOUND)),
-                    }
-                }
-            },
-            (_, None) => Ok(response(status_codes::NOT_FOUND)),
-        }
+    async fn debug_do_kv_list(&self, prefix: &str) -> Result<Response> {
+        let kvs: Vec<(String, Vec<u8>)> = self
+            .session_storage()
+            .await?
+            .debug_list_do_kv(prefix)
+            .await?
+            .into_iter()
+            .filter_map(|kv| kv.ok())
+            .collect();
+        Response::from_json(&kvs)
     }
 
-    async fn initialize_handler(&self, mut req: Request, document_id: &str) -> Result<Response> {
+    async fn initialize_handler(&self, body_raw: Vec<u8>, document_id: &str) -> Result<Response> {
         // NB: we expect DocumentSyncSession to not be initialized. If it is initialized, it's an error.
         let storage = get_snapshot_storage(&self.env, &self.state, document_id.to_string())?;
 
@@ -438,7 +313,6 @@ impl DocumentSyncSession {
             return Err(Error::from("snapshot already exists"));
         } else {
             debug!(document_id = document_id, "Initializing snapshot");
-            let body_raw = req.bytes().await?;
             let body = InitializeFromSnapshotRequest::deserialize(&body_raw).with_context(|| format!("Failed to deserialize InitializeFromSnapshotRequest with document_id: [{document_id}]"))?;
             storage.store_snapshot(&body.snapshot).await?;
             *self
@@ -475,27 +349,16 @@ impl DocumentSyncSession {
                     );
                 }
             }
-            let document_id_owned = document_id.to_string();
-            let env = self.env.clone();
-            self.state.wait_until(async move {
-                report_new_doc_state(&document_id_owned, &snapshot, &env).await;
-            });
         }
 
         Response::empty()
     }
 
-    /// Active peer ids. With `include_ai = false`, AI editors (peer ids from the
-    /// reserved AI block) are filtered out so callers see only human collaborators.
-    async fn active_peer_ids_handler(&self, include_ai: bool) -> Result<Response> {
+    async fn active_peer_ids_handler(&self) -> Result<Response> {
         let mut peer_ids: BTreeSet<u64> = BTreeSet::new();
         for ws in self.state.get_websockets() {
             let new_peer_ids = Wsm::new(self, &ws).get_peer_ids().await?;
-            peer_ids.extend(
-                new_peer_ids
-                    .into_iter()
-                    .filter(|&p| include_ai || !is_ai_peer(p)),
-            );
+            peer_ids.extend(new_peer_ids);
         }
         let str_ids = peer_ids
             .into_iter()
@@ -522,12 +385,11 @@ impl DocumentSyncSession {
         Ok(ResponseBuilder::new().body(ResponseBody::Body(out.into_bytes())))
     }
 
-    async fn snapshot_handler(&self, mut req: Request, document_id: &str) -> Result<Response> {
+    async fn snapshot_handler(&self, bytes: Vec<u8>, document_id: &str) -> Result<Response> {
         if !self.exists(document_id).await? {
             return Ok(response(status_codes::NOT_FOUND));
         }
 
-        let bytes = req.bytes().await?;
         let body: Option<GetSnapshotRequest> = if bytes.is_empty() {
             None
         } else {
@@ -629,20 +491,9 @@ impl DocumentSyncSession {
         })
     }
 
-    async fn blame_handler(&self, node_id: Option<&str>) -> Result<Response> {
-        let node_id = node_id.ok_or_else(|| Error::from("missing node_id"))?;
-        let document_id = self.document_id().await?.to_string();
-        let db = self.env.d1(USER_PEER_D1_BINDING)?;
-        match crate::d1::get_blame_for_node(db, &document_id, node_id).await? {
-            Some(row) => ResponseBuilder::new().from_json(&row),
-            None => Ok(response(status_codes::NOT_FOUND)),
-        }
-    }
-
-    async fn connect_handler(&self, req: Request, document_id: &str) -> Result<Response> {
+    async fn connect_handler(&self, token: &str, document_id: &str) -> Result<Response> {
         let (res, elap) = timeit!({
-            let claims = or_unauth!(decode_jwt(&req, &self.env, TokenFrom::QueryParams).ok());
-            or_unauth!(claims.has_document_id_access(document_id).then_some(()));
+            let claims = or_unauth!(decode_jwt(token, &self.env).ok());
             if self.maybe_set_document_id(document_id).await? {
                 trace!("init document_id={document_id}");
             } else {
@@ -651,10 +502,6 @@ impl DocumentSyncSession {
 
             //  Below is websocket stuff only i.e connect
             let pair = WebSocketPair::new().context("failed to create websocket pair")?;
-
-            // Whether this peer is the first to join the session (used to
-            // decide whether to report a `FirstJoin` interaction below).
-            let is_first_join = self.state.get_websockets().is_empty();
 
             // create tag for ws and store it
             let ws_id = new_ws_id();
@@ -683,9 +530,6 @@ impl DocumentSyncSession {
                 .and_then(|state| state.export_shallow_snapshot());
 
             if let Ok(snapshot) = snapshot {
-                // Size of the initial sync this connect sent — the server end
-                // of the client's `doc.sync.initial-sync` span.
-                tracing::Span::current().record("snapshot.bytes", snapshot.len());
                 websocket::send_initial_sync(
                     &pair.server,
                     snapshot.as_slice(),
@@ -698,18 +542,6 @@ impl DocumentSyncSession {
                     document_id = document_id,
                     "snapshot not yet available; deferring initial sync until /initialize"
                 );
-            }
-
-            // This is the single source of truth for `FirstJoin`: whenever
-            // the peer count genuinely transitions 0 -> 1, regardless of
-            // whether the document already has content.
-            if is_first_join {
-                let document_id_owned = document_id.to_string();
-                let env = self.env.clone();
-                self.state.wait_until(async move {
-                    report_interaction(&document_id_owned, &env, InteractionReason::FirstJoin)
-                        .await;
-                });
             }
 
             Response::from_websocket(pair.client).context("failed to create websocket response")?
@@ -846,120 +678,288 @@ impl DocumentSyncSession {
     }
 }
 
-pub static ROUTER: LazyLock<Router<&str>> = LazyLock::new(|| {
-    let mut router = Router::new();
-    router
-        .insert("/document/{document_id}/connect", path::CONNECT)
-        .unwrap();
-    router
-        .insert("/document/{document_id}/exists", path::EXISTS)
-        .unwrap();
-    router
-        .insert("/document/{document_id}/initialize", path::INITIALIZE)
-        .unwrap();
-    router
-        .insert("/document/{document_id}/raw", path::RAW)
-        .unwrap();
-    router
-        .insert(
-            "/document/{document_id}/active_peers",
-            path::ACTIVE_PEERS_MARKER,
-        )
-        .unwrap();
-    router
-        .insert("/document/{document_id}/snapshot", path::SNAPSHOT)
-        .unwrap();
-    router
-        .insert("/document/{document_id}/peer/{peer_id}", path::PEER)
-        .unwrap();
-    router
-        .insert("/document/{document_id}/metadata", path::METADATA)
-        .unwrap();
-    router
-        .insert("/document/{document_id}/blame/{node_id}", path::BLAME)
-        .unwrap();
-    router
-        .insert(
-            "/document/{document_id}/debug_dump_operations",
-            path::DEBUG_DUMP_OPERATIONS,
-        )
-        .unwrap();
-    router
-        .insert(
-            "/document/{document_id}/debug_do_kv_get/{key}",
-            path::DEBUG_DO_KV_GET,
-        )
-        .unwrap();
-    router
-        .insert(
-            "/document/{document_id}/debug_do_kv_list/{prefix}",
-            path::DEBUG_DO_KV_LIST,
-        )
-        .unwrap();
-    router
-        .insert("/document/{document_id}/wakeup", path::WAKEUP)
-        .unwrap();
-    router
-});
+/// axum router state: the session behind a `SendWrapper` so it satisfies axum's
+/// `Clone + Send + Sync + 'static` bound (sound because Workers is single-threaded).
+type DoState = SendWrapper<Rc<SessionState>>;
+
+/// Wraps a `worker::Error` so handlers can use `?` and return a 500.
+pub(crate) struct AppError(Error);
+
+impl From<Error> for AppError {
+    fn from(e: Error) -> Self {
+        Self(e)
+    }
+}
+
+impl From<serde_json::Error> for AppError {
+    fn from(e: serde_json::Error) -> Self {
+        Self(e.into())
+    }
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> AxumResponse {
+        error!(err =? self.0, "sync-service handler error");
+        StatusCode::INTERNAL_SERVER_ERROR.into_response()
+    }
+}
+
+pub(crate) type HandlerResult = std::result::Result<AxumResponse, AppError>;
+
+/// Does the request's token grant `level` access to its `document_id`? Synchronous
+/// (no `.await`), so the `&SessionState` borrow never crosses an await point —
+/// which keeps the middleware future `Send`.
+fn authorized(
+    session: &SessionState,
+    params: &HashMap<String, String>,
+    headers: &HeaderMap,
+    level: AccessLevel,
+) -> bool {
+    let Some(document_id) = params.get("document_id") else {
+        return false;
+    };
+    // Internal services authenticate with the shared key and act as Admin.
+    if internal_request(headers, &session.env) {
+        return true;
+    }
+    extract_jwt_from_headers(headers)
+        .and_then(|token| decode_jwt(&token, &session.env).ok())
+        .is_some_and(|claims| {
+            claims.has_document_id_access(document_id) && claims.has_permission(&level)
+        })
+}
+
+/// Build the per-request axum router for the durable object. Routes are grouped
+/// by the access level they require; the [`EnumMap`] is exhaustive over
+/// [`AccessLevel`], so every level is accounted for even though some carry no
+/// routes. Each tier gets a middleware guard for its level.
+fn do_router(state: DoState) -> axum::Router {
+    // Routes that need no auth or authenticate themselves (`connect` via its
+    // query token).
+    let open = axum::Router::new()
+        .route("/document/{document_id}/connect", get(connect_route))
+        .route("/document/{document_id}/exists", get(exists_route))
+        .route("/document/{document_id}/peer/{peer_id}", get(peer_route))
+        .route("/document/{document_id}/wakeup", post(wakeup_route));
+
+    let tiers: EnumMap<AccessLevel, axum::Router<DoState>> = enum_map! {
+        AccessLevel::View => axum::Router::new()
+            .route("/document/{document_id}/metadata", get(metadata_route))
+            .route("/document/{document_id}/raw", get(raw_route))
+            .route("/document/{document_id}/snapshot", post(snapshot_route))
+            .route("/document/{document_id}/active_peers", get(active_peers_route)),
+        AccessLevel::Comment => axum::Router::new(),
+        AccessLevel::Edit => axum::Router::new()
+            .route("/document/{document_id}/initialize", post(initialize_route)),
+        AccessLevel::Owner => axum::Router::new(),
+        AccessLevel::Admin => axum::Router::new()
+            .route("/document/{document_id}/debug_dump_operations", get(debug_dump_operations_route))
+            .route("/document/{document_id}/debug_do_kv_get/{key}", get(debug_do_kv_get_route))
+            .route("/document/{document_id}/debug_do_kv_list/{prefix}", get(debug_do_kv_list_route)),
+    };
+
+    tiers
+        .into_iter()
+        .fold(open, |router, (level, tier)| {
+            let guard = from_fn_with_state(
+                state.clone(),
+                move |AxumState(state): AxumState<DoState>,
+                      AxumPath(params): AxumPath<HashMap<String, String>>,
+                      req: AxumRequest,
+                      next: Next| async move {
+                    if authorized(&state, &params, req.headers(), level) {
+                        next.run(req).await
+                    } else {
+                        StatusCode::UNAUTHORIZED.into_response()
+                    }
+                },
+            );
+            router.merge(tier.layer(guard))
+        })
+        .layer(cors_layer())
+        .with_state(state)
+}
+
+#[worker::send]
+async fn connect_route(
+    AxumState(state): AxumState<DoState>,
+    AxumPath(document_id): AxumPath<String>,
+    Query(params): Query<WebsocketQueryParams>,
+) -> HandlerResult {
+    Ok(state
+        .connect_handler(&params.token, &document_id)
+        .await?
+        .into())
+}
+
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get, path = "/document/{document_id}/exists", operation_id = "document_exists",
+    tag = "sync_service", params(("document_id" = String, Path)),
+    responses((status = 200, description = "Document exists"), (status = 404, description = "Not found")),
+))]
+#[worker::send]
+pub(crate) async fn exists_route(
+    AxumState(state): AxumState<DoState>,
+    AxumPath(document_id): AxumPath<String>,
+) -> HandlerResult {
+    Ok(state.exists_handler(&document_id).await?.into())
+}
+
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get, path = "/document/{document_id}/metadata", operation_id = "document_metadata",
+    tag = "sync_service", params(("document_id" = String, Path)),
+    responses((status = 200, body = DocumentMetadata), (status = 401), (status = 404)),
+))]
+#[worker::send]
+pub(crate) async fn metadata_route(
+    AxumState(state): AxumState<DoState>,
+    AxumPath(document_id): AxumPath<String>,
+) -> HandlerResult {
+    Ok(state.metadata_handler(&document_id).await?.into())
+}
+
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get, path = "/document/{document_id}/raw", operation_id = "document_raw",
+    tag = "sync_service", params(("document_id" = String, Path)),
+    responses((status = 200, description = "Raw document JSON"), (status = 401), (status = 404)),
+))]
+#[worker::send]
+pub(crate) async fn raw_route(
+    AxumState(state): AxumState<DoState>,
+    AxumPath(document_id): AxumPath<String>,
+) -> HandlerResult {
+    Ok(state.raw_handler(&document_id).await?.into())
+}
+
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get, path = "/document/{document_id}/active_peers", operation_id = "document_active_peers",
+    tag = "sync_service", params(("document_id" = String, Path)),
+    responses((status = 200, description = "Active peer ids"), (status = 401)),
+))]
+#[worker::send]
+pub(crate) async fn active_peers_route(
+    AxumState(state): AxumState<DoState>,
+    AxumPath(_document_id): AxumPath<String>,
+) -> HandlerResult {
+    Ok(state.active_peer_ids_handler().await?.into())
+}
+
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get, path = "/document/{document_id}/peer/{peer_id}", operation_id = "document_peer",
+    tag = "sync_service",
+    params(("document_id" = String, Path), ("peer_id" = String, Path)),
+    responses((status = 200, body = PeerResponse)),
+))]
+#[worker::send]
+pub(crate) async fn peer_route(
+    AxumState(state): AxumState<DoState>,
+    AxumPath((document_id, peer_id)): AxumPath<(String, String)>,
+) -> HandlerResult {
+    Ok(state
+        .peer_handler(&document_id, Some(&peer_id))
+        .await?
+        .into())
+}
+
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post, path = "/document/{document_id}/wakeup", operation_id = "document_wakeup",
+    tag = "sync_service", params(("document_id" = String, Path)),
+    responses((status = 200, description = "Keepalive scheduled")),
+))]
+#[worker::send]
+pub(crate) async fn wakeup_route(
+    AxumState(state): AxumState<DoState>,
+    AxumPath(document_id): AxumPath<String>,
+) -> HandlerResult {
+    Ok(state.wakeup(&document_id).await?.into())
+}
+
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post, path = "/document/{document_id}/snapshot", operation_id = "document_snapshot",
+    tag = "sync_service", params(("document_id" = String, Path)),
+    request_body = GetSnapshotRequest,
+    responses((status = 200, description = "Loro snapshot bytes"), (status = 401), (status = 404)),
+))]
+#[worker::send]
+pub(crate) async fn snapshot_route(
+    AxumState(state): AxumState<DoState>,
+    AxumPath(document_id): AxumPath<String>,
+    body: Bytes,
+) -> HandlerResult {
+    Ok(state
+        .snapshot_handler(body.to_vec(), &document_id)
+        .await?
+        .into())
+}
+
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post, path = "/document/{document_id}/initialize", operation_id = "document_initialize",
+    tag = "sync_service", params(("document_id" = String, Path)),
+    responses((status = 200, description = "Initialized"), (status = 401)),
+))]
+#[worker::send]
+pub(crate) async fn initialize_route(
+    AxumState(state): AxumState<DoState>,
+    AxumPath(document_id): AxumPath<String>,
+    body: Bytes,
+) -> HandlerResult {
+    Ok(state
+        .initialize_handler(body.to_vec(), &document_id)
+        .await?
+        .into())
+}
+
+#[worker::send]
+async fn debug_dump_operations_route(
+    AxumState(state): AxumState<DoState>,
+    AxumPath(document_id): AxumPath<String>,
+) -> HandlerResult {
+    Ok(state.dump_operations(&document_id).await?.into())
+}
+
+#[worker::send]
+async fn debug_do_kv_get_route(
+    AxumState(state): AxumState<DoState>,
+    AxumPath((_document_id, key)): AxumPath<(String, String)>,
+) -> HandlerResult {
+    Ok(state.debug_do_kv_get(&key).await?.into())
+}
+
+#[worker::send]
+async fn debug_do_kv_list_route(
+    AxumState(state): AxumState<DoState>,
+    AxumPath((_document_id, prefix)): AxumPath<(String, String)>,
+) -> HandlerResult {
+    Ok(state.debug_do_kv_list(&prefix).await?.into())
+}
 
 impl DurableObject for DocumentSyncSession {
     fn new(state: State, env: Env) -> Self {
         Self {
-            state,
-            env,
-            document_id: Mutex::new(None),
-            document_state: Mutex::new(None),
-            session_storage: Mutex::new(None),
-            awareness: EphemeralStore::new(5_000),
-            ws_meta_map: Arc::new(Mutex::new(Default::default())),
-            msg_buffer: Arc::new(Mutex::new(vec![])),
-            pending_blame: Arc::new(Mutex::new(Vec::new())),
+            session: Rc::new(SessionState {
+                state,
+                env,
+                document_id: Mutex::new(None),
+                document_state: Mutex::new(None),
+                session_storage: Mutex::new(None),
+                awareness: EphemeralStore::new(5_000),
+                ws_meta_map: Arc::new(Mutex::new(Default::default())),
+                msg_buffer: Arc::new(Mutex::new(vec![])),
+            }),
         }
     }
 
-    /// Fetch the durable object
-    /// Upgrades the request to a websocket request connected to the document session
+    /// Fetch the durable object. All routes (including the websocket `connect`
+    /// upgrade) go through the axum router; CORS and preflight are handled by
+    /// its `CorsLayer`.
     async fn fetch(&self, req: Request) -> Result<Response> {
-        let set_allow_origin = if let Some(origin) = req
-            .headers()
-            .get("Origin")
-            .context("No `Origin` header found in header")?
-        {
-            if is_origin_allowed(&origin) {
-                Some(origin)
-            } else {
-                return Ok(response(status_codes::FORBIDDEN));
-            }
-        } else {
-            None
-        };
-
-        if req.method() == Method::Options {
-            return Ok(Response::builder()
-                .with_status(status_codes::OK)
-                .with_cors(&cors(set_allow_origin.as_deref()))?
-                .empty());
-        }
-        let traceparent = worker_rs_otel::traceparent_from_request(&req);
-        let (remote_id, remote_parent) = worker_rs_otel::remote_fields(traceparent.as_ref());
-        let path = req.path();
-        let span = tracing::info_span!(
-            "do.request",
-            http.path = %path,
-            document.id = tracing::field::Empty,
-            snapshot.bytes = tracing::field::Empty,
-            trace.remote_id = %remote_id,
-            trace.remote_parent = %remote_parent,
-        );
-
-        let res = worker_rs_otel::scope(
-            &self.env,
-            &self.state,
-            self.inner_fetch(req).instrument(span),
-        )
-        .await;
-        res.context("DurableObject::fetch error")?
-            .with_cors(&cors(set_allow_origin.as_deref()))
+        let http_req = worker::HttpRequest::try_from(req)?;
+        let mut router = do_router(SendWrapper::new(self.session.clone()));
+        let axum_res = router
+            .call(http_req)
+            .await
+            .unwrap_or_else(|e: std::convert::Infallible| match e {});
+        Response::try_from(axum_res).context("DurableObject::fetch error")
     }
 
     async fn websocket_message(&self, ws: WebSocket, msg: WebSocketIncomingMessage) -> Result<()> {
@@ -967,82 +967,42 @@ impl DurableObject for DocumentSyncSession {
         const PING: &str = "ping";
         let binary_message = match msg {
             WebSocketIncomingMessage::String(message) => {
-                // Heartbeat: deliberately unspanned to keep it out of traces.
+                // TODO do keepalive?
                 if message == PING {
                     ws.send_with_str(PONG).ok();
                 } else {
-                    return worker_rs_otel::scope(&self.env, &self.state, async {
-                        warn!("Received unknown 'String' message: {message:?}");
-                        Ok(())
-                    })
-                    .await;
+                    warn!("Received unknown 'String' message: {message:?}");
                 }
                 return Ok(());
             }
             WebSocketIncomingMessage::Binary(bm) => bm,
         };
-        worker_rs_otel::scope(&self.env, &self.state, async {
-            let mut telemetry = websocket::InboundMessageTelemetry::new(binary_message.len());
 
-            let res: Result<()> = async {
-                let document_id = self.document_id().await.inspect_err(|_| {
-                    telemetry.record_error_stage("document_context");
-                })?;
-                let ws_id = get_ws_id_from_tags(&self.state.get_tags(&ws)).ok();
-                telemetry.record_context(&document_id, ws_id);
-
-                let message =
-                    websocket::deserialize_message(&binary_message).inspect_err(|_| {
-                        telemetry.record_message_type("invalid");
-                        telemetry.record_error_stage("deserialize");
-                    })?;
-                telemetry.record_message_type(websocket::message_type(&message));
-
-                websocket::process_message(
-                    &ws,
-                    &document_id,
-                    &*self.document_state().await?,
-                    &*self.session_storage().await?,
-                    &self.awareness,
-                    message,
-                    self.msg_buffer.clone(),
-                    self,
-                    &mut telemetry,
-                )
-                .await
-                .inspect_err(|_| {
-                    telemetry.record_error_stage("process");
-                })
-                .context("failed to process websocket message")?;
-
-                bump_alarm(&self.state)
-                    .await
-                    .inspect_err(|_| {
-                        telemetry.record_error_stage("alarm");
-                    })
-                    .context("failed to keep document alive")?;
-
-                Ok(())
-            }
-            .await;
-
-            if let Err(error) = &res {
-                let span = telemetry.error_span();
-                {
-                    let _entered = span.enter();
-                    tracing::error!(error = ?error, "failed to handle websocket message");
-                }
-            }
-            res
-        })
+        websocket::process_message(
+            &ws,
+            &self.session.document_id().await?,
+            &*self.session.document_state().await?,
+            &*self.session.session_storage().await?,
+            &self.session.awareness,
+            binary_message,
+            self.session.msg_buffer.clone(),
+            &self.session,
+        )
         .await
+        .context("failed to process websocket message")?;
+
+        bump_alarm(&self.session.state)
+            .await
+            .context("failed to keep document alive")?;
+
+        Ok(())
     }
 
     /// Save document if needed
+    #[instrument(skip_all, err)]
     async fn alarm(&self) -> Result<Response> {
-        let span = tracing::info_span!("do.alarm");
-        worker_rs_otel::scope(&self.env, &self.state, async {
-            let state = match self
+        let state = match self
+            .session
             .document_state()
             .await
             .context("failed to get document_state")
@@ -1057,6 +1017,7 @@ impl DurableObject for DocumentSyncSession {
 
         if state.should_save() {
             let seshs = self
+                .session
                 .session_storage()
                 .await
                 .context("failed to get session storage")?;
@@ -1064,7 +1025,7 @@ impl DurableObject for DocumentSyncSession {
             // Keeps the worker alive for DEFAULT_TIME_TO_LIVE
             keepalive(DEFAULT_TIME_TO_LIVE);
 
-            let doc_state = self.document_state().await?;
+            let doc_state = self.session.document_state().await?;
             let (sf, of) = doc_state.frontiers();
             seshs
                 .store_snapshot(&doc_state)
@@ -1079,37 +1040,37 @@ impl DurableObject for DocumentSyncSession {
 
             state.mark_exported();
 
-            let document_id = self.document_id().await.ok();
-            let env = self.env.clone();
-            self.state.wait_until(async move {
+            let document_id = self.session.document_id().await.ok();
+            let env = self.session.env.clone();
+            self.session.state.wait_until(async move {
                 if let Some(document_id) = document_id
                     && let Ok(snapshot) = doc_state.export_shallow_snapshot()
                 {
-                    report_new_doc_state(&document_id, &snapshot, &env).await;
-                    report_interaction(&document_id, &env, InteractionReason::Edited).await;
+                    // best effort
+                    if let Err(err) = DssInternalClient::new(&env)
+                        .publish_shallow_snapshot(&document_id, &snapshot)
+                        .await
+                    {
+                        warn!(error =? err, "failed to push snapshot to DSS");
+                    }
                 }
             });
         }
-
-        self.flush_pending_blame();
 
         // Re-arm the alarm while clients are connected so the in-memory state
         // stays warm and pending updates keep getting persisted. Updates reach
         // peers when they happen (PeerUpdate broadcast); pushing a full
         // snapshot to every client on every alarm tick only burned bandwidth
         // and stalled clients on large documents.
-        if !self.state.get_websockets().is_empty() {
-            bump_alarm(&self.state)
+        if !self.session.state.get_websockets().is_empty() {
+            bump_alarm(&self.session.state)
                 .await
                 .context("failed to keep document alive")?;
         } else {
             info!("durable object has reached 0 connections")
         }
 
-            Response::ok("ok")
-        }
-        .instrument(span))
-        .await
+        Response::ok("ok")
     }
 
     async fn websocket_close(
@@ -1119,50 +1080,38 @@ impl DurableObject for DocumentSyncSession {
         _reason: String,
         _was_clean: bool,
     ) -> Result<()> {
-        worker_rs_otel::scope(&self.env, &self.state, async {
-            let peer_ids = Wsm::new(self, &ws).get_peer_ids().await?;
-            for peer_id in peer_ids {
-                self.awareness.delete(&peer_id.to_string());
-                let update = self.awareness.encode(&peer_id.to_string());
+        let peer_ids = Wsm::new(&self.session, &ws).get_peer_ids().await?;
+        for peer_id in peer_ids {
+            self.session.awareness.delete(&peer_id.to_string());
+            let update = self.session.awareness.encode(&peer_id.to_string());
 
-                // Don't silently discard the error
-                websocket::broadcast_awareness(
-                    &ws,
-                    self.state.get_websockets().as_slice(),
-                    update.as_slice(),
-                    self.msg_buffer.clone(),
-                )
-                .context("failed to broadcast awareness")?;
-            }
+            // Don't silently discard the error
+            websocket::broadcast_awareness(
+                &ws,
+                self.session.state.get_websockets().as_slice(),
+                update.as_slice(),
+                self.session.msg_buffer.clone(),
+            )
+            .context("failed to broadcast awareness")?;
+        }
 
-            if self.state.get_websockets().len() == 1
-                && let Ok(document_id) = self.document_id().await
-                && let Ok(state) = self.document_state().await
-                && let Ok(snapshot) = state.export_shallow_snapshot()
-            {
-                let env = self.env.clone();
-                self.state.wait_until(async move {
-                    report_new_doc_state(&document_id, &snapshot, &env).await;
-                    report_interaction(&document_id, &env, InteractionReason::LastLeave).await;
-                });
-            }
-            Ok(())
-        })
-        .await
+        #[cfg(feature = "search-service")]
+        if self.session.state.get_websockets().len() == 1 {
+            crate::sps::update(&self.session.document_id().await?, &self.session.env).await?;
+        }
+        Ok(())
     }
 
     async fn websocket_error(&self, ws: WebSocket, error: Error) -> Result<()> {
-        worker_rs_otel::scope(&self.env, &self.state, async {
-            let ws_id = get_ws_id(&self.state, &ws)?;
-            error!(ws_id = ws_id, error = ?error, "websocket error");
-            // TODO update awareness stuff
-            Ok(())
-        })
-        .await
+        let ws_id = get_ws_id(&self.session.state, &ws)?;
+        error!(ws_id = ws_id, error = ?error, "websocket error");
+        // TODO update awareness stuff
+        Ok(())
     }
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct VersionIndicator {
     /// Json has trouble with peer id bigints, so we need to serialize from a string
     pub peer: String,
@@ -1170,17 +1119,20 @@ pub struct VersionIndicator {
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Debug)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CopyDocumentRequest {
     pub target_document_id: String,
     pub version_id: Option<VersionIndicator>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Debug)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct GetSnapshotRequest {
     pub version_id: Option<VersionIndicator>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct DocumentMetadata {
     pub id: String,
     pub peers: Vec<PeerWithUserId>,
@@ -1188,6 +1140,7 @@ pub struct DocumentMetadata {
 }
 
 #[derive(serde::Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct PeerResponse {
     pub peer_id: String,
     pub user_id: String,
@@ -1209,11 +1162,7 @@ pub fn is_origin_allowed(origin: &str) -> bool {
     if ALLOWED_ORIGINS.contains(&origin) {
         return true;
     }
-    // `localhost` and `*.localhost` (loopback-reserved; local dev uses
-    // per-persona hostnames so each seeded user gets its own cookie jar).
-    if let Some(rest) = origin.strip_prefix("http://")
-        && let Some((host, port)) = rest.rsplit_once(':')
-        && (host == "localhost" || host.ends_with(".localhost"))
+    if let Some(port) = origin.strip_prefix("http://localhost:")
         && let Ok(port) = port.parse::<u16>()
     {
         return (3000..=3999).contains(&port) || (20000..=60000).contains(&port);
@@ -1228,38 +1177,22 @@ pub fn is_origin_allowed(origin: &str) -> bool {
 }
 
 /// Workaround for this bug: <https://github.com/cloudflare/workers-rs/issues/554>
-pub fn cors(request_origin: Option<&str>) -> Cors {
-    use worker::Method;
-    let cors_origins = request_origin
-        .map(|o| {
-            if is_origin_allowed(o) {
-                vec![o.to_string()]
-            } else {
-                vec![]
-            }
-        })
-        .unwrap_or_default();
-
-    Cors::new()
-        .with_credentials(true)
-        // `traceparent`/`tracestate` are injected by the web client's traced
-        // fetch wrapper (see `safeFetch`), so they must be preflight-allowed or
-        // the browser blocks every instrumented call. Kept in sync with
-        // `macro_cors::EXTRA_HEADERS`, which the axum services use; this worker
-        // can't share that list because it's built on tower-http.
-        .with_allowed_headers(vec![
-            "authorization",
-            "content-type",
-            "traceparent",
-            "tracestate",
+/// CORS layer mirroring the previous manual config: credentials allowed, the
+/// request origin reflected only when [`is_origin_allowed`], and the same
+/// allowed methods/headers. Preflight (`OPTIONS`) is handled by the layer.
+pub fn cors_layer() -> tower_http::cors::CorsLayer {
+    CorsLayer::new()
+        .allow_credentials(true)
+        .allow_headers([AUTHORIZATION, CONTENT_TYPE])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
         ])
-        .with_methods(vec![
-            Method::Get,
-            Method::Post,
-            Method::Put,
-            Method::Patch,
-            Method::Delete,
-            Method::Options,
-        ])
-        .with_origins(cors_origins)
+        .allow_origin(AllowOrigin::predicate(|origin, _parts| {
+            origin.to_str().map(is_origin_allowed).unwrap_or(false)
+        }))
 }
