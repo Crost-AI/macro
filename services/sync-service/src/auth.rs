@@ -2,7 +2,12 @@ use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
-use crate::{constants::header_names, error::ResultExt, secrets::Secrets};
+use crate::{
+    constants::header_names,
+    error::ResultExt,
+    ids::{DocumentId, SyncServiceJWT},
+    secrets::Secrets,
+};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
@@ -31,7 +36,7 @@ impl AccessLevel {
 #[derive(Deserialize, Debug)]
 pub struct AuthToken {
     pub user_id: Option<String>,
-    document_id: String,
+    document_id: DocumentId,
     pub access_level: AccessLevel,
 }
 
@@ -46,8 +51,8 @@ impl AuthToken {
         }
         true
     }
-    pub fn has_document_id_access(&self, document_id: &str) -> bool {
-        if !(self.document_id == document_id || matches!(self.access_level, AccessLevel::Admin)) {
+    pub fn has_document_id_access(&self, document_id: &DocumentId) -> bool {
+        if !(self.document_id == *document_id || matches!(self.access_level, AccessLevel::Admin)) {
             error!(
                 "Don't have permission for document: [{:?}]
 Auth'd document [{:?}]
@@ -62,15 +67,15 @@ access level [{:?}]",
 
 #[derive(Deserialize, Debug)]
 pub struct WebsocketQueryParams {
-    pub token: String,
+    pub token: SyncServiceJWT,
 }
 
-pub fn decode_jwt(token: &str, env: &worker::Env) -> worker::Result<AuthToken> {
+pub fn decode_jwt(token: &SyncServiceJWT, env: &worker::Env) -> worker::Result<AuthToken> {
     let secrets = Secrets::from(env);
 
     let validation = Validation::new(Algorithm::HS256);
     let key = DecodingKey::from_secret(secrets.document_permissions_secret.to_string().as_bytes());
-    let claims = decode::<AuthToken>(token, &key, &validation)
+    let claims = decode::<AuthToken>(token.as_str(), &key, &validation)
         .context("failed to decode `AuthToken`")?
         .claims;
     Ok(claims)
@@ -78,12 +83,12 @@ pub fn decode_jwt(token: &str, env: &worker::Env) -> worker::Result<AuthToken> {
 
 /// Extract the bearer token from the `Authorization` header (no validation —
 /// pair with [`decode_jwt`]). `None` if the header is absent or not `Bearer …`.
-pub fn extract_jwt_from_headers(headers: &axum::http::HeaderMap) -> Option<String> {
+pub fn extract_jwt_from_headers(headers: &axum::http::HeaderMap) -> Option<SyncServiceJWT> {
     headers
         .get(header_names::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|header| header.strip_prefix("Bearer "))
-        .map(str::to_string)
+        .map(|token| SyncServiceJWT(token.to_string()))
 }
 
 /// True when the request carries the shared internal API key. Internal services

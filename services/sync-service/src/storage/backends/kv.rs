@@ -4,7 +4,7 @@ use worker::{
     kv::{KvError, KvStore},
 };
 
-use crate::{error::ResultExt, storage::snapshot::SnapshotStorage, timeit};
+use crate::{error::ResultExt, ids::DocumentId, storage::snapshot::SnapshotStorage, timeit};
 
 pub const SNAPSHOT_STORE_KV_BINDING: &str = "SNAPSHOT_STORE_KV";
 
@@ -13,11 +13,11 @@ pub struct Kv {
     inner: KvStore,
 }
 impl Kv {
-    pub fn from_env(env: &Env, document_id: String) -> worker::Result<Self> {
+    pub fn from_env(env: &Env, document_id: &DocumentId) -> worker::Result<Self> {
         let ss_kv = env
             .kv(SNAPSHOT_STORE_KV_BINDING)
             .context("Colud not get env SNAPSHOT_STORE_KV_BINDING")?;
-        Ok(Self::new(ss_kv, document_id))
+        Ok(Self::new(ss_kv, document_id.as_str().to_string()))
     }
     pub fn new(inner: KvStore, document_id: String) -> Self {
         Self { inner, document_id }

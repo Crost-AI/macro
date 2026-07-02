@@ -40,6 +40,7 @@ use crate::{
     dss_internal::{DssInternal, DssInternalClient},
     error::ResultExt,
     generated::schema::InitializeFromSnapshotRequest,
+    ids::{DocumentId, SyncServiceJWT},
     keepalive::{DEFAULT_TIME_TO_LIVE, keepalive},
     mutex::Mutex,
     state::DocumentState,
@@ -113,7 +114,7 @@ pub struct SessionState {
     state: State,
     env: Env,
     /// id of the document, comes from URL path
-    document_id: Mutex<Option<Arc<String>>>,
+    document_id: Mutex<Option<Arc<DocumentId>>>,
     /// Current document state
     document_state: Mutex<Option<Arc<DocumentState>>>,
     /// Access to document related IO
@@ -236,7 +237,7 @@ impl<'a> Wsm<'a> {
             .can_edit())
     }
 
-    pub async fn add_new_peerid(&mut self, peerid: u64, document_id: &str) -> Result<()> {
+    pub async fn add_new_peerid(&mut self, peerid: u64, document_id: &DocumentId) -> Result<()> {
         self.maybe_update_ws_meta_map().await?;
 
         let ws_id = self.get_ws_id()?.to_string();
@@ -305,23 +306,27 @@ impl SessionState {
         Response::from_json(&kvs)
     }
 
-    async fn initialize_handler(&self, body_raw: Vec<u8>, document_id: &str) -> Result<Response> {
+    async fn initialize_handler(
+        &self,
+        body_raw: Vec<u8>,
+        document_id: &DocumentId,
+    ) -> Result<Response> {
         // NB: we expect DocumentSyncSession to not be initialized. If it is initialized, it's an error.
-        let storage = get_snapshot_storage(&self.env, &self.state, document_id.to_string())?;
+        let storage = get_snapshot_storage(&self.env, &self.state, document_id)?;
 
         if storage.has_snapshot().await? {
             return Err(Error::from("snapshot already exists"));
         } else {
-            debug!(document_id = document_id, "Initializing snapshot");
+            debug!(document_id = document_id.as_str(), "Initializing snapshot");
             let body = InitializeFromSnapshotRequest::deserialize(&body_raw).with_context(|| format!("Failed to deserialize InitializeFromSnapshotRequest with document_id: [{document_id}]"))?;
             storage.store_snapshot(&body.snapshot).await?;
             *self
                 .document_id
                 .lock("DocumentSyncSession::document_id set within initialize_handler") =
-                Some(Arc::new(document_id.to_string()));
+                Some(Arc::new(document_id.clone()));
             self.state
                 .storage()
-                .put(DOCUMENT_ID_KEY, document_id.to_string())
+                .put(DOCUMENT_ID_KEY, document_id.as_str())
                 .await?;
             let dkv_storage = DurableKVStorage::new(self.state.storage());
             let session_storage = Rc::new(SessionStorage::new(storage, dkv_storage));
@@ -369,7 +374,7 @@ impl SessionState {
         Ok(ResponseBuilder::new().body(ResponseBody::Body(result)))
     }
 
-    async fn exists_handler(&self, id: &str) -> Result<Response> {
+    async fn exists_handler(&self, id: &DocumentId) -> Result<Response> {
         Ok(response(if self.exists(id).await? {
             status_codes::OK
         } else {
@@ -377,7 +382,7 @@ impl SessionState {
         }))
     }
 
-    async fn raw_handler(&self, document_id: &str) -> Result<Response> {
+    async fn raw_handler(&self, document_id: &DocumentId) -> Result<Response> {
         if !self.exists(document_id).await? {
             return Ok(response(status_codes::NOT_FOUND));
         }
@@ -385,7 +390,7 @@ impl SessionState {
         Ok(ResponseBuilder::new().body(ResponseBody::Body(out.into_bytes())))
     }
 
-    async fn snapshot_handler(&self, bytes: Vec<u8>, document_id: &str) -> Result<Response> {
+    async fn snapshot_handler(&self, bytes: Vec<u8>, document_id: &DocumentId) -> Result<Response> {
         if !self.exists(document_id).await? {
             return Ok(response(status_codes::NOT_FOUND));
         }
@@ -413,7 +418,7 @@ impl SessionState {
         Ok(ResponseBuilder::new().body(ResponseBody::Body(out)))
     }
 
-    async fn dump_operations(&self, document_id: &str) -> Result<Response> {
+    async fn dump_operations(&self, document_id: &DocumentId) -> Result<Response> {
         if !self.exists(document_id).await? {
             return Ok(response(status_codes::NOT_FOUND));
         }
@@ -444,7 +449,11 @@ impl SessionState {
         ResponseBuilder::new().from_json(&key_ops)
     }
 
-    async fn peer_handler(&self, document_id: &str, peer_id: Option<&str>) -> Result<Response> {
+    async fn peer_handler(
+        &self,
+        document_id: &DocumentId,
+        peer_id: Option<&str>,
+    ) -> Result<Response> {
         let (user_id, peer_id) = if let Some(p) = peer_id {
             let p64: u64 = p
                 .parse()
@@ -458,16 +467,16 @@ impl SessionState {
         ResponseBuilder::new().from_json(&PeerResponse { peer_id, user_id })
     }
 
-    async fn wakeup(&self, document_id: &str) -> Result<Response> {
+    async fn wakeup(&self, document_id: &DocumentId) -> Result<Response> {
         let _ = self.warmup(document_id).await.inspect_err(
-            |error| warn!(document_id = document_id, error = ?error, "failed to warm up document"),
+            |error| warn!(document_id = document_id.as_str(), error = ?error, "failed to warm up document"),
         );
 
         let out = keepalive(DEFAULT_TIME_TO_LIVE);
         ResponseBuilder::new().from_json(&out)
     }
 
-    async fn warmup(&self, document_id: &str) -> Result<()> {
+    async fn warmup(&self, document_id: &DocumentId) -> Result<()> {
         if !self.exists(document_id).await? {
             return Ok(());
         }
@@ -477,7 +486,7 @@ impl SessionState {
         Ok(())
     }
 
-    async fn metadata_handler(&self, document_id: &str) -> Result<Response> {
+    async fn metadata_handler(&self, document_id: &DocumentId) -> Result<Response> {
         if !self.exists(document_id).await? {
             return Ok(response(status_codes::NOT_FOUND));
         }
@@ -487,11 +496,15 @@ impl SessionState {
         ResponseBuilder::new().from_json(&DocumentMetadata {
             peers,
             version_id: version_id.to_string(),
-            id: document_id.to_string(),
+            id: document_id.as_str().to_string(),
         })
     }
 
-    async fn connect_handler(&self, token: &str, document_id: &str) -> Result<Response> {
+    async fn connect_handler(
+        &self,
+        token: &SyncServiceJWT,
+        document_id: &DocumentId,
+    ) -> Result<Response> {
         let (res, elap) = timeit!({
             let claims = or_unauth!(decode_jwt(token, &self.env).ok());
             if self.maybe_set_document_id(document_id).await? {
@@ -539,7 +552,7 @@ impl SessionState {
                 .context("failed to send initial sync message")?;
             } else {
                 debug!(
-                    document_id = document_id,
+                    document_id = document_id.as_str(),
                     "snapshot not yet available; deferring initial sync until /initialize"
                 );
             }
@@ -548,24 +561,24 @@ impl SessionState {
         });
 
         trace!(
-            document_id = document_id,
+            document_id = document_id.as_str(),
             duration_ms = elap.as_millis(),
             "DO::connect"
         );
         Ok(res)
     }
 
-    async fn maybe_set_document_id(&self, document_id: &str) -> Result<bool> {
+    async fn maybe_set_document_id(&self, document_id: &DocumentId) -> Result<bool> {
         if !self.document_id_is_some() {
             debug!("Setting DO::kv({DOCUMENT_ID_KEY}, {document_id})");
             self.state
                 .storage()
-                .put(DOCUMENT_ID_KEY, document_id)
+                .put(DOCUMENT_ID_KEY, document_id.as_str())
                 .await?;
             *self
                 .document_id
                 .lock("DocumentSyncSession::document_id set within maybe_set_document_id") =
-                Some(Arc::new(document_id.to_string()));
+                Some(Arc::new(document_id.clone()));
             Ok(true)
         } else {
             Ok(false)
@@ -576,7 +589,7 @@ impl SessionState {
     /// 1. is self.document_id set
     /// 2. is document_id  it do::kv
     /// 3. does snapshot exist with document_id?
-    async fn exists(&self, document_id: &str) -> Result<bool> {
+    async fn exists(&self, document_id: &DocumentId) -> Result<bool> {
         if self.document_id_is_some() {
             return Ok(true);
         }
@@ -585,8 +598,7 @@ impl SessionState {
             return Ok(true);
         }
         // self.session_storage would not be set because it requires self.document_id be set
-        let snapshot_storage =
-            get_snapshot_storage(&self.env, &self.state, document_id.to_string())?;
+        let snapshot_storage = get_snapshot_storage(&self.env, &self.state, document_id)?;
 
         if snapshot_storage.has_snapshot().await? {
             self.maybe_set_document_id(document_id).await?;
@@ -610,7 +622,7 @@ impl SessionState {
 
     #[instrument(skip_all, err)]
     /// Get the `document_id`. First try checking self.document_id, if not there get from DOKV.
-    async fn document_id(&self) -> Result<Arc<String>> {
+    async fn document_id(&self) -> Result<Arc<DocumentId>> {
         if let Some(id) = self
             .document_id
             .lock("DocumentSyncSession::document_id get within main document_id fn")
@@ -619,7 +631,7 @@ impl SessionState {
         {
             return Ok(id);
         }
-        let id: Arc<String> = Arc::new(
+        let id: Arc<DocumentId> = Arc::new(DocumentId(
             self.state
                 .storage()
                 .get(DOCUMENT_ID_KEY)
@@ -631,7 +643,7 @@ impl SessionState {
                     )
                 })?
                 .ok_or(Error::from("DOCUMENT_ID not found in storage"))?,
-        );
+        ));
         *self
             .document_id
             .lock("DocumentSyncSession::document_id set within main document_id fn") =
@@ -647,8 +659,8 @@ impl SessionState {
         {
             Ok(ss.clone())
         } else {
-            let id = self.document_id().await?.to_string();
-            let snapshot_storage = get_snapshot_storage(&self.env, &self.state, id.clone())?;
+            let id = self.document_id().await?;
+            let snapshot_storage = get_snapshot_storage(&self.env, &self.state, &id)?;
             let dkv_storage = DurableKVStorage::new(self.state.storage());
             let ss = Rc::new(SessionStorage::new(snapshot_storage, dkv_storage));
             *self
@@ -718,6 +730,7 @@ fn authorized(
     let Some(document_id) = params.get("document_id") else {
         return false;
     };
+    let document_id = DocumentId::from(document_id.as_str());
     // Internal services authenticate with the shared key and act as Admin.
     if internal_request(headers, &session.env) {
         return true;
@@ -725,7 +738,7 @@ fn authorized(
     extract_jwt_from_headers(headers)
         .and_then(|token| decode_jwt(&token, &session.env).ok())
         .is_some_and(|claims| {
-            claims.has_document_id_access(document_id) && claims.has_permission(&level)
+            claims.has_document_id_access(&document_id) && claims.has_permission(&level)
         })
 }
 
@@ -783,7 +796,7 @@ fn do_router(state: DoState) -> axum::Router {
 #[worker::send]
 async fn connect_route(
     AxumState(state): AxumState<DoState>,
-    AxumPath(document_id): AxumPath<String>,
+    AxumPath(document_id): AxumPath<DocumentId>,
     Query(params): Query<WebsocketQueryParams>,
 ) -> HandlerResult {
     Ok(state
@@ -800,7 +813,7 @@ async fn connect_route(
 #[worker::send]
 pub(crate) async fn exists_route(
     AxumState(state): AxumState<DoState>,
-    AxumPath(document_id): AxumPath<String>,
+    AxumPath(document_id): AxumPath<DocumentId>,
 ) -> HandlerResult {
     Ok(state.exists_handler(&document_id).await?.into())
 }
@@ -813,7 +826,7 @@ pub(crate) async fn exists_route(
 #[worker::send]
 pub(crate) async fn metadata_route(
     AxumState(state): AxumState<DoState>,
-    AxumPath(document_id): AxumPath<String>,
+    AxumPath(document_id): AxumPath<DocumentId>,
 ) -> HandlerResult {
     Ok(state.metadata_handler(&document_id).await?.into())
 }
@@ -826,7 +839,7 @@ pub(crate) async fn metadata_route(
 #[worker::send]
 pub(crate) async fn raw_route(
     AxumState(state): AxumState<DoState>,
-    AxumPath(document_id): AxumPath<String>,
+    AxumPath(document_id): AxumPath<DocumentId>,
 ) -> HandlerResult {
     Ok(state.raw_handler(&document_id).await?.into())
 }
@@ -839,7 +852,7 @@ pub(crate) async fn raw_route(
 #[worker::send]
 pub(crate) async fn active_peers_route(
     AxumState(state): AxumState<DoState>,
-    AxumPath(_document_id): AxumPath<String>,
+    AxumPath(_document_id): AxumPath<DocumentId>,
 ) -> HandlerResult {
     Ok(state.active_peer_ids_handler().await?.into())
 }
@@ -853,7 +866,7 @@ pub(crate) async fn active_peers_route(
 #[worker::send]
 pub(crate) async fn peer_route(
     AxumState(state): AxumState<DoState>,
-    AxumPath((document_id, peer_id)): AxumPath<(String, String)>,
+    AxumPath((document_id, peer_id)): AxumPath<(DocumentId, String)>,
 ) -> HandlerResult {
     Ok(state
         .peer_handler(&document_id, Some(&peer_id))
@@ -869,7 +882,7 @@ pub(crate) async fn peer_route(
 #[worker::send]
 pub(crate) async fn wakeup_route(
     AxumState(state): AxumState<DoState>,
-    AxumPath(document_id): AxumPath<String>,
+    AxumPath(document_id): AxumPath<DocumentId>,
 ) -> HandlerResult {
     Ok(state.wakeup(&document_id).await?.into())
 }
@@ -883,7 +896,7 @@ pub(crate) async fn wakeup_route(
 #[worker::send]
 pub(crate) async fn snapshot_route(
     AxumState(state): AxumState<DoState>,
-    AxumPath(document_id): AxumPath<String>,
+    AxumPath(document_id): AxumPath<DocumentId>,
     body: Bytes,
 ) -> HandlerResult {
     Ok(state
@@ -900,7 +913,7 @@ pub(crate) async fn snapshot_route(
 #[worker::send]
 pub(crate) async fn initialize_route(
     AxumState(state): AxumState<DoState>,
-    AxumPath(document_id): AxumPath<String>,
+    AxumPath(document_id): AxumPath<DocumentId>,
     body: Bytes,
 ) -> HandlerResult {
     Ok(state
@@ -912,7 +925,7 @@ pub(crate) async fn initialize_route(
 #[worker::send]
 async fn debug_dump_operations_route(
     AxumState(state): AxumState<DoState>,
-    AxumPath(document_id): AxumPath<String>,
+    AxumPath(document_id): AxumPath<DocumentId>,
 ) -> HandlerResult {
     Ok(state.dump_operations(&document_id).await?.into())
 }
@@ -920,7 +933,7 @@ async fn debug_dump_operations_route(
 #[worker::send]
 async fn debug_do_kv_get_route(
     AxumState(state): AxumState<DoState>,
-    AxumPath((_document_id, key)): AxumPath<(String, String)>,
+    AxumPath((_document_id, key)): AxumPath<(DocumentId, String)>,
 ) -> HandlerResult {
     Ok(state.debug_do_kv_get(&key).await?.into())
 }
@@ -928,7 +941,7 @@ async fn debug_do_kv_get_route(
 #[worker::send]
 async fn debug_do_kv_list_route(
     AxumState(state): AxumState<DoState>,
-    AxumPath((_document_id, prefix)): AxumPath<(String, String)>,
+    AxumPath((_document_id, prefix)): AxumPath<(DocumentId, String)>,
 ) -> HandlerResult {
     Ok(state.debug_do_kv_list(&prefix).await?.into())
 }
@@ -980,7 +993,7 @@ impl DurableObject for DocumentSyncSession {
 
         websocket::process_message(
             &ws,
-            &self.session.document_id().await?,
+            &*self.session.document_id().await?,
             &*self.session.document_state().await?,
             &*self.session.session_storage().await?,
             &self.session.awareness,
@@ -1097,7 +1110,7 @@ impl DurableObject for DocumentSyncSession {
 
         #[cfg(feature = "search-service")]
         if self.session.state.get_websockets().len() == 1 {
-            crate::sps::update(&self.session.document_id().await?, &self.session.env).await?;
+            crate::sps::update(&*self.session.document_id().await?, &self.session.env).await?;
         }
         Ok(())
     }

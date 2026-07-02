@@ -4,7 +4,8 @@ use tracing::trace;
 use worker::{Env, Error, Result, State};
 
 use crate::{
-    state::DocumentState, storage::backends::durable_kv::DurableKVStorage, timeit, timeit_log,
+    ids::DocumentId, state::DocumentState, storage::backends::durable_kv::DurableKVStorage, timeit,
+    timeit_log,
 };
 
 pub mod backends;
@@ -105,7 +106,7 @@ impl SessionStorage {
 pub fn get_snapshot_storage(
     _env: &Env,
     _state: &State,
-    document_id: String,
+    document_id: &DocumentId,
 ) -> worker::Result<Storage> {
     #[cfg(all(feature = "kv-snapshot-storage", feature = "r2-snapshot-storage"))]
     {

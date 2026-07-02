@@ -9,6 +9,7 @@ use crate::{
     durable_object::{SessionState, Wsm},
     error::ResultExt,
     generated::schema::{FromPeer, FromRemote},
+    ids::DocumentId,
     mutex::Mutex,
     state::DocumentState,
     storage::SessionStorage,
@@ -75,7 +76,7 @@ const MAX_MESSAGE_SIZE: usize = 1000 * 1000;
 )]
 pub async fn process_message(
     ws: &WebSocket,
-    document_id: &str,
+    document_id: &DocumentId,
     document_state: &DocumentState,
     session_storage: &SessionStorage,
     awareness: &EphemeralStore,

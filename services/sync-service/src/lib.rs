@@ -6,6 +6,7 @@ mod dss_internal;
 mod durable_object;
 mod error;
 mod generated;
+mod ids;
 pub mod keepalive;
 mod metrics;
 mod mutex;

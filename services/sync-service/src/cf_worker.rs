@@ -17,6 +17,7 @@ use crate::{
     },
     error::ResultExt,
     generated::schema::InitializeFromSnapshotRequest,
+    ids::DocumentId,
     timeit_log,
     timeout::{DEFAULT_TIMEOUT_MS, timeout},
 };
@@ -49,12 +50,14 @@ pub fn outer_router(env: Env) -> Router {
 #[worker::send]
 async fn proxy_route(
     AxumState(env): AxumState<Env>,
-    AxumPath((document_id, _rest)): AxumPath<(String, String)>,
+    AxumPath((document_id, _rest)): AxumPath<(DocumentId, String)>,
     req: AxumRequest,
 ) -> HandlerResult {
-    Ok(pass_to_durable_object(&env, Request::try_from(req)?, &document_id)
-        .await?
-        .into())
+    Ok(
+        pass_to_durable_object(&env, Request::try_from(req)?, &document_id)
+            .await?
+            .into(),
+    )
 }
 
 /// Copy a document: fetch the source snapshot, then initialize a new document
@@ -74,7 +77,7 @@ async fn proxy_route(
 #[worker::send]
 pub(crate) async fn copy_route(
     AxumState(env): AxumState<Env>,
-    AxumPath(document_id): AxumPath<String>,
+    AxumPath(document_id): AxumPath<DocumentId>,
     headers: HeaderMap,
     body: Bytes,
 ) -> HandlerResult {
@@ -83,7 +86,7 @@ pub(crate) async fn copy_route(
         body: Vec<u8>,
         path: &str,
         headers: &HeaderMap,
-        document_id: &str,
+        document_id: &DocumentId,
     ) -> Result<Response> {
         let out_headers = Headers::new();
         for name in [AUTHORIZATION, MACRO_INTERNAL_AUTH_KEY_HEADER_KEY] {
@@ -100,10 +103,12 @@ pub(crate) async fn copy_route(
     }
 
     let req: CopyDocumentRequest = serde_json::from_slice(&body)?;
-    let new_document_id = req.target_document_id;
+    let new_document_id = DocumentId::from(req.target_document_id);
 
     let init_body = {
-        let snapshot_req = serde_json::to_vec(&GetSnapshotRequest { version_id: req.version_id })?;
+        let snapshot_req = serde_json::to_vec(&GetSnapshotRequest {
+            version_id: req.version_id,
+        })?;
         let snapshot_path = format!("/document/{document_id}/snapshot");
 
         let mut res = do_helper(&env, snapshot_req, &snapshot_path, &headers, &document_id).await?;
@@ -115,18 +120,28 @@ pub(crate) async fn copy_route(
             snapshot: bebop::SliceWrapper::Raw(&res.bytes().await?),
         };
         let mut buf = Vec::with_capacity(snapshot.serialized_size());
-        _ = snapshot.serialize(&mut buf).context("Failed to serialize new snapshot")?;
+        _ = snapshot
+            .serialize(&mut buf)
+            .context("Failed to serialize new snapshot")?;
         buf
     };
 
     let initialize_path = format!("/document/{new_document_id}/initialize");
-    Ok(do_helper(&env, init_body, &initialize_path, &headers, &new_document_id).await?.into())
+    Ok(do_helper(
+        &env,
+        init_body,
+        &initialize_path,
+        &headers,
+        &new_document_id,
+    )
+    .await?
+    .into())
 }
 
 pub async fn pass_to_durable_object(
     env: &Env,
     req: Request,
-    document_id: &str,
+    document_id: &DocumentId,
 ) -> Result<Response> {
     let stub = get_durable_object(env, document_id)?;
 
@@ -141,8 +156,8 @@ pub async fn pass_to_durable_object(
     })
 }
 
-fn get_durable_object(env: &Env, document_id: &str) -> Result<Stub> {
+fn get_durable_object(env: &Env, document_id: &DocumentId) -> Result<Stub> {
     env.durable_object(DURABLE_OBJECT_NAMESPACE)?
-        .id_from_name(document_id)?
+        .id_from_name(document_id.as_str())?
         .get_stub()
 }
