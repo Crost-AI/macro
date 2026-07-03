@@ -1,25 +1,16 @@
-mod auth;
-mod cf_worker;
 mod constants;
-mod d1;
-mod dss_internal;
-mod durable_object;
+mod domain;
 mod error;
 mod generated;
-mod ids;
+mod inbound;
 pub mod keepalive;
 mod metrics;
 mod mutex;
-mod secrets;
-#[cfg(feature = "search-service")]
-mod sps;
-mod state;
-mod storage;
+mod outbound;
 #[cfg(feature = "openapi")]
 pub mod swagger;
 mod tags;
 mod timeout;
-mod websocket;
 
 use tracing_subscriber::{
     EnvFilter, fmt::time::UtcTime, layer::SubscriberExt, util::SubscriberInitExt,
@@ -72,7 +63,7 @@ async fn fetch(
     _ctx: Context,
 ) -> Result<axum::http::Response<axum::body::Body>> {
     use tower_service::Service;
-    let mut router = crate::cf_worker::outer_router(env);
+    let mut router = crate::inbound::worker::outer_router(env);
     Ok(router
         .call(req)
         .await

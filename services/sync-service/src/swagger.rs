@@ -1,8 +1,8 @@
 use utoipa::OpenApi;
 
-use crate::d1::PeerWithUserId;
-use crate::durable_object::{
-    CopyDocumentRequest, DocumentMetadata, GetSnapshotRequest, PeerResponse, VersionIndicator,
+use crate::domain::models::{
+    CopyDocumentRequest, DocumentMetadata, GetSnapshotRequest, PeerResponse, PeerWithUserId,
+    VersionIndicator,
 };
 
 /// OpenAPI spec for the sync service's JSON HTTP endpoints.
@@ -13,15 +13,15 @@ use crate::durable_object::{
 #[openapi(
     info(title = "Sync Service", description = "Document sync service JSON control plane"),
     paths(
-        crate::cf_worker::copy_route,
-        crate::durable_object::exists_route,
-        crate::durable_object::metadata_route,
-        crate::durable_object::raw_route,
-        crate::durable_object::active_peers_route,
-        crate::durable_object::peer_route,
-        crate::durable_object::wakeup_route,
-        crate::durable_object::snapshot_route,
-        crate::durable_object::initialize_route,
+        crate::inbound::worker::copy_route,
+        crate::inbound::router::exists_route,
+        crate::inbound::router::metadata_route,
+        crate::inbound::router::raw_route,
+        crate::inbound::router::active_peers_route,
+        crate::inbound::router::peer_route,
+        crate::inbound::router::wakeup_route,
+        crate::inbound::router::snapshot_route,
+        crate::inbound::router::initialize_route,
     ),
     components(schemas(
         CopyDocumentRequest,

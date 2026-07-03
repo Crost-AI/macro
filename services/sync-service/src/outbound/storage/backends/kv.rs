@@ -4,7 +4,10 @@ use worker::{
     kv::{KvError, KvStore},
 };
 
-use crate::{error::ResultExt, ids::DocumentId, storage::snapshot::SnapshotStorage, timeit};
+use crate::{
+    domain::document_id::DocumentId, error::ResultExt,
+    outbound::storage::snapshot::SnapshotStorage, timeit,
+};
 
 pub const SNAPSHOT_STORE_KV_BINDING: &str = "SNAPSHOT_STORE_KV";
 

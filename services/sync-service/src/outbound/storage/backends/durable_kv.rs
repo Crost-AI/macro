@@ -14,7 +14,7 @@ use worker::{
     wasm_bindgen::JsCast,
 };
 
-use crate::{error::ResultExt, state::DocumentState};
+use crate::{domain::state::DocumentState, error::ResultExt};
 
 /// When saving snapshot, we also write the version vector to durable object KV
 /// When we read a snapshot from Worker KV, we check it's version vector is >= version vector in LAST_VERSION_VECTOR.
@@ -54,11 +54,11 @@ impl DurableKVStorage {
         }
     }
 
-    pub(in crate::storage) async fn get_key(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    pub(in crate::outbound::storage) async fn get_key(&self, key: &str) -> Result<Option<Vec<u8>>> {
         do_kv_result_to_result_opt(self.inner.get(key).await)
     }
 
-    pub(in crate::storage) async fn list_do_kv(
+    pub(in crate::outbound::storage) async fn list_do_kv(
         &self,
         prefix: &str,
     ) -> Result<Vec<Result<(String, Vec<u8>)>>> {
@@ -93,21 +93,17 @@ impl DurableKVStorage {
         self.list_do_kv(PENDING_OP_PREFIX).await
     }
 
-    pub async fn apply_op(
-        &self,
-        document_state: &DocumentState,
-        op_update: &[u8],
-    ) -> Result<Vec<String>> {
+    pub async fn apply_op(&self, document_state: &DocumentState, op_update: &[u8]) -> Result<()> {
         let op_id = self.ids.id();
         let op_key = pending_op_key(&op_id);
-        let touched_nodes = document_state.import(op_update)?;
+        document_state.import(op_update)?;
         self.inner.put(&op_key, op_update).await?;
         self.applied_keys
             .write()
             .unwrap_context("applied_keys mutex poisoned")
             .insert(op_key);
         self.inner.put(&all_op_key(&op_id), op_update).await?;
-        Ok(touched_nodes)
+        Ok(())
     }
 
     pub async fn apply_pending_ops(&self, snapshot: &DocumentState) -> Result<()> {

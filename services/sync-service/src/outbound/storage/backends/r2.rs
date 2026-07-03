@@ -3,7 +3,7 @@ use tracing::trace;
 use crate::timeit;
 
 use super::super::snapshot::SnapshotStorage;
-use crate::ids::DocumentId;
+use crate::domain::document_id::DocumentId;
 use worker::Bucket;
 
 pub struct R2Storage {

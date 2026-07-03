@@ -12,18 +12,23 @@ use worker::{Env, Headers, Method, Request, RequestInit, Response, Result, Stub}
 
 use crate::{
     constants::header_names::{AUTHORIZATION, MACRO_INTERNAL_AUTH_KEY_HEADER_KEY},
-    durable_object::{
-        CopyDocumentRequest, GetSnapshotRequest, HandlerResult, cors_layer, response, status_codes,
+    domain::{
+        document_id::DocumentId,
+        models::{CopyDocumentRequest, GetSnapshotRequest},
     },
     error::ResultExt,
     generated::schema::InitializeFromSnapshotRequest,
-    ids::DocumentId,
+    inbound::{
+        cors::cors_layer,
+        durable_object::{response, status_codes},
+        router::HandlerResult,
+    },
     timeit_log,
     timeout::{DEFAULT_TIMEOUT_MS, timeout},
 };
 
 const DURABLE_OBJECT_NAMESPACE: &str = "DOCUMENT_SYNC_SESSION";
-const SCHEMA: &str = include_str!("../bebop/schema.bop");
+const SCHEMA: &str = include_str!("../../bebop/schema.bop");
 
 /// The worker's top-level axum router. Static endpoints are served directly,
 /// `/document/{id}/copy` is orchestrated here, and everything else under a

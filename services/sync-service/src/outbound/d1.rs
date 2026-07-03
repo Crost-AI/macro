@@ -1,4 +1,5 @@
-use crate::ids::DocumentId;
+use crate::domain::document_id::DocumentId;
+use crate::domain::models::PeerWithUserId;
 use crate::timeit;
 use tracing::{error, trace};
 use worker::D1Database;
@@ -63,13 +64,6 @@ pub async fn get_user_id_from_peer_id(
     };
 
     Ok(user_id)
-}
-
-#[derive(serde::Deserialize, serde::Serialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-pub struct PeerWithUserId {
-    pub peer_id: String,
-    pub user_id: String,
 }
 
 pub async fn get_peers_for_document_id(

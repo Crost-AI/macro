@@ -1,5 +1,5 @@
 use crate::constants::header_names::MACRO_INTERNAL_AUTH_KEY_HEADER_KEY;
-use crate::ids::DocumentId;
+use crate::domain::document_id::DocumentId;
 use serde_json::json;
 use tracing::{debug, error};
 use worker::{Fetch, Method, Request, RequestInit};

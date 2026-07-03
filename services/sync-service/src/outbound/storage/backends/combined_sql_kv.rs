@@ -1,7 +1,7 @@
 use worker::Env;
 
-use crate::ids::DocumentId;
-use crate::storage::snapshot::SnapshotStorage;
+use crate::domain::document_id::DocumentId;
+use crate::outbound::storage::snapshot::SnapshotStorage;
 
 use super::{durable_sql::DurableSQLStorage, kv::Kv};
 

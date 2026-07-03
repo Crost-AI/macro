@@ -2,7 +2,7 @@ use tracing::error;
 use worker::{Env, Fetch, Method, Request, RequestInit};
 
 use crate::constants::header_names::MACRO_DOCUMENT_STORAGE_SERVICE_AUTH_HEADER_KEY;
-use crate::ids::DocumentId;
+use crate::domain::document_id::DocumentId;
 
 pub trait DssInternal {
     async fn publish_shallow_snapshot(
