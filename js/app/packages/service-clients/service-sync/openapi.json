@@ -15,9 +15,7 @@
   "paths": {
     "/document/{document_id}/active_peers": {
       "get": {
-        "tags": [
-          "sync_service"
-        ],
+        "tags": ["sync_service"],
         "operationId": "document_active_peers",
         "parameters": [
           {
@@ -41,9 +39,7 @@
     },
     "/document/{document_id}/copy": {
       "post": {
-        "tags": [
-          "sync_service"
-        ],
+        "tags": ["sync_service"],
         "summary": "Copy a document: fetch the source snapshot, then initialize a new document\nwith it. Orchestrated here because it spans two durable objects.",
         "operationId": "copy_document",
         "parameters": [
@@ -79,9 +75,7 @@
     },
     "/document/{document_id}/exists": {
       "get": {
-        "tags": [
-          "sync_service"
-        ],
+        "tags": ["sync_service"],
         "operationId": "document_exists",
         "parameters": [
           {
@@ -105,9 +99,7 @@
     },
     "/document/{document_id}/initialize": {
       "post": {
-        "tags": [
-          "sync_service"
-        ],
+        "tags": ["sync_service"],
         "operationId": "document_initialize",
         "parameters": [
           {
@@ -131,9 +123,7 @@
     },
     "/document/{document_id}/metadata": {
       "get": {
-        "tags": [
-          "sync_service"
-        ],
+        "tags": ["sync_service"],
         "operationId": "document_metadata",
         "parameters": [
           {
@@ -167,9 +157,7 @@
     },
     "/document/{document_id}/peer/{peer_id}": {
       "get": {
-        "tags": [
-          "sync_service"
-        ],
+        "tags": ["sync_service"],
         "operationId": "document_peer",
         "parameters": [
           {
@@ -205,9 +193,7 @@
     },
     "/document/{document_id}/raw": {
       "get": {
-        "tags": [
-          "sync_service"
-        ],
+        "tags": ["sync_service"],
         "operationId": "document_raw",
         "parameters": [
           {
@@ -234,9 +220,7 @@
     },
     "/document/{document_id}/snapshot": {
       "post": {
-        "tags": [
-          "sync_service"
-        ],
+        "tags": ["sync_service"],
         "operationId": "document_snapshot",
         "parameters": [
           {
@@ -273,9 +257,7 @@
     },
     "/document/{document_id}/wakeup": {
       "post": {
-        "tags": [
-          "sync_service"
-        ],
+        "tags": ["sync_service"],
         "operationId": "document_wakeup",
         "parameters": [
           {
@@ -299,9 +281,7 @@
     "schemas": {
       "CopyDocumentRequest": {
         "type": "object",
-        "required": [
-          "target_document_id"
-        ],
+        "required": ["target_document_id"],
         "properties": {
           "target_document_id": {
             "type": "string"
@@ -320,11 +300,7 @@
       },
       "DocumentMetadata": {
         "type": "object",
-        "required": [
-          "id",
-          "peers",
-          "version_id"
-        ],
+        "required": ["id", "peers", "version_id"],
         "properties": {
           "id": {
             "type": "string"
@@ -357,10 +333,7 @@
       },
       "PeerResponse": {
         "type": "object",
-        "required": [
-          "peer_id",
-          "user_id"
-        ],
+        "required": ["peer_id", "user_id"],
         "properties": {
           "peer_id": {
             "type": "string"
@@ -372,10 +345,7 @@
       },
       "PeerWithUserId": {
         "type": "object",
-        "required": [
-          "peer_id",
-          "user_id"
-        ],
+        "required": ["peer_id", "user_id"],
         "properties": {
           "peer_id": {
             "type": "string"
@@ -387,10 +357,7 @@
       },
       "VersionIndicator": {
         "type": "object",
-        "required": [
-          "peer",
-          "counter"
-        ],
+        "required": ["peer", "counter"],
         "properties": {
           "counter": {
             "type": "integer",

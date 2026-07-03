@@ -8,9 +8,10 @@ import { isTauri } from '@core/util/platform';
 import { platformFetch } from '@core/util/platformFetch';
 import type { ObjectLike, ResultError } from '@core/util/result';
 import type { SafeFetchInit } from '@core/util/safeFetch';
-import { InitializeFromSnapshotRequest } from '@macro-inc/collaboration/sync-service/generated/schema';
 import type { SerializedEditorState } from 'lexical';
 import { err, ok, type Result } from 'neverthrow';
+import type { DocumentMetadata } from './generated/http/schemas';
+import { InitializeFromSnapshotRequest } from './generated/schema';
 
 const SYNC_SERVICE_WORKER_URL = `${SYNC_SERVICE_HOSTS['worker']}`;
 
@@ -61,27 +62,6 @@ function syncFetch<T extends ObjectLike = never>(
     },
   });
 }
-
-type MetadataResponse = {
-  peers: Array<{
-    peer_id: number;
-    user_id: string;
-  }>;
-};
-
-export type HistorySession = {
-  userId: string;
-  startMs: number;
-  endMs: number;
-  count: number;
-};
-
-/** A single frontier op-id — structurally a `SyncServiceVersionID`, so it can
- * be passed straight to the copy/fork path. */
-export type HistoryVersionId = {
-  peer: string;
-  counter: number;
-};
 
 export const syncServiceClient = {
   async wakeup(args: { documentId: string }) {
@@ -177,7 +157,7 @@ export const syncServiceClient = {
   async getDocumentMetadata(args: { documentId: string }) {
     const token = await getPermissionToken('document', args.documentId);
 
-    const response = await syncFetch<MetadataResponse>(
+    const response = await syncFetch<DocumentMetadata>(
       `/document/${args.documentId}/metadata`,
       {
         headers: {
@@ -191,37 +171,7 @@ export const syncServiceClient = {
       return err(response.error);
     }
 
-    return ok(response.value as MetadataResponse);
-  },
-  /**
-   * Look up who last edited a given Lexical node and when. `user_id` is a
-   * MacroId resolved server-side; `null` if the peer has no recorded user
-   * (anonymous edits or legacy data not yet mirrored locally).
-   */
-  async getNodeBlame(args: { documentId: string; nodeId: string }) {
-    const token = await getPermissionToken('document', args.documentId);
-
-    const response = await syncFetch<{
-      peer_id: string;
-      user_id: string | null;
-      timestamp_ms: number;
-    }>(`/document/${args.documentId}/blame/${args.nodeId}`, {
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      method: 'GET',
-    });
-
-    if (response.isErr()) {
-      return err(response.error);
-    }
-    const { peer_id, user_id, timestamp_ms } = response.value;
-    return ok({
-      peerId: peer_id,
-      userId: user_id,
-      editedAt: new Date(timestamp_ms),
-    });
+    return ok(response.value);
   },
   async getSnapshot(args: { documentId: string }) {
     const token = await getPermissionToken('document', args.documentId);
@@ -236,18 +186,6 @@ export const syncServiceClient = {
         method: 'GET',
       }
     );
-
-    // Without this an error body decodes as a snapshot, surfacing as a bogus
-    // Loro parse failure. Transport failures (offline, CORS) reject instead,
-    // which callers already see.
-    if (!response.ok) {
-      return err([
-        {
-          code: 'SNAPSHOT_HTTP_ERROR',
-          message: `The sync service returned HTTP ${response.status}.`,
-        },
-      ]);
-    }
 
     const data = await response.arrayBuffer();
 
