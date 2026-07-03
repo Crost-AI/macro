@@ -3,19 +3,20 @@ use loro::{VersionVector, awareness::EphemeralStore};
 use tracing::trace;
 
 use crate::{
-    domain::{
-        document_id::DocumentId, ports::SyncServiceError, socket::Socket, state::DocumentState,
-    },
+    domain::{document_id::DocumentId, ports::SyncServiceError, state::DocumentState},
     error::ResultExt,
     generated::schema::{FromPeer, FromRemote},
-    inbound::sync_service::{SyncServiceImpl, Wsm},
+    inbound::{
+        socket::WorkerSocket,
+        sync_service::{SyncServiceImpl, Wsm},
+    },
     outbound::storage::SessionStorage,
 };
 
 /// Sends the initial sync message to the client over the websocket
 /// The initial sync message contains the snapshot of the current state of the document
-pub fn send_initial_sync<S: Socket>(
-    socket: &S,
+pub fn send_initial_sync(
+    socket: &WorkerSocket,
     snapshot: &[u8],
     awareness: &[u8],
 ) -> Result<(), SyncServiceError> {
@@ -25,9 +26,9 @@ pub fn send_initial_sync<S: Socket>(
     })
 }
 
-pub fn broadcast_awareness<S: Socket>(
-    from: &S,
-    sockets: &[S],
+pub fn broadcast_awareness(
+    from: &WorkerSocket,
+    sockets: &[WorkerSocket],
     awareness: &[u8],
 ) -> Result<(), SyncServiceError> {
     for s in sockets.iter().filter(|s| s.id() != from.id()) {
@@ -49,9 +50,9 @@ const MAX_MESSAGE_SIZE: usize = 1000 * 1000;
     clippy::too_many_arguments,
     reason = "lots of args lets us avoid having multiple mutable refs to same object"
 )]
-pub async fn process_message<S: Socket>(
-    sender: &S,
-    sockets: &[S],
+pub async fn process_message(
+    sender: &WorkerSocket,
+    sockets: &[WorkerSocket],
     document_id: &DocumentId,
     document_state: &DocumentState,
     session_storage: &SessionStorage,

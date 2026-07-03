@@ -12,7 +12,6 @@ use crate::{
         models::{DocumentMetadata, GetSnapshotRequest, PeerResponse},
         permissions::AuthToken,
         ports::{SyncServiceAdmin, SyncServiceCore, SyncServiceError},
-        socket::Socket,
         state::DocumentState,
     },
     error::ResultExt,
