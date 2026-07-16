@@ -7,7 +7,7 @@ use crate::{
     error::ResultExt,
     generated::schema::{FromPeer, FromRemote},
     inbound::{
-        socket::WorkerSocket,
+        socket::RemoteSocket,
         sync_service::{SyncServiceImpl, Wsm},
     },
     outbound::storage::SessionStorage,
@@ -16,7 +16,7 @@ use crate::{
 /// Sends the initial sync message to the client over the websocket
 /// The initial sync message contains the snapshot of the current state of the document
 pub fn send_initial_sync(
-    socket: &WorkerSocket,
+    socket: &RemoteSocket,
     snapshot: &[u8],
     awareness: &[u8],
 ) -> Result<(), SyncServiceError> {
@@ -27,8 +27,8 @@ pub fn send_initial_sync(
 }
 
 pub fn broadcast_awareness(
-    from: &WorkerSocket,
-    sockets: &[WorkerSocket],
+    from: &RemoteSocket,
+    sockets: &[RemoteSocket],
     awareness: &[u8],
 ) -> Result<(), SyncServiceError> {
     for s in sockets.iter().filter(|s| s.id() != from.id()) {
@@ -51,8 +51,8 @@ const MAX_MESSAGE_SIZE: usize = 1000 * 1000;
     reason = "lots of args lets us avoid having multiple mutable refs to same object"
 )]
 pub async fn process_message(
-    sender: &WorkerSocket,
-    sockets: &[WorkerSocket],
+    sender: &RemoteSocket,
+    sockets: &[RemoteSocket],
     document_id: &DocumentId,
     document_state: &DocumentState,
     session_storage: &SessionStorage,

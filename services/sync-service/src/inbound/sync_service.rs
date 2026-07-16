@@ -8,8 +8,9 @@ use worker::{Env, Error, Response, State, WebSocket, WebSocketPair};
 use crate::{
     constants::USER_PEER_D1_BINDING,
     domain::{
+        ai_peer::is_ai_peer,
         document_id::DocumentId,
-        models::{DocumentMetadata, GetSnapshotRequest, PeerResponse},
+        models::{BlameRow, DocumentMetadata, GetSnapshotRequest, PeerResponse},
         permissions::AuthToken,
         ports::{SyncServiceAdmin, SyncServiceCore, SyncServiceError},
         state::DocumentState,
@@ -18,12 +19,13 @@ use crate::{
     generated::schema::InitializeFromSnapshotRequest,
     inbound::{
         durable_object::{NO_SUCH_VALUE_ERR_STR, WebSocketMetadata, WsMetaMap, get_ws_id},
-        socket::{WorkerSocket, websocket},
+        socket::{RemoteSocket, websocket},
     },
     keepalive::{DEFAULT_TIME_TO_LIVE, keepalive},
     mutex::Mutex,
     outbound::{
-        d1::{get_user_id_from_peer_id, insert_user_mapping},
+        d1::{BlameEvent, get_blame_for_node, get_user_id_from_peer_id, insert_user_mapping},
+        dss_internal::{DssInternal, DssInternalClient, InteractionReason},
         storage::{
             SessionStorage, backends::durable_kv::DurableKVStorage, get_snapshot_storage,
             snapshot::SnapshotStorage,
@@ -34,6 +36,39 @@ use crate::{
 };
 
 const DOCUMENT_ID_KEY: &str = "DOCUMENT_ID";
+
+/// send a shallow snapshot to cache and search service
+/// we should eagerly call this from time to time to keep our backend up to date on
+/// the status of the document:
+/// - every few seconds
+/// - on creation
+/// - on everyone being disconnected
+pub(crate) async fn report_new_doc_state(document_id: &DocumentId, snapshot: &[u8], env: &Env) {
+    if let Err(err) = DssInternalClient::new(env)
+        .publish_shallow_snapshot(document_id, snapshot)
+        .await
+    {
+        warn!(error=?err, "failed to push snapshot to DSS");
+    }
+    #[cfg(feature = "search-service")]
+    if let Err(err) = crate::outbound::sps::update(document_id, env).await {
+        warn!(error=?err, "failed to update search index");
+    }
+}
+
+/// Report an interaction (join/leave/periodic edit) to DSS.
+pub(crate) async fn report_interaction(
+    document_id: &DocumentId,
+    env: &Env,
+    reason: InteractionReason,
+) {
+    if let Err(err) = DssInternalClient::new(env)
+        .publish_interaction(document_id.as_str(), reason)
+        .await
+    {
+        warn!(error=?err, "failed to push interaction to DSS");
+    }
+}
 
 pub struct SyncServiceImpl {
     pub(crate) state: State,
@@ -47,6 +82,8 @@ pub struct SyncServiceImpl {
     pub(crate) awareness: EphemeralStore,
     /// a map from websocket's ID's to websocket metadata
     ws_meta_map: Arc<Mutex<WsMetaMap>>,
+    /// Buffered blame events. Flushed via D1 batch on each alarm tick.
+    pending_blame: Arc<Mutex<Vec<BlameEvent>>>,
 }
 
 pub struct Wsm<'a> {
@@ -161,20 +198,50 @@ impl SyncServiceImpl {
             session_storage,
             awareness,
             ws_meta_map,
+            pending_blame: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
-    pub(crate) fn socket_for(&self, ws: &WebSocket) -> worker::Result<WorkerSocket> {
-        Ok(WorkerSocket::new(ws.clone(), get_ws_id(&self.state, ws)?))
+    pub(crate) fn push_blame_events(&self, events: Vec<BlameEvent>) {
+        if events.is_empty() {
+            return;
+        }
+        self.pending_blame
+            .lock("SyncServiceImpl::push_blame_events")
+            .extend(events);
     }
 
-    pub(crate) fn get_sockets(&self) -> worker::Result<Vec<WorkerSocket>> {
+    /// Drain the pending blame buffer and write all events via a single D1
+    /// batch in the background. Returns immediately; the actual write runs
+    /// inside `wait_until` so the alarm handler doesn't block on D1.
+    pub(crate) fn flush_pending_blame(&self) {
+        let pending: Vec<BlameEvent> = std::mem::take(
+            &mut *self
+                .pending_blame
+                .lock("SyncServiceImpl::flush_pending_blame"),
+        );
+        if pending.is_empty() {
+            return;
+        }
+        let env = self.env.clone();
+        self.state.wait_until(async move {
+            if let Err(e) = crate::outbound::d1::insert_blame_many(&env, &pending).await {
+                warn!(error = ?e, "failed to flush pending blame");
+            }
+        });
+    }
+
+    pub(crate) fn socket_for(&self, ws: &WebSocket) -> worker::Result<RemoteSocket> {
+        Ok(RemoteSocket::new(ws.clone(), get_ws_id(&self.state, ws)?))
+    }
+
+    pub(crate) fn get_sockets(&self) -> worker::Result<Vec<RemoteSocket>> {
         self.state
             .get_websockets()
             .into_iter()
             .map(|ws| {
                 let id = get_ws_id(&self.state, &ws)?;
-                Ok(WorkerSocket::new(ws, id))
+                Ok(RemoteSocket::new(ws, id))
             })
             .collect()
     }
@@ -330,6 +397,10 @@ impl SyncServiceCore for SyncServiceImpl {
             //  Below is websocket stuff only i.e connect
             let pair = WebSocketPair::new().context("failed to create websocket pair")?;
 
+            // Whether this peer is the first to join the session (used to
+            // decide whether to report a `FirstJoin` interaction below).
+            let is_first_join = self.state.get_websockets().is_empty();
+
             // create tag for ws and store it
             let ws_id = new_ws_id();
             trace!(ws_id = ws_id, "websocket connect");
@@ -357,7 +428,7 @@ impl SyncServiceCore for SyncServiceImpl {
                 .and_then(|state| state.export_shallow_snapshot());
 
             if let Ok(snapshot) = snapshot {
-                let socket = WorkerSocket::new(pair.server, ws_id.clone());
+                let socket = RemoteSocket::new(pair.server, ws_id.clone());
                 websocket::send_initial_sync(
                     &socket,
                     snapshot.as_slice(),
@@ -368,6 +439,17 @@ impl SyncServiceCore for SyncServiceImpl {
                     document_id = document_id.as_str(),
                     "snapshot not yet available; deferring initial sync until /initialize"
                 );
+            }
+
+            // This is the single source of truth for `FirstJoin`: whenever
+            // the peer count genuinely transitions 0 -> 1, regardless of
+            // whether the document already has content.
+            if is_first_join {
+                let document_id_owned = document_id.clone();
+                let env = self.env.clone();
+                self.state.wait_until(async move {
+                    report_interaction(&document_id_owned, &env, InteractionReason::FirstJoin).await;
+                });
             }
 
             Response::from_websocket(pair.client).context("failed to create websocket response")?
@@ -413,13 +495,17 @@ impl SyncServiceCore for SyncServiceImpl {
         }
     }
 
-    async fn active_peers(&self) -> Result<Vec<u64>, SyncServiceError> {
+    async fn active_peers(&self, include_ai: bool) -> Result<Vec<u64>, SyncServiceError> {
         let mut peer_ids: BTreeSet<u64> = BTreeSet::new();
         for socket in self.get_sockets()? {
             let new_peer_ids = Wsm::new(self, socket.id().to_string())
                 .get_peer_ids()
                 .await?;
-            peer_ids.extend(new_peer_ids);
+            peer_ids.extend(
+                new_peer_ids
+                    .into_iter()
+                    .filter(|&p| include_ai || !is_ai_peer(p)),
+            );
         }
         Ok(peer_ids.into_iter().collect())
     }
@@ -434,6 +520,15 @@ impl SyncServiceCore for SyncServiceImpl {
             peer_id: peer_id.to_string(),
             user_id,
         })
+    }
+
+    async fn blame(
+        &self,
+        id: &DocumentId,
+        node_id: &str,
+    ) -> Result<Option<BlameRow>, SyncServiceError> {
+        let db = self.env.d1(USER_PEER_D1_BINDING)?;
+        Ok(get_blame_for_node(db, id.as_str(), node_id).await?)
     }
 
     async fn snapshot(
@@ -500,6 +595,11 @@ impl SyncServiceCore for SyncServiceImpl {
                     );
                 }
             }
+            let document_id = document_id.clone();
+            let env = self.env.clone();
+            self.state.wait_until(async move {
+                report_new_doc_state(&document_id, &snapshot, &env).await;
+            });
         }
 
         Ok(())

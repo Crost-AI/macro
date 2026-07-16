@@ -6,8 +6,11 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from './blameRow';
+export * from './blameRowUserId';
 export * from './copyDocumentRequest';
 export * from './copyDocumentRequestVersionId';
+export * from './documentActivePeersParams';
 export * from './documentMetadata';
 export * from './getSnapshotRequest';
 export * from './getSnapshotRequestVersionId';

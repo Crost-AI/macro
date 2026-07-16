@@ -25,6 +25,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "include_ai",
+            "in": "query",
+            "description": "Set to `false` or `0` to filter out AI editors",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -32,6 +41,48 @@
             "description": "Active peer ids"
           },
           "401": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/document/{document_id}/blame/{node_id}": {
+      "get": {
+        "tags": ["sync_service"],
+        "operationId": "document_blame",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "node_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlameRow"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": ""
+          },
+          "404": {
             "description": ""
           }
         }
@@ -279,6 +330,23 @@
   },
   "components": {
     "schemas": {
+      "BlameRow": {
+        "type": "object",
+        "description": "Last-edit info for a single Lexical node: the peer that touched it, the\nuser behind that peer (if the mapping is known), and when.",
+        "required": ["peer_id", "timestamp_ms"],
+        "properties": {
+          "peer_id": {
+            "type": "string"
+          },
+          "timestamp_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "user_id": {
+            "type": ["string", "null"]
+          }
+        }
+      },
       "CopyDocumentRequest": {
         "type": "object",
         "required": ["target_document_id"],

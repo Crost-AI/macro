@@ -3,14 +3,14 @@ pub mod websocket;
 use bebop::Record;
 use worker::WebSocket;
 
-use crate::{domain::ports::SyncServiceError, error::ResultExt};
+use crate::{domain::ports::SyncServiceError, error::ResultExt, generated::schema::FromRemote};
 
-pub struct WorkerSocket {
+pub struct RemoteSocket {
     ws: WebSocket,
     id: String,
 }
 
-impl WorkerSocket {
+impl RemoteSocket {
     pub fn new(ws: WebSocket, id: String) -> Self {
         Self { ws, id }
     }
@@ -19,7 +19,7 @@ impl WorkerSocket {
         &self.id
     }
 
-    pub fn send<'m, T: Record<'m>>(&self, msg: T) -> Result<(), SyncServiceError> {
+    pub fn send<'m>(&self, msg: FromRemote<'m>) -> Result<(), SyncServiceError> {
         let mut buf = Vec::new();
         msg.serialize(&mut buf)
             .context("failed to serialize message")?;

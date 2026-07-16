@@ -6,7 +6,9 @@
  * OpenAPI spec version: 0.1.0
  */
 import type {
+  BlameRow,
   CopyDocumentRequest,
+  DocumentActivePeersParams,
   DocumentMetadata,
   GetSnapshotRequest,
   PeerResponse,
@@ -35,15 +37,31 @@ export type documentActivePeersResponse =
   | documentActivePeersResponseSuccess
   | documentActivePeersResponseError;
 
-export const getDocumentActivePeersUrl = (documentId: string) => {
-  return `/document/${documentId}/active_peers`;
+export const getDocumentActivePeersUrl = (
+  documentId: string,
+  params?: DocumentActivePeersParams
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/document/${documentId}/active_peers?${stringifiedParams}`
+    : `/document/${documentId}/active_peers`;
 };
 
 export const documentActivePeers = async (
   documentId: string,
+  params?: DocumentActivePeersParams,
   options?: RequestInit
 ): Promise<documentActivePeersResponse> => {
-  const res = await fetch(getDocumentActivePeersUrl(documentId), {
+  const res = await fetch(getDocumentActivePeersUrl(documentId, params), {
     ...options,
     method: 'GET',
   });
@@ -58,6 +76,59 @@ export const documentActivePeers = async (
     status: res.status,
     headers: res.headers,
   } as documentActivePeersResponse;
+};
+
+export type documentBlameResponse200 = {
+  data: BlameRow;
+  status: 200;
+};
+
+export type documentBlameResponse401 = {
+  data: void;
+  status: 401;
+};
+
+export type documentBlameResponse404 = {
+  data: void;
+  status: 404;
+};
+
+export type documentBlameResponseSuccess = documentBlameResponse200 & {
+  headers: Headers;
+};
+export type documentBlameResponseError = (
+  | documentBlameResponse401
+  | documentBlameResponse404
+) & {
+  headers: Headers;
+};
+
+export type documentBlameResponse =
+  | documentBlameResponseSuccess
+  | documentBlameResponseError;
+
+export const getDocumentBlameUrl = (documentId: string, nodeId: string) => {
+  return `/document/${documentId}/blame/${nodeId}`;
+};
+
+export const documentBlame = async (
+  documentId: string,
+  nodeId: string,
+  options?: RequestInit
+): Promise<documentBlameResponse> => {
+  const res = await fetch(getDocumentBlameUrl(documentId, nodeId), {
+    ...options,
+    method: 'GET',
+  });
+
+  const body = [204, 205, 304].includes(res.status) ? null : await res.text();
+
+  const data: documentBlameResponse['data'] = body ? JSON.parse(body) : {};
+  return {
+    data,
+    status: res.status,
+    headers: res.headers,
+  } as documentBlameResponse;
 };
 
 /**
