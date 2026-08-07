@@ -428,6 +428,9 @@ impl SyncServiceCore for SyncServiceImpl {
                 .and_then(|state| state.export_shallow_snapshot());
 
             if let Ok(snapshot) = snapshot {
+                // Size of the initial sync this connect sent — the server end
+                // of the client's `doc.sync.initial-sync` span.
+                tracing::Span::current().record("snapshot.bytes", snapshot.len());
                 let socket = RemoteSocket::new(pair.server, ws_id.clone());
                 websocket::send_initial_sync(
                     &socket,
@@ -448,7 +451,8 @@ impl SyncServiceCore for SyncServiceImpl {
                 let document_id_owned = document_id.clone();
                 let env = self.env.clone();
                 self.state.wait_until(async move {
-                    report_interaction(&document_id_owned, &env, InteractionReason::FirstJoin).await;
+                    report_interaction(&document_id_owned, &env, InteractionReason::FirstJoin)
+                        .await;
                 });
             }
 

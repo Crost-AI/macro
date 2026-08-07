@@ -1,8 +1,8 @@
 use utoipa::OpenApi;
 
 use crate::domain::models::{
-    CopyDocumentRequest, DocumentMetadata, GetSnapshotRequest, PeerResponse, PeerWithUserId,
-    VersionIndicator,
+    BlameRow, CopyDocumentRequest, DocumentMetadata, GetSnapshotRequest, PeerResponse,
+    PeerWithUserId, VersionIndicator,
 };
 
 /// OpenAPI spec for the sync service's JSON HTTP endpoints.
@@ -16,6 +16,7 @@ use crate::domain::models::{
         crate::inbound::worker::copy_route,
         crate::inbound::router::exists_route,
         crate::inbound::router::metadata_route,
+        crate::inbound::router::blame_route,
         crate::inbound::router::raw_route,
         crate::inbound::router::active_peers_route,
         crate::inbound::router::peer_route,
@@ -30,6 +31,7 @@ use crate::domain::models::{
         DocumentMetadata,
         PeerResponse,
         PeerWithUserId,
+        BlameRow,
     )),
     tags((name = "sync_service", description = "Sync service"))
 )]

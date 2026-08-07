@@ -40,3 +40,13 @@ pub struct PeerWithUserId {
     pub peer_id: String,
     pub user_id: String,
 }
+
+/// Last-edit info for a single Lexical node: the peer that touched it, the
+/// user behind that peer (if the mapping is known), and when.
+#[derive(serde::Deserialize, serde::Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct BlameRow {
+    pub peer_id: String,
+    pub user_id: Option<String>,
+    pub timestamp_ms: i64,
+}

@@ -1,5 +1,5 @@
 use axum::http::{
-    Method,
+    HeaderName, Method,
     header::{AUTHORIZATION, CONTENT_TYPE},
 };
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -20,7 +20,11 @@ pub fn is_origin_allowed(origin: &str) -> bool {
     if ALLOWED_ORIGINS.contains(&origin) {
         return true;
     }
-    if let Some(port) = origin.strip_prefix("http://localhost:")
+    // `localhost` and `*.localhost` (loopback-reserved; local dev uses
+    // per-persona hostnames so each seeded user gets its own cookie jar).
+    if let Some(rest) = origin.strip_prefix("http://")
+        && let Some((host, port)) = rest.rsplit_once(':')
+        && (host == "localhost" || host.ends_with(".localhost"))
         && let Ok(port) = port.parse::<u16>()
     {
         return (3000..=3999).contains(&port) || (20000..=60000).contains(&port);
@@ -41,7 +45,16 @@ pub fn is_origin_allowed(origin: &str) -> bool {
 pub fn cors_layer() -> tower_http::cors::CorsLayer {
     CorsLayer::new()
         .allow_credentials(true)
-        .allow_headers([AUTHORIZATION, CONTENT_TYPE])
+        // `traceparent`/`tracestate` are injected by the web client's traced
+        // fetch wrapper (see `safeFetch`), so they must be preflight-allowed or
+        // the browser blocks every instrumented call. Kept in sync with
+        // `macro_cors::EXTRA_HEADERS`.
+        .allow_headers([
+            AUTHORIZATION,
+            CONTENT_TYPE,
+            HeaderName::from_static("traceparent"),
+            HeaderName::from_static("tracestate"),
+        ])
         .allow_methods([
             Method::GET,
             Method::POST,

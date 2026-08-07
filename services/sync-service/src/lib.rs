@@ -42,6 +42,7 @@ fn inner_start() {
                 performance_layer()
                     .with_details_from_fields(tracing_subscriber::fmt::format::Pretty::default()),
             )
+            .with(worker_rs_otel::OtelLayer::new("sync-service"))
             .init();
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -60,12 +61,41 @@ fn start() {
 async fn fetch(
     req: HttpRequest,
     env: Env,
-    _ctx: Context,
+    ctx: Context,
 ) -> Result<axum::http::Response<axum::body::Body>> {
     use tower_service::Service;
-    let mut router = crate::inbound::worker::outer_router(env);
-    Ok(router
-        .call(req)
-        .await
-        .unwrap_or_else(|e: std::convert::Infallible| match e {}))
+    use tracing::Instrument;
+
+    // WebSocket connects can't set headers, so they carry the traceparent as a
+    // query parameter instead.
+    let traceparent = worker_rs_otel::traceparent_from_headers(req.headers()).or_else(|| {
+        req.uri().query()?.split('&').find_map(|pair| {
+            let value = pair
+                .strip_prefix(worker_rs_otel::TRACEPARENT)?
+                .strip_prefix('=')?;
+            worker_rs_otel::parse_traceparent(value)
+        })
+    });
+    let (remote_id, remote_parent) = worker_rs_otel::remote_fields(traceparent.as_ref());
+    let span = tracing::info_span!(
+        "request",
+        http.method = %req.method(),
+        http.path = %req.uri().path(),
+        trace.remote_id = %remote_id,
+        trace.remote_parent = %remote_parent,
+    );
+
+    let mut router = crate::inbound::worker::outer_router(env.clone());
+    worker_rs_otel::scope(
+        &env,
+        &ctx,
+        async move {
+            Ok(router
+                .call(req)
+                .await
+                .unwrap_or_else(|e: std::convert::Infallible| match e {}))
+        }
+        .instrument(span),
+    )
+    .await
 }

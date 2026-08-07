@@ -1,12 +1,11 @@
 use axum::http::HeaderMap;
-use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
+use macro_sync_service_jwt::DocumentPermissionToken;
 use serde::Deserialize;
 
 use crate::{
     constants::header_names,
     domain::{
         document_id::DocumentId,
-        jwt::SyncServiceJWT,
         permissions::{AccessLevel, AuthToken},
     },
     error::ResultExt,
@@ -15,26 +14,25 @@ use crate::{
 
 #[derive(Deserialize, Debug)]
 pub struct WebsocketQueryParams {
-    pub token: SyncServiceJWT,
+    pub token: DocumentPermissionToken,
 }
 
-pub fn decode_jwt(token: &SyncServiceJWT, secrets: &Secrets) -> worker::Result<AuthToken> {
-    let validation = Validation::new(Algorithm::HS256);
-    let key = DecodingKey::from_secret(secrets.document_permissions_secret.as_bytes());
-    let claims = decode::<AuthToken>(token.as_str(), &key, &validation)
-        .context("failed to decode `AuthToken`")?
-        .claims;
-    Ok(claims)
+pub fn decode_jwt(token: &DocumentPermissionToken, secrets: &Secrets) -> worker::Result<AuthToken> {
+    macro_sync_service_jwt::decode::<AuthToken>(
+        token.as_str(),
+        &secrets.document_permissions_secret,
+    )
+    .context("failed to decode `AuthToken`")
 }
 
 /// Extract the bearer token from the `Authorization` header (no validation —
 /// pair with [`decode_jwt`]). `None` if the header is absent or not `Bearer …`.
-pub fn extract_jwt_from_headers(headers: &HeaderMap) -> Option<SyncServiceJWT> {
+pub fn extract_jwt_from_headers(headers: &HeaderMap) -> Option<DocumentPermissionToken> {
     headers
         .get(header_names::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|header| header.strip_prefix("Bearer "))
-        .map(|token| SyncServiceJWT(token.to_string()))
+        .map(|token| DocumentPermissionToken::from(token.to_string()))
 }
 
 /// True when the request carries the shared internal API key. Internal services
@@ -89,7 +87,7 @@ impl Authenticator {
 
     /// Decode a query-string token into claims (used by the websocket `connect`
     /// upgrade, which self-authenticates). `None` if the token is invalid.
-    pub fn decode_query(&self, token: &SyncServiceJWT) -> Option<AuthToken> {
+    pub fn decode_query(&self, token: &DocumentPermissionToken) -> Option<AuthToken> {
         decode_jwt(token, &self.secrets).ok()
     }
 }
@@ -97,7 +95,6 @@ impl Authenticator {
 #[cfg(test)]
 mod tests {
     use axum::http::HeaderValue;
-    use jsonwebtoken::{EncodingKey, Header, encode};
 
     use super::*;
 
@@ -125,15 +122,12 @@ mod tests {
             "user_id": null,
             "document_id": document_id,
             "access_level": access_level,
-            // jsonwebtoken validates `exp` by default; set it far in the future.
+            // decoding validates `exp` by default; set it far in the future.
             "exp": 4_102_444_800u64,
         });
-        encode(
-            &Header::new(Algorithm::HS256),
-            &claims,
-            &EncodingKey::from_secret(PERM_SECRET.as_bytes()),
-        )
-        .unwrap()
+        macro_sync_service_jwt::encode(&claims, PERM_SECRET)
+            .unwrap()
+            .into_inner()
     }
 
     #[test]

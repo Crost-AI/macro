@@ -1,5 +1,5 @@
 use crate::domain::document_id::DocumentId;
-use crate::domain::models::{DocumentMetadata, GetSnapshotRequest, PeerResponse};
+use crate::domain::models::{BlameRow, DocumentMetadata, GetSnapshotRequest, PeerResponse};
 use crate::domain::permissions::AuthToken;
 
 /// An error from a [`SyncService`] operation. Maps to HTTP 500 at the inbound
@@ -32,11 +32,20 @@ pub trait SyncServiceCore {
     /// The document's raw JSON, or `None` if it doesn't exist.
     async fn raw(&self, id: &DocumentId) -> Result<Option<String>, SyncServiceError>;
 
-    /// The peer ids currently connected.
-    async fn active_peers(&self) -> Result<Vec<u64>, SyncServiceError>;
+    /// The peer ids currently connected. With `include_ai = false`, AI editors
+    /// (peer ids from the reserved AI block) are filtered out so callers see
+    /// only human collaborators.
+    async fn active_peers(&self, include_ai: bool) -> Result<Vec<u64>, SyncServiceError>;
 
     /// Resolve the user behind a peer id on a document.
     async fn peer(&self, id: &DocumentId, peer_id: &str) -> Result<PeerResponse, SyncServiceError>;
+
+    /// Last-edit info for a Lexical node, or `None` if no blame is recorded.
+    async fn blame(
+        &self,
+        id: &DocumentId,
+        node_id: &str,
+    ) -> Result<Option<BlameRow>, SyncServiceError>;
 
     /// A Loro snapshot of the document, or `None` if it doesn't exist.
     async fn snapshot(

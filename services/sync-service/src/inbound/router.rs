@@ -28,7 +28,7 @@ use crate::{
 };
 
 #[cfg(feature = "openapi")]
-use crate::domain::models::{DocumentMetadata, PeerResponse};
+use crate::domain::models::{BlameRow, DocumentMetadata, PeerResponse};
 
 /// The router's axum state: the [`SyncServiceCore`] port impl, made
 /// ownable/`Clone` via `Rc` and `Send`/`Sync` for the worker runtime via
@@ -94,6 +94,7 @@ where
     let tiers: EnumMap<AccessLevel, axum::Router<ServiceState<S>>> = enum_map! {
         AccessLevel::View => axum::Router::new()
             .route("/document/{document_id}/metadata", get(metadata_route::<S>))
+            .route("/document/{document_id}/blame/{node_id}", get(blame_route::<S>))
             .route("/document/{document_id}/raw", get(raw_route::<S>))
             .route("/document/{document_id}/snapshot", post(snapshot_route::<S>))
             .route("/document/{document_id}/active_peers", get(active_peers_route::<S>)),
@@ -157,6 +158,11 @@ async fn connect_route<S: SyncServiceCore>(
     AxumPath(document_id): AxumPath<DocumentId>,
     Extension(claims): Extension<AuthToken>,
 ) -> HandlerResult {
+    // The query-token guard only proves the token is valid; it must also grant
+    // access to *this* document before we upgrade the connection.
+    if !claims.has_document_id_access(&document_id) {
+        return Ok(StatusCode::UNAUTHORIZED.into_response());
+    }
     Ok(state.connect(claims, &document_id).await?.into())
 }
 
@@ -211,19 +217,49 @@ pub(crate) async fn raw_route<S: SyncServiceCore>(
     })
 }
 
+/// Query params for [`active_peers_route`]. `include_ai=false` (or `0`) filters
+/// out AI editors; the default keeps them.
+#[derive(serde::Deserialize)]
+pub(crate) struct ActivePeersParams {
+    include_ai: Option<String>,
+}
+
 #[cfg_attr(feature = "openapi", utoipa::path(
     get, path = "/document/{document_id}/active_peers", operation_id = "document_active_peers",
-    tag = "sync_service", params(("document_id" = String, Path)),
+    tag = "sync_service",
+    params(
+        ("document_id" = String, Path),
+        ("include_ai" = Option<String>, Query, description = "Set to `false` or `0` to filter out AI editors"),
+    ),
     responses((status = 200, description = "Active peer ids"), (status = 401)),
 ))]
 #[worker::send]
 pub(crate) async fn active_peers_route<S: SyncServiceCore>(
     AxumState(state): AxumState<ServiceState<S>>,
     AxumPath(_document_id): AxumPath<DocumentId>,
+    Query(params): Query<ActivePeersParams>,
 ) -> HandlerResult {
-    let peers = state.active_peers().await?;
+    let include_ai = !matches!(params.include_ai.as_deref(), Some("false" | "0"));
+    let peers = state.active_peers(include_ai).await?;
     let peers: Vec<String> = peers.iter().map(u64::to_string).collect();
     Ok(axum::Json(peers).into_response())
+}
+
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get, path = "/document/{document_id}/blame/{node_id}", operation_id = "document_blame",
+    tag = "sync_service",
+    params(("document_id" = String, Path), ("node_id" = String, Path)),
+    responses((status = 200, body = BlameRow), (status = 401), (status = 404)),
+))]
+#[worker::send]
+pub(crate) async fn blame_route<S: SyncServiceCore>(
+    AxumState(state): AxumState<ServiceState<S>>,
+    AxumPath((document_id, node_id)): AxumPath<(DocumentId, String)>,
+) -> HandlerResult {
+    Ok(match state.blame(&document_id, &node_id).await? {
+        Some(row) => axum::Json(row).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    })
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(
