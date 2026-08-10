@@ -328,8 +328,10 @@ CREATE TABLE meta (
 );
 
 CREATE TABLE records (
-  key TEXT PRIMARY KEY,
-  value BLOB NOT NULL
+  __typename TEXT NOT NULL,
+  id TEXT NOT NULL,
+  value BLOB NOT NULL,
+  PRIMARY KEY (__typename, id)
 );
 
 CREATE TABLE mutation_queue (
@@ -358,6 +360,22 @@ CREATE TABLE optimistic_layers (
 Records and normalized optimistic updates remain postcard BLOBs. Query source,
 variables, and optimistic source retain their current representations so
 `cache-core` behavior does not change.
+
+`TursoStorage` maps the existing canonical `EntityKey` into the compound key:
+
+- `Typename:id` becomes `(__typename = "Typename", id = "id")`;
+- if an entity key contains more than one colon, split only at the first one so
+  the complete remaining key suffix stays in `id`;
+- the `ROOT_QUERY` singleton becomes
+  `(__typename = "ROOT_QUERY", id = "")` and reconstructs as `ROOT_QUERY`;
+- internal keys such as `__meta:identity` follow the normal first-colon rule.
+
+Reject any other entity key that cannot be represented or round-tripped. Add
+unit tests for the root singleton, internal keys, ordinary IDs, and IDs that
+contain colons. The compound primary key's leftmost `__typename` column makes a
+future exact-typename lookup indexable without adding that lookup API in this
+migration. Existing `Storage::scan_records` ordering and exclusive-cursor
+semantics must remain unchanged.
 
 Freeze the schema only after verifying the required SQL subset against the
 pinned Turso core revision. Enable and test foreign keys. Select
@@ -575,10 +593,12 @@ ID, changed paths, commands run, and unresolved risks.
 **Tasks**
 
 1. Map every `Storage` method to Turso SQL and transaction boundaries.
-2. List the exact SQL syntax/features used by `cache-sqlite` and verify which
+2. Specify canonical `EntityKey` conversion to and from the compound
+   `(__typename, id)` record key, including `ROOT_QUERY`.
+3. List the exact SQL syntax/features used by `cache-sqlite` and verify which
    should be retained.
-3. Define the Turso storage conformance suite.
-4. Define full-reset behavior for schema mismatch, corruption, quota errors,
+4. Define the Turso storage conformance suite.
+5. Define full-reset behavior for schema mismatch, corruption, quota errors,
    logout, and abrupt failover.
 
 **Deliverable:** reviewed schema and conformance-test specification.
@@ -633,11 +653,13 @@ substitute an npm package or add COOP/COEP as a workaround.
 
 1. Implement schema initialization and full namespace reset.
 2. Implement all `Storage` methods directly over `turso_core`.
-3. Implement bindings, row conversion, transaction helpers, and statement/I/O
+3. Implement checked conversion between `EntityKey` and the compound
+   `(__typename, id)` record key.
+4. Implement bindings, row conversion, transaction helpers, and statement/I/O
    driving in Rust.
-4. Preserve postcard BLOB representations and checked queue ID conversion.
-5. Add Turso error classification and reset-required signaling.
-6. Run the shared storage contract and engine-over-Turso tests.
+5. Preserve postcard BLOB representations and checked queue ID conversion.
+6. Add Turso error classification and reset-required signaling.
+7. Run the shared storage contract and engine-over-Turso tests.
 
 **Depends on:** WP-04, WP-05, and G0.
 
@@ -813,8 +835,10 @@ Run the same semantic suite against `InMemoryStorage`, browser
 `TursoStorage`, and native `SqliteStorage` where applicable:
 
 - aligned batch get with misses;
-- atomic upsert/delete;
-- deterministic type-prefix scan and cursor pagination;
+- atomic compound-key upsert/delete;
+- entity-key round trips for ordinary IDs, colon-containing IDs,
+  `ROOT_QUERY`, and internal keys;
+- deterministic typename-filtered scan and cursor pagination;
 - queue enqueue/order/reopen;
 - lease fencing and strict-head blocking;
 - defer/commit/discard behavior;
