@@ -1309,10 +1309,18 @@ impl<S: Storage> Engine<S> {
         self.deps.active_ops()
     }
 
-    /// Access to the underlying storage (hosts need it for lifecycle
-    /// operations like closing connections before database deletion).
+    /// Access to the underlying storage for non-consuming diagnostics.
     pub fn storage(&self) -> &S {
         &self.storage
+    }
+
+    /// Consumes the engine and returns its owned storage.
+    ///
+    /// Hosts must use this transition for storage lifecycles that require
+    /// exclusive ownership, such as proving that a browser database connection
+    /// is closed before preserving or physically resetting its OPFS files.
+    pub fn into_storage(self) -> S {
+        self.storage
     }
 
     /// Memoized document parse. Takes the map (not `&mut self`) so callers
