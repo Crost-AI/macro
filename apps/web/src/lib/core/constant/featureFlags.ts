@@ -641,3 +641,19 @@ export const ENABLE_TAG_TEAM_SHARING_FLAG = 'enable-tag-team-sharing';
 export const ENABLE_TAG_TEAM_SHARING_OVERRIDE =
   getFeatureFlagOverride('ENABLE_TAG_TEAM_SHARING') ??
   (DEV_MODE_ENV ? true : undefined);
+
+// AI agents: the Macro Coder mention entry and the folded agent-session view
+// in channels. Override with VITE_ENABLE_CHAT_V3_AGENTS.
+export const ENABLE_CHAT_V3_AGENTS_FLAG = 'enable-chat-v3-agents';
+export const ENABLE_CHAT_V3_AGENTS_OVERRIDE =
+  getFeatureFlagOverride('ENABLE_CHAT_V3_AGENTS') ??
+  (DEV_MODE_ENV ? true : undefined);
+export function ENABLE_CHAT_V3_AGENTS(): boolean {
+  if (ENABLE_CHAT_V3_AGENTS_OVERRIDE !== undefined) {
+    return ENABLE_CHAT_V3_AGENTS_OVERRIDE;
+  }
+
+  return (
+    analytics.posthog.isFeatureEnabled(ENABLE_CHAT_V3_AGENTS_FLAG) ?? false
+  );
+}
