@@ -6269,6 +6269,9 @@
       "crates/unfurl",
       "crates/workspace-hack"
     ],
+    "turso-opfs": [
+      "crates/client/turso-opfs"
+    ],
     "unfurl": [
       "crates/unfurl",
       "crates/workspace-hack"

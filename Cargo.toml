@@ -16,6 +16,7 @@ members = [
   "crates/client/cache-idb",
   "crates/client/cache-sqlite",
   "crates/client/cache-wasm",
+  "crates/client/turso-opfs",
   "crates/complete_graph",
   "crates/cowlike",
   "crates/crm",
