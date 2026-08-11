@@ -1,6 +1,6 @@
 # Browser normalized cache: IndexedDB to Turso migration plan
 
-Status: **proposed; feasibility gates must pass before production implementation**
+Status: **stopped at Gate G0 (NO-GO); production WP-05 through WP-12 are blocked**
 
 Scope: browser normalized GraphQL cache only. The Tauri native
 `cache-sqlite` host stays unchanged. The `idb` use in collaboration storage and
@@ -11,6 +11,10 @@ Primary references:
 - [Notion: How we sped up Notion in the browser with WASM SQLite](https://www.notion.com/blog/how-we-sped-up-notion-in-the-browser-with-wasm-sqlite)
 - [Turso Rust core](https://github.com/tursodatabase/turso/tree/main/core)
 - Existing cache design: [`graphql-normalized-cache-plan.md`](./graphql-normalized-cache-plan.md)
+- Gate result: [`graphql-cache-turso-g0-decision.md`](./graphql-cache-turso-g0-decision.md)
+
+Wave 0 executed WP-01 through WP-04. Gate G0 did not pass, so this document
+remains a conditional plan rather than authorization for production work.
 
 ## 1. Goal
 
@@ -622,6 +626,15 @@ WP-00 records explicit approval only if:
 
 If G0 fails, stop the migration and resolve the Turso-core/OPFS design. Do not
 substitute an npm package or add COOP/COEP as a workaround.
+
+**Recorded result: NO-GO.** WP-01 through WP-04 produced reproducible spikes and
+the storage contract, but the approved Apple browser matrix is unproven,
+`BEGIN IMMEDIATE` traps through Turso's internal WASM `MemoryIO`, the complete
+WP-04 SQL/pragma/error contract has not executed, combined resource budgets are
+not approved, and the consuming OPFS lifecycle API is not frozen. See
+[`graphql-cache-turso-g0-decision.md`](./graphql-cache-turso-g0-decision.md).
+WP-05 through WP-12 must not begin until that decision's reopen conditions are
+satisfied.
 
 ### WP-05 — production `turso-opfs` crate
 
