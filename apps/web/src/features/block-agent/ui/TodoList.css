@@ -1,0 +1,28 @@
+/*
+ * Keyframes for the TodoList in-progress dot. Ported from opencode's
+ * `--animate-pulse-scale` (github.com/sst/opencode, MIT © 2025 opencode).
+ */
+
+@keyframes block-agent-todo-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(0.6);
+    opacity: 0.5;
+  }
+}
+
+.block-agent-todo-dot {
+  animation: block-agent-todo-pulse 1.6s ease-in-out infinite;
+  transform-origin: center;
+  transform-box: fill-box;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .block-agent-todo-dot {
+    animation: none;
+  }
+}

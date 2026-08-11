@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT\n                id, owner_id, thread_id, originating_message_id, bot_id,\n                model, harness, repo_url, acp_session_id, status, status_event_name,\n                created_at, modified_at\n            FROM agent_session\n            WHERE id = $1\n            ",
+  "query": "\n            INSERT INTO agent_session (\n                id, owner_id, thread_id, originating_message_id, bot_id, model,\n                harness, repo_url, acp_session_id, status, status_event_name\n            )\n            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)\n            RETURNING\n                id, owner_id, thread_id, originating_message_id, bot_id,\n                model, harness, repo_url, acp_session_id, status, status_event_name,\n                created_at, modified_at,\n                (SELECT channel_id FROM comms_messages WHERE id = thread_id)\n                    AS \"thread_channel_id?\"\n            ",
   "describe": {
     "columns": [
       {
@@ -67,11 +67,26 @@
         "ordinal": 12,
         "name": "modified_at",
         "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 13,
+        "name": "thread_channel_id?",
+        "type_info": "Uuid"
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
       ]
     },
     "nullable": [
@@ -87,8 +102,9 @@
       false,
       true,
       false,
-      false
+      false,
+      null
     ]
   },
-  "hash": "611ccba6439212e9ac2cdf04e77d9733bd60f867d7fd7d6972a41754ce224ed4"
+  "hash": "d43daf0d0b1b140745fab92dc0edf7fe80ea02d0a5a7eb6ccfb044a8ab2e352b"
 }

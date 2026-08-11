@@ -79,4 +79,5 @@ const _fileTypeColors: Record<BlockName | BlockAlias | 'default', string> = {
   skill: defaultFileColor,
   automation: defaultFileColor,
   pr: defaultFileColor,
+  agent: defaultFileColor,
 };

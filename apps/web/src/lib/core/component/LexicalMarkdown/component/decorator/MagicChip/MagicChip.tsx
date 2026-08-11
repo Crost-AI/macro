@@ -9,17 +9,11 @@ export const MagicChip: Component<MagicChipDecoratorProps> = (props) => {
   const { insertSplit } = useSplitLayout();
   const model = createMagicChipModel(props);
 
-  console.log('[magic-chip] Macro agent session ID:', props.agentSessionId);
-
   return (
     <MagicChipView
       agentSessionId={props.agentSessionId}
       presentation={model.presentation()}
-      onOpen={
-        props.channelId
-          ? () => insertSplit({ type: 'channel', id: props.channelId! })
-          : undefined
-      }
+      onOpen={() => insertSplit({ type: 'agent', id: props.agentSessionId })}
     />
   );
 };

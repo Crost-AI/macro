@@ -628,6 +628,16 @@ if (LOCAL_ONLY) {
     'dynamic-ui',
     lazy(() => import('@app/features/dynamic-ui/Gallery'))
   );
+
+  registerComponent(
+    'agent-ui',
+    lazy(() => import('@app/features/block-agent/debug/Gallery'))
+  );
+
+  registerComponent(
+    'linked-conversation',
+    withAuth(lazy(() => import('@core/linked-conversation/debug/Demo')))
+  );
 }
 
 if (DEV_MODE_ENV) {
