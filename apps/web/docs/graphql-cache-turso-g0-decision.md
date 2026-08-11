@@ -11,8 +11,8 @@ It is not approval to replace the production IndexedDB cache.
 Do not begin the production `turso-opfs`, `cache-turso`, `cache-wasm`, or worker
 cutover work. The direct Rust Turso/OPFS architecture is technically viable in
 the Chromium and Firefox versions exercised by the spikes, but Gate G0 has not
-passed for the product's browser matrix, transaction contract, or approved
-resource budgets.
+passed for the product's browser matrix, storage-integrity contract, or
+approved resource budgets.
 
 No Turso dependency has been added to the production Cargo workspace, no npm
 package has been added, and the existing browser/Tauri cache paths remain
@@ -25,16 +25,22 @@ unchanged.
 | WP-01: Turso core WASM | Partial pass | [`../spikes/graphql-cache-turso-core/README.md`](../spikes/graphql-cache-turso-core/README.md) |
 | WP-02: Rust OPFS adapter | Partial pass; recommends NO-GO | [`../spikes/graphql-cache-turso-opfs/README.md`](../spikes/graphql-cache-turso-opfs/README.md) |
 | WP-03: coordinator topology | Pass as a spike | [`../spikes/graphql-cache-turso-coordinator/README.md`](../spikes/graphql-cache-turso-coordinator/README.md) |
-| WP-04: storage contract | Design complete; full SQL conformance remains unexecuted | [`graphql-cache-turso-storage-design.md`](./graphql-cache-turso-storage-design.md) |
+| WP-04: storage contract | Design complete; selected SQL executed, one required pragma failed | [`graphql-cache-turso-storage-design.md`](./graphql-cache-turso-storage-design.md) |
+| Fork transaction verification | Unused-temp fix passes; explicit temp remains unsupported | [`../spikes/graphql-cache-turso-core-fix-verify/README.md`](../spikes/graphql-cache-turso-core-fix-verify/README.md) |
+| Fork OPFS/browser verification | Transaction/OPFS routes pass; integrity pragma fails | [`../spikes/graphql-cache-turso-opfs-cf7de761/README.md`](../spikes/graphql-cache-turso-opfs-cf7de761/README.md) |
 
-The candidate Turso core revision evaluated by WP-01 and WP-02 is:
+The original baseline was `turso_core` `v0.8.0-pre.3` at
+`ed15b13f8e5f77d7ae24af321a63d7cd0fa53365`. Follow-up verification used the
+clean local fork at:
 
 ```text
-ed15b13f8e5f77d7ae24af321a63d7cd0fa53365
-v0.8.0-pre.3
+head:   cf7de76172d61057007097e2dee7c47002cdc559
+parent: 79163249538197d01dec5ea7f65519454ed792e2
+branch: fix/avoid-unused-temp-db-init
 ```
 
-It remains an evaluation pin, not an approved production dependency.
+The fork commit remains an evaluation candidate, not an approved or remotely
+available production dependency.
 
 ## What passed
 
@@ -42,15 +48,25 @@ It remains an evaluation pin, not an approved production dependency.
   package.
 - The inspected modules use one unshared 32-bit WASM memory, no atomics,
   threads, shared memory, nested worker, or cross-origin isolation.
-- A representative cache DDL/SQL subset, compound `(__typename, id)` records,
-  BLOBs, foreign-key cascades, queue operations, rollback, and fenced claims
-  execute in the core spike.
+- The fork fixes the unused-temp `BEGIN IMMEDIATE` and `BEGIN EXCLUSIVE` WASM
+  trap. The exact parent traps through `ensure_temp_database` and
+  `std::time::Instant::now`; the fixed head succeeds without materializing
+  temp.
+- Selected WP-04 SQL executes with compound `(__typename, id)` records,
+  canonical concatenated-key ordering, BLOBs, queue consistency joins,
+  foreign-key cascades, immediate transactions, rollback, fencing,
+  `quick_check`, and classified error probes.
 - A direct Rust `IO`/`File` adapter over OPFS sync access handles works in the
   actually-run Chromium 145 and Firefox 146 builds.
 - Those browsers passed direct file operations, real Turso main/WAL
-  persistence, cross-worker reopen, exclusive Web Locks, active worker
-  termination, bounded handle recovery, full deletion/recreation, and injected
-  close/delete/recreation failures.
+  persistence, immediate/exclusive transactions, cross-worker reopen,
+  exclusive Web Locks, active worker termination, bounded handle recovery,
+  full deletion/recreation, and injected close/delete/recreation failures.
+- Two cold and two warm fork-head runs in each Chromium and Firefox observed
+  zero WASM environment traps or unhandled failures on every enumerated
+  production/control worker route. The generated module has one unshared
+  32-bit memory, zero atomics, and an exact import allowlist with no
+  thread/WASI/worker imports.
 - The numeric-handle design keeps JavaScript handles in worker-local storage;
   Turso trait objects contain only checked IDs and need no unsafe `Send`/`Sync`
   implementation.
@@ -58,6 +74,20 @@ It remains an evaluation pin, not an approved production dependency.
   available matching WebKit harness for owner epochs, graceful handoff,
   abrupt-loss wipe, stale-response rejection, and physical owner-lock
   exclusion.
+
+## Resolved and bounded by the fork verification
+
+The former immediate-transaction blocker is resolved for unopened, unused temp
+storage by `cf7de761`. This is differential native, Node/V8 WASM, Chromium, and
+Firefox evidence, not merely a compile result.
+
+The conclusion about other WASM environment issues is deliberately bounded:
+no trap was observed on the enumerated cache SQL, OPFS, lifecycle, failure, or
+recovery routes. Built-in `MemoryIO` and explicit temp tables still call
+`std::time::Instant::now()` and trap on WASM. The cache schema does not use temp
+storage, so production must prohibit unreviewed temp-dependent SQL and retain a
+negative regression probe. No conclusion extends to unenumerated SQL/VFS paths
+or unrun browsers.
 
 ## Failed or unresolved G0 conditions
 
@@ -77,39 +107,35 @@ one of:
 
 There is no IDB fallback in the proposed production design.
 
-### 2. Immediate transactions trap in the evaluated Turso revision
+### 2. `PRAGMA foreign_key_check` is a silent no-op
 
-`BEGIN IMMEDIATE` and `BEGIN EXCLUSIVE` enter Turso's internal temporary
-`MemoryIO`, which calls `std::time::Instant::now()` and traps on
-`wasm32-unknown-unknown` at the evaluated revision.
+The fork harness executed the selected WP-04 SQL in native and repeated WASM
+runs, including the exact canonical scan expression, queue consistency joins,
+`quick_check`, immediate/exclusive transactions, rollback, and error probes.
 
-Deferred `BEGIN` passed strict-head selection, fenced claim updates, rollback,
-and a competing-connection `BusySnapshot` probe. It is acceptable only if the
-production contract formally requires:
+However, the browser OPFS harness disabled enforcement on its connection,
+inserted this deliberate orphan, and then observed zero result columns and rows
+from `PRAGMA foreign_key_check`:
 
-- exactly one `TursoStorage` connection per database owner;
-- the existing `CacheWorkerCore` serialized command queue;
-- the cache-wasm async engine mutex;
-- no re-entry or nested transaction; and
-- rollback/retry on `Busy`/`BusySnapshot` at the serialized operation boundary.
+```text
+optimistic_layers(mutation_id=9999999) -> mutation_queue(id)
+```
 
-Before G0 can pass, WP-00 must either approve that deferred contract or select
-and verify a Turso patch/revision that fixes immediate transactions.
+The required SQLite result is one four-column row identifying
+`optimistic_layers`, rowid `9999999`, parent `mutation_queue`, and foreign-key
+index `0`. A separate core harness used a second connection to insert orphan
+`77777` and likewise observed no violation row. Silently returning no violation
+in either probe is a storage-integrity failure.
+Before G0 can pass, the selected core must implement the pragma or WP-00 must
+approve and test an equally strong schema-specific integrity query.
 
-### 3. The complete storage SQL contract has not run
+The core coverage matrix also keeps five integration requirements explicitly
+unapproved: rollback-I/O outcome classification, consuming reset after an
+uncertain transaction, physical reset for compatibility/integrity mismatch,
+real `cache-core` codec/`Storage` conformance, and real-browser quota/private-
+mode/eviction/device-crash behavior.
 
-WP-01 proves a representative subset, not every query required by WP-04. In
-particular, it does not yet prove the canonical-key scan expression
-`(__typename || ':' || id) COLLATE BINARY` with prefix typenames, the queue
-consistency `LEFT JOIN` queries, `PRAGMA quick_check`,
-`PRAGMA foreign_key_check`, or the complete classified-error behavior. Its
-compound-key probe orders by the tuple, which WP-04 explicitly does not permit
-for multi-typename cursor semantics.
-
-The exact WP-04 SQL, binding, result-shape, transaction, pragma, and error
-contract must execute against the selected Turso revision before G0 can pass.
-
-### 4. Resource budgets are not approved or measured end to end
+### 3. Resource budgets are not approved or measured end to end
 
 WP-01 measured the optimized Turso-core spike at approximately 6.68 MB raw and
 1.82 MB Brotli after wasm-bindgen/wasm-opt. That excludes `cache-core`, the
@@ -117,12 +143,12 @@ production OPFS adapter, and the full cache-wasm API. Its Node proxy reached
 about 16.1 MB of linear memory after the SQL exercise and approximately
 102 MB RSS delta; these are development proxies rather than browser budgets.
 
-WP-02's broader post-wasm-bindgen spike was approximately 8.80 MB before a
-production combined-module size pass. No product owner has approved download,
-startup, or active-worker memory limits, and no representative combined gate
-artifact has been measured against such limits.
+The fork OPFS post-wasm-bindgen verification module is approximately 8.82 MB,
+but it is still not the production combined module. No product owner has
+approved download, startup, or active-worker memory limits, and no
+representative combined gate artifact has been measured against such limits.
 
-### 5. Lifecycle integration still needs a production contract
+### 4. Lifecycle integration still needs a production contract
 
 Turso's `File` trait has no close method, and OPFS deletion is asynchronous
 while `IO::remove_file` is synchronous. The spike proved a consuming lifecycle:
@@ -138,10 +164,12 @@ recorded:
 1. The supported browser matrix is explicit, and every target passes both the
    WP-02 OPFS capability/recovery harness and the WP-03 coordinator/failover
    harness.
-2. The immediate-transaction fix or deferred serialized-connection contract is
-   approved.
-3. The complete WP-04 SQL, pragma, transaction, result-shape, and error
-   conformance contract passes against the selected core revision.
+2. The selected production Turso revision contains the verified unused-temp
+   fix, and regression tests enforce that production cache SQL never opens
+   explicit temp storage.
+3. `foreign_key_check` or an approved schema-specific equivalent detects the
+   deliberate orphan, and the remaining WP-04 integration conformance matrix
+   passes.
 4. Combined WASM download, startup, and active-worker memory budgets are
    numeric and approved, and a representative gate artifact containing Turso
    core, `cache-core`, the OPFS adapter, and the cache-wasm shell meets them.

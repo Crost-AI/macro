@@ -627,11 +627,13 @@ WP-00 records explicit approval only if:
 If G0 fails, stop the migration and resolve the Turso-core/OPFS design. Do not
 substitute an npm package or add COOP/COEP as a workaround.
 
-**Recorded result: NO-GO.** WP-01 through WP-04 produced reproducible spikes and
-the storage contract, but the approved Apple browser matrix is unproven,
-`BEGIN IMMEDIATE` traps through Turso's internal WASM `MemoryIO`, the complete
-WP-04 SQL/pragma/error contract has not executed, combined resource budgets are
-not approved, and the consuming OPFS lifecycle API is not frozen. See
+**Recorded result: NO-GO.** WP-01 through WP-04 and the follow-up fork
+verification produced reproducible spikes and the storage contract. The fork
+at `cf7de761` resolves the unused-temp `BEGIN IMMEDIATE`/`EXCLUSIVE` WASM trap
+on the enumerated cache routes, but `PRAGMA foreign_key_check` silently misses
+a deliberate orphan. The approved Apple browser matrix is also unproven,
+combined resource budgets are not approved, and the consuming OPFS lifecycle
+API is not frozen. See
 [`graphql-cache-turso-g0-decision.md`](./graphql-cache-turso-g0-decision.md).
 WP-05 through WP-12 must not begin until that decision's reopen conditions are
 satisfied.
