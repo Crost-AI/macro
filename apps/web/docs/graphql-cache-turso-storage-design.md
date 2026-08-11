@@ -1,7 +1,6 @@
 # GraphQL cache Turso storage contract
 
-Status: **Wave-0 WP-04 design; production implementation is gated on WP-01 and
-Gate G0**
+Status: **frozen WP-04 production contract; WP-05/WP-06 implementation authorized**
 
 This document specifies the browser `cache-turso` implementation of
 [`cache_core::store::Storage`](../../../crates/client/cache-core/src/store.rs).
@@ -524,8 +523,8 @@ On a fresh database:
    INSERT INTO meta (key, value) VALUES ('storage_schema_version', ?1);
    ```
 
-5. Commit, validate foreign keys, and expose `TursoStorage` only after all
-   statements complete.
+5. Commit, verify that foreign-key enforcement still reads back as enabled,
+   and expose `TursoStorage` only after all statements complete.
 
 A crash before commit leaves no accepted partially initialized database. A
 file that exists but is empty/partial on the next open is treated as
@@ -548,35 +547,42 @@ Before constructing the engine:
 
 4. Require all three exact values for the current anonymous scope,
    `cache_namespace(scope)`, and storage schema version.
-5. Run the foreign-key consistency check and require no violation rows.
+5. Run both queue/layer consistency queries from Section 6 and require no
+   missing or orphan optimistic layer.
 
 A missing table/row, wrong value/type, schema SQL error, failed integrity check,
-or foreign-key violation does not receive an in-place migration. It requests a
-physical full reset. A valid clean reopen preserves records and the complete
-queue.
+or queue/layer inconsistency does not receive an in-place migration. It
+requests a physical full reset. A valid clean reopen preserves records and the
+complete queue.
 
 ### 7.3 Physical full reset
 
 Full reset is an owner-level operation, not a SQL transaction:
 
 1. stop accepting engine requests and reject affected in-flight requests;
-2. drop/finalize every statement and close the Turso connection;
+2. finalize every statement, explicitly drive Turso `Connection::close()` to
+   completion, then drop the connection, database, and every adapter/IO
+   reference;
 3. close every OPFS sync access handle while retaining exclusive ownership;
-4. remove the main database and WAL files;
+4. asynchronously remove the main database and WAL files outside Turso's
+   synchronous `IO::remove_file` path;
 5. recreate/pre-register fresh files;
 6. open Turso, initialize the schema and all metadata as a fresh database; and
 7. construct a new empty engine before requests resume.
 
-If close, removal, recreation, or initialization fails, surface a storage
-initialization error. Do not retain or copy any rows, switch to IDB, or choose a
-fallback backend.
+If close, removal, recreation, or initialization fails with uncertain cleanup,
+poison the session, retain ownership until the coordinator replaces the worker,
+and reject reuse. Surface a storage initialization error; do not retain or copy
+rows, switch to IDB, or choose a fallback backend. A deterministic failure
+before any state change may return to the prior valid lifecycle state only when
+the consuming API proves cleanup complete.
 
 Full reset is required for:
 
 - storage schema, scope, or cache namespace mismatch;
 - structural corruption, invalid compound-key rows, invalid queue numeric
   state, queue/layer inconsistency, or corrupt postcard payloads;
-- an integrity or foreign-key check failure;
+- a `quick_check` or queue/layer consistency failure;
 - quota/full-storage and OPFS failures that leave durability uncertain;
 - a failed commit/rollback or unexpected Turso I/O state;
 - logout/identity-directed wipe;
@@ -642,15 +648,16 @@ These are correctness gates, not tuning:
 PRAGMA foreign_keys = ON;
 PRAGMA foreign_keys;
 PRAGMA quick_check;
-PRAGMA foreign_key_check;
 ```
 
-WP-01 must verify the exact result shapes through `turso_core`: foreign keys
-read back as enabled, `quick_check` returns exactly `ok` for a valid database,
-and `foreign_key_check` returns no rows for a valid database and violation rows
-for a deliberately invalid one. If the pinned revision does not implement one
-of these checks, WP-01/WP-00 must approve and document an equally strong core
-API before the schema is frozen; WP-06 must not silently omit validation.
+Every production connection enables foreign-key enforcement before schema or
+application writes, verifies that it reads back as enabled, and never disables
+it. `quick_check` must return exactly `ok` for a valid database. The cache does
+not use `PRAGMA foreign_key_check`: the tested Turso revision does not implement
+its violation rows, and deliberately disabling enforcement to manufacture an
+orphan is outside the production lifecycle. Queue hydration and settlement
+still enforce the queue/layer relationship, and any observed inconsistency
+requests a disposable database reset.
 
 ### 8.3 Optional tuning pragmas
 
@@ -661,15 +668,15 @@ PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
 ```
 
-They are **not** copied into the required Turso storage SQL by this design.
-Turso's journal behavior, OPFS file model, flush guarantees, and worker-kill
-tests must determine them in WP-01/WP-02 and Gate G0. If WP-00 chooses either
-setting, initialization must read back the effective value and kill/reopen
-tests must justify it.
+They are **not** copied into the required Turso storage SQL. Gate G0 accepted
+Turso's observed main/WAL behavior over the OPFS adapter without overriding
+either pragma. A future change must read back the effective value and add
+flush, worker-kill, and reopen evidence before entering the contract.
 
 Other tuning such as `busy_timeout`, cache size, temp storage, or automatic
-checkpointing is also optional and outside the conformance contract. The
-single-owner rule must not depend on `busy_timeout`.
+checkpointing is outside the conformance contract. The single-owner rule must
+not depend on `busy_timeout`, and production SQL must not open the explicit
+`temp` schema.
 
 ## 9. Conformance suite
 
@@ -743,8 +750,8 @@ payloads.
 - Clean close/reopen preserves records, queue order, lease state, and layers.
 - Scope, namespace, and browser storage schema mismatches each cause a physical
   reset that removes records **and** queue state.
-- Missing/partial metadata, malformed schema, failed integrity check,
-  foreign-key inconsistency, and corrupt postcard data request full reset.
+- Missing/partial metadata, malformed schema, failed `quick_check`,
+  queue/layer inconsistency, and corrupt postcard data request full reset.
 - Logout/test reset remove main and WAL files and recreate an empty database.
 - Quota/full-storage, flush/commit uncertainty, and deletion/recreation failure
   produce deterministic classified errors; no fallback opens.
@@ -758,26 +765,32 @@ binding, cold record selection, optimistic hydration, queue retry, complete,
 and discard. In particular, namespace/scope reset must hydrate zero optimistic
 layers rather than attempting to re-normalize old queued source.
 
-## 10. Gate G0 / integration questions
+## 10. Recorded gate answers and implementation acceptance
 
-The schema is ready to freeze only after WP-01 answers:
+Gate G0 froze this schema with these recorded answers:
 
-1. Does the pinned Turso revision execute every required DDL/DML statement and
-   return reliable affected-row and `last_insert_rowid` values?
-2. Does `BEGIN IMMEDIATE` work through the intended async statement driver, and
-   what outcome is reported when commit/rollback I/O fails?
-3. Are foreign-key enablement, cascade, `quick_check`, and
-   `foreign_key_check` implemented with the required result shapes?
-4. Does `(__typename || ':' || id) COLLATE BINARY` exactly match Rust UTF-8
-   `String` ordering in WASM, including prefix typenames and embedded colons?
-5. Are dynamic `IN` bindings and bound `LIMIT` supported without a low variable
-   limit that affects the maximum concrete-type set?
-6. What journal mode does Turso core actually use over the approved OPFS
-   adapter, and should WP-00 explicitly set WAL or synchronous behavior after
-   kill/reopen tests?
-7. Which Turso/core error codes identify corruption, full/quota storage, and
-   uncertain commit/rollback strongly enough to request full reset without
-   inspecting payload data?
+1. The selected Turso tree executes the required DDL/DML subset, affected-row
+   and connection-local `last_insert_rowid` paths exercised by the spikes.
+2. The fork supports `BEGIN IMMEDIATE` and `BEGIN EXCLUSIVE` without opening an
+   unused temp database.
+3. Foreign-key enablement/readback, ordinary violation rejection, cascade, and
+   `quick_check` work while enforcement remains enabled for the connection
+   lifetime. Deliberately disabling enforcement and using
+   `foreign_key_check` afterward is outside the production contract.
+4. The canonical concatenated-key expression matches the exercised Rust order,
+   including prefix typenames and embedded colons.
+5. Turso uses its real main/WAL path over the OPFS adapter; the production
+   contract does not override journal or synchronous pragmas without new kill
+   and reopen evidence.
 
-Until those answers are recorded, required SQL marked above is a feasibility
-contract, not evidence that the pinned core revision supports it.
+WP-05/WP-06 must still turn the following into production acceptance tests:
+
+- dynamic `IN` placeholder limits for the maximum concrete-type set;
+- commit/rollback I/O outcome classification and consuming reset after an
+  uncertain result;
+- exact corruption, quota/full-storage, and unexpected-I/O error mapping;
+- physical reset after metadata, integrity, and queue/layer inconsistency; and
+- the complete shared `Storage` and real `cache-core` codec/engine suite.
+
+Those are implementation deliverables, not reasons to keep the schema or G0
+open.

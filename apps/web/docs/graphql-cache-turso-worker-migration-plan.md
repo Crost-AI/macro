@@ -1,6 +1,6 @@
 # Browser normalized cache: IndexedDB to Turso migration plan
 
-Status: **stopped at Gate G0 (NO-GO); production WP-05 through WP-12 are blocked**
+Status: **Gate G0 approved; production implementation is in progress from WP-05**
 
 Scope: browser normalized GraphQL cache only. The Tauri native
 `cache-sqlite` host stays unchanged. The `idb` use in collaboration storage and
@@ -13,8 +13,9 @@ Primary references:
 - Existing cache design: [`graphql-normalized-cache-plan.md`](./graphql-normalized-cache-plan.md)
 - Gate result: [`graphql-cache-turso-g0-decision.md`](./graphql-cache-turso-g0-decision.md)
 
-Wave 0 executed WP-01 through WP-04. Gate G0 did not pass, so this document
-remains a conditional plan rather than authorization for production work.
+Wave 0 executed WP-01 through WP-04 and the follow-up fork verification.
+Gate G0 now authorizes production work under the scope decisions recorded in
+the gate document.
 
 ## 1. Goal
 
@@ -111,10 +112,13 @@ entrypoint is synchronous. The browser adapter must therefore:
 2. create their sync access handles in the dedicated worker;
 3. register those handles in a Rust-owned path/handle table;
 4. let Turso's synchronous `open_file` resolve only pre-registered paths;
-5. implement `pread`, `pwrite`, `sync`, `truncate`, `size`, lock/unlock, and
-   remove/close behavior through those handles;
-6. complete Turso I/O completions immediately and correctly;
-7. close every sync handle before releasing database ownership.
+5. implement `pread`, `pwrite`, `sync`, `truncate`, `size`, and lock/unlock
+   through those handles; synchronous `IO::remove_file` must reject deletion;
+6. complete Turso I/O completions immediately and correctly; and
+7. finalize statements, explicitly drive Turso `Connection::close()` to
+   completion, drop every connection, database, and adapter/IO reference, then
+   close every sync handle before releasing database ownership.
+   Deletion/recreation is a separate asynchronous owner-session operation.
 
 Turso's `File` and `IO` traits require `Send + Sync`, while browser JS handles
 may not implement those traits. The feasibility spike must find a sound
@@ -433,10 +437,11 @@ identities, or BLOBs:
 - quota/full storage;
 - unexpected Turso I/O state-machine result.
 
-On an error that leaves state uncertain, close handles and request a full
-browser-database reset. If deletion/recreation itself fails, surface an
-initialization/storage error; designing a separate backend fallback is out of
-scope.
+On an error that leaves state uncertain, use the consuming close lifecycle and
+request a full browser-database reset. If close/delete/recreate cleanup is
+uncertain, poison the session, retain ownership until coordinator-driven worker
+replacement, and reject reuse. Surface an initialization/storage error;
+designing a separate backend fallback is out of scope.
 
 Request persistent storage with `navigator.storage.persist()` on a best-effort
 basis and record the result. Cache initialization must not depend on the
@@ -558,7 +563,9 @@ ID, changed paths, commands run, and unresolved risks.
 4. Exercise read/write/flush/truncate/size/close and database/WAL reopen.
 5. Terminate the worker during writes and verify the chosen wipe/recreate
    sequence.
-6. Test Chromium, Firefox, and the approved WebKit/Safari target.
+6. Record the executed Chromium/Firefox matrix. The product owner accepts the
+   latest stable macOS Safari feature set; WP-12 records the exact Safari
+   release in production E2E.
 7. Verify that no nested worker, shared memory, or cross-origin isolation is
    involved.
 
@@ -582,7 +589,9 @@ ID, changed paths, commands run, and unresolved risks.
 4. Demonstrate that graceful handoff preserves a fake DB and abrupt loss wipes
    it before the next owner becomes active.
 5. Demonstrate stale-response rejection and exactly one owner.
-6. Record behavior across the approved browser matrix.
+6. Record the executed Chromium/Firefox/coordinator-WebKit harness behavior.
+   The product owner accepts latest stable macOS Safari capability; WP-12 runs
+   and records the exact Safari release. WebKit WPE is not a product target.
 
 **Deliverable:** tested topology state machine and protocol proposal.
 
@@ -616,27 +625,28 @@ WP-00 records explicit approval only if:
 - pinned Turso core compiles into the existing wasm32 target;
 - the resulting module is single-threaded and needs no shared memory or
   cross-origin isolation;
-- a sound Rust OPFS `IO`/`File` implementation works in the supported browser
-  matrix;
+- a sound Rust OPFS `IO`/`File` implementation works in the exercised browser
+  engines and the product owner accepts the supported feature matrix;
 - main/WAL open, close, recovery, deletion, and fresh recreation work;
-- required SQL and transaction behavior is supported;
-- release WASM size, instantiation time, and active-worker memory fit approved
-  budgets;
+- required production SQL and transaction behavior is supported within its
+  explicitly approved scope;
+- baseline release size and memory are measured, with the combined production
+  artifact retained as a WP-11 packaging/exposure gate; and
 - the coordinator proves one owner and deterministic wipe after abrupt loss.
 
 If G0 fails, stop the migration and resolve the Turso-core/OPFS design. Do not
 substitute an npm package or add COOP/COEP as a workaround.
 
-**Recorded result: NO-GO.** WP-01 through WP-04 and the follow-up fork
-verification produced reproducible spikes and the storage contract. The fork
-at `cf7de761` resolves the unused-temp `BEGIN IMMEDIATE`/`EXCLUSIVE` WASM trap
-on the enumerated cache routes, but `PRAGMA foreign_key_check` silently misses
-a deliberate orphan. The approved Apple browser matrix is also unproven,
-combined resource budgets are not approved, and the consuming OPFS lifecycle
-API is not frozen. See
+**Recorded result: GO.** WP-01 through WP-04 and the follow-up fork
+verification produced reproducible evidence and a frozen storage/lifecycle
+contract. Production pins the remotely available revision `be9acfe9` from
+`seanaye/turso`; its source tree is identical to the verified local
+`cf7de761` commit. Explicit SQL temp storage is out of scope, foreign-key
+enforcement is never disabled, the latest stable macOS Safari feature set is
+accepted (WP-12 records the exact tested release), and combined resource
+measurements move to WP-11's packaging/exposure gate. See
 [`graphql-cache-turso-g0-decision.md`](./graphql-cache-turso-g0-decision.md).
-WP-05 through WP-12 must not begin until that decision's reopen conditions are
-satisfied.
+WP-05 through WP-12 are authorized in dependency order.
 
 ### WP-05 — production `turso-opfs` crate
 
@@ -649,11 +659,14 @@ satisfied.
 
 1. Implement documented worker-local path/handle registration.
 2. Implement Turso `Clock`, `IO`, and `File` requirements.
-3. Implement async pre-open and deterministic close/delete helpers.
-4. Enforce one owner and reject unregistered paths.
+3. Implement async pre-open and the frozen consuming close/preserve/reset
+   lifecycle; never delete through synchronous `IO::remove_file`.
+4. Enforce one owner and reject unregistered paths, stale sessions, and
+   reentrant operations.
 5. Add completion/error mapping and safe buffer lifetime handling.
 6. Add tests for every file operation, WAL file, close, worker termination,
-   and reset.
+   and reset, including partial opening cleanup, uncertain-cleanup poisoning,
+   invalid/consumed-token no-mutation, and stale/reentrant rejection.
 
 **Depends on:** G0 and frozen API from WP-02.
 
@@ -872,14 +885,20 @@ Run the same semantic suite against `InMemoryStorage`, browser
 - flush, truncate, size, and close work;
 - buffer lifetimes remain valid until completion;
 - owner lock prevents a second worker from opening the same scope;
-- clean close releases handles;
+- opening failure closes every opened handle or poisons uncertain state;
+- clean close drops all Turso/adapter references before releasing handles;
+- preserve/reset consumes one valid close token;
+- invalid, stale, or consumed tokens return an error without state mutation;
+- uncertain close/reset cleanup poisons the session;
+- reentrant operations and stale owner/session IDs are rejected;
 - abrupt worker termination releases the Web Lock;
 - next owner removes main/WAL and creates a clean DB;
 - quota and deletion errors are surfaced deterministically.
 
 ### 10.3 Worker and multi-tab E2E
 
-For Chromium, Firefox, and the approved WebKit/Safari target:
+For Chromium, Firefox, and latest stable macOS Safari (with exact versions
+recorded by WP-12):
 
 1. Open three tabs with one scope.
 2. Assert one coordinator, one active engine worker, one combined WASM
