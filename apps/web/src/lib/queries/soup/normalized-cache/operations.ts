@@ -1,5 +1,6 @@
 import { QUERY_FILTERS_BASE } from '@app/features/next-soup/filters/query-filters';
 
+import { ENABLE_GRAPHQL_SOUP } from '@core/constant/featureFlags';
 import type { UnifiedSearchResponseItem } from '@service-search/generated/models';
 import type {
   PostSoupRequest,
@@ -15,6 +16,7 @@ import {
 import { isAfter } from 'date-fns';
 import { match } from 'ts-pattern';
 import { queryClient } from '../../client';
+import { makeGraphqlEntitySoupInput } from '../graphql/entity-input';
 import type { SoupApiItemFilter, SoupAstItemsPage } from '../items';
 import { soupKeys } from '../keys';
 import {
@@ -507,24 +509,40 @@ export async function refetchSoupEntity(
   entityType: SoupEntityTag,
   options?: { includeRoot?: boolean }
 ): Promise<void> {
-  const { storageServiceClient } = await import('@service-storage/client');
+  let page: SoupPage;
+  if (ENABLE_GRAPHQL_SOUP() && entityType !== 'calendarEvent') {
+    try {
+      const { fetchGraphqlSoup } = await import(
+        '@service-storage/graphql-soup'
+      );
+      page = await fetchGraphqlSoup(
+        makeGraphqlEntitySoupInput([{ id: entityId, type: entityType }]),
+        { allowOfflineFallback: false }
+      );
+    } catch (error) {
+      console.error(
+        '[normalized-cache] operations: failed to fetch individual GraphQL Soup item',
+        error
+      );
+      return;
+    }
+  } else {
+    const { storageServiceClient } = await import('@service-storage/client');
+    const filter = buildSingleEntityFilter(entityType, entityId, options);
+    const result = await storageServiceClient.getSoupItems({
+      params: {},
+      body: filter,
+    });
 
-  const filter = buildSingleEntityFilter(entityType, entityId, options);
-
-  const result = await storageServiceClient.getSoupItems({
-    params: {},
-    body: filter,
-  });
-
-  if (result.isErr()) {
-    console.error(
-      '[normalized-cache] operations: failed to fetch individual soup item',
-      result
-    );
-    return;
+    if (result.isErr()) {
+      console.error(
+        '[normalized-cache] operations: failed to fetch individual soup item',
+        result
+      );
+      return;
+    }
+    page = result.value;
   }
-
-  const page = result.value;
   if (!page.items.length) return;
 
   for (const item of page.items) {

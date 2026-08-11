@@ -69,7 +69,6 @@ import {
 } from '@core/constant/featureFlags';
 import type { MarkNode } from '@lexical/mark';
 import type { SearchMatchNode } from '@macro-inc/lexical-core/nodes/SearchMatchNode';
-import { getCachedItemPreview } from '@queries/preview';
 import { theme as baseTheme, createTheme } from '../../theme';
 import { forceSingleLine, setEditorStateFromMarkdown } from '../../utils';
 import { StaticCodeBoxAccessory } from '../accessory/CodeBoxAccessory';
@@ -323,9 +322,7 @@ const DocumentMention: RenderableEntity<DocumentMentionNode> = {
         key,
         theme: props.theme,
       });
-    const shouldRenderLazy =
-      options.lazy &&
-      getCachedItemPreview(componentProps.documentId) === undefined;
+    const shouldRenderLazy = options.lazy;
 
     return (
       <span class={getTextClassName(props.node, props.theme)}>
