@@ -24,11 +24,12 @@ use futures::StreamExt;
 use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
 
-use crate::calendar_tokens::CalendarTokenProviderAdapter;
-use crate::calendar_watch_relay::{
+use calendar_watch_relay::{
     RelayedWatchNotification, SseDataParser, WatchRelaySubscriberConfig,
     watch_relay_subscriber_config,
 };
+
+use crate::calendar_tokens::CalendarTokenProviderAdapter;
 use crate::pubsub::calendar_backfill_adapters::RedisCalendarRequestGate;
 use crate::pubsub::context::calendar_watch_config;
 use crate::util::redis::RedisClient;
