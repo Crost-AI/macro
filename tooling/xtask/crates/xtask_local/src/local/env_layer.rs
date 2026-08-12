@@ -64,6 +64,7 @@ pub fn resolve(
     if let Some(local) = &local {
         env.extend(local.boot_stub_env());
     }
+    let mut calendar_push_overlay: Option<BTreeMap<String, String>> = None;
     let doppler_used = if no_doppler {
         false
     } else {
@@ -78,9 +79,12 @@ pub fn resolve(
         // up here so the verbs can never disagree about whether push is on.
         let calendar_push = super::calendar_push::env_path(instance);
         if calendar_push.is_file() {
-            load_dotenv_into(&calendar_push, &mut env).with_context(|| {
+            let mut overlay = BTreeMap::new();
+            load_dotenv_into(&calendar_push, &mut overlay).with_context(|| {
                 format!("loading calendar push overlay {}", calendar_push.display())
             })?;
+            env.extend(overlay.clone());
+            calendar_push_overlay = Some(overlay);
         }
         // Opt-in local trace export: point services at the local OTLP collector
         // (docker-network alias `otel-collector`) only when one answers on the
@@ -126,14 +130,29 @@ pub fn resolve(
 
     // The relay secret rides a later layer (Doppler or --env-file), so only
     // the fully merged map can tell whether calendar push will actually arm.
-    if env.contains_key("CALENDAR_WATCH_RELAY_URL")
-        && !env.contains_key("CALENDAR_WATCH_RELAY_SECRET")
-    {
-        eprintln!(
-            "warning: calendar push is enabled but CALENDAR_WATCH_RELAY_SECRET is missing — \
-             the stack will open watch channels without subscribing to their deliveries; \
-             supply the secret via Doppler or --env-file"
-        );
+    // Without a usable secret the overlay must leave no trace: a lone
+    // CALENDAR_WATCH_WEBHOOK_URL/TOKEN pair would open watch channels nobody
+    // subscribes to.
+    if !calendar_push_secret_ok(&env) {
+        if let Some(overlay) = &calendar_push_overlay {
+            strip_calendar_push_overlay(&mut env, overlay);
+            eprintln!(
+                "warning: calendar push is enabled but CALENDAR_WATCH_RELAY_SECRET is missing \
+                 or blank — disarming calendar push for this run; supply the secret via \
+                 Doppler or --env-file"
+            );
+        } else if env
+            .get("CALENDAR_WATCH_RELAY_URL")
+            .is_some_and(|url| !url.trim().is_empty())
+        {
+            // Hand-armed relay config (Doppler or --env-file) is the
+            // developer's to keep, so only warn.
+            eprintln!(
+                "warning: CALENDAR_WATCH_RELAY_URL is set but CALENDAR_WATCH_RELAY_SECRET is \
+                 missing or blank — the stack will open watch channels without subscribing \
+                 to their deliveries"
+            );
+        }
     }
 
     let generated_path = instance.ensure_artifact_dir()?.join("local.generated.env");
@@ -150,6 +169,27 @@ pub fn resolve(
 
 fn should_overlay_process_env(key: &str, value: &str) -> bool {
     !(key == "DATABASE_URL" && is_local_database_url(value))
+}
+
+/// Whether the merged env carries a usable relay secret. Blank counts as
+/// absent, matching how the service reads every watch variable.
+fn calendar_push_secret_ok(env: &BTreeMap<String, String>) -> bool {
+    env.get("CALENDAR_WATCH_RELAY_SECRET")
+        .is_some_and(|secret| !secret.trim().is_empty())
+}
+
+/// Remove what the calendar push overlay contributed. A key whose merged
+/// value no longer matches the overlay was overridden by a later layer on
+/// purpose, so it stays.
+fn strip_calendar_push_overlay(
+    env: &mut BTreeMap<String, String>,
+    overlay: &BTreeMap<String, String>,
+) {
+    for (key, value) in overlay {
+        if env.get(key) == Some(value) {
+            env.remove(key);
+        }
+    }
 }
 
 pub(super) fn is_local_database_url(value: &str) -> bool {
