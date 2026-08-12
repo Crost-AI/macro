@@ -38,6 +38,10 @@ const MAX_BACKOFF: Duration = Duration::from_secs(60);
 /// The server keep-alives every 15s, so a chunk gap this long means the
 /// connection is dead even when TCP has not noticed yet.
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
+/// Bound on the subscribe request itself: response headers must arrive
+/// promptly even though the body then stays open indefinitely, so a stalled
+/// server returns control to the reconnect loop instead of parking it.
+const SUBSCRIBE_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Bound on the shutdown stop pass so container teardown is never hung.
 const STOP_CHANNELS_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -112,12 +116,14 @@ async fn subscribe_once(
     token: &str,
     calendar_service: &CalendarService<PgCalendarRepository>,
 ) -> anyhow::Result<()> {
-    let response = client
+    let request = client
         .get(format!("{}/calendar/relay/subscribe", config.url))
         .header("x-relay-secret", &config.secret)
         .header("x-relay-token", token)
-        .send()
-        .await?;
+        .send();
+    let response = tokio::time::timeout(SUBSCRIBE_REQUEST_TIMEOUT, request)
+        .await
+        .map_err(|_| anyhow::anyhow!("relay subscription request timed out"))??;
     if response.status() != reqwest::StatusCode::OK {
         anyhow::bail!(
             "relay subscription rejected with status {}",
