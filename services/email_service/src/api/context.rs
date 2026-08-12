@@ -13,6 +13,7 @@ use email::{
     outbound::{EmailPgRepo, GmailTokenProviderImpl},
 };
 use email_service::calendar_tokens::CalendarTokenProviderAdapter;
+use email_service::calendar_watch_relay::WatchRelayServer;
 use email_service::pubsub::calendar_backfill_adapters::RedisCalendarRequestGate;
 
 use email_service::config::Config;
@@ -80,4 +81,5 @@ pub(crate) struct ApiContext {
     pub macro_event_broker: Arc<EmailEventBroker>,
     pub calendar_service: Arc<CalendarGrantService>,
     pub calendar_mutation_service: Arc<CalendarMutationSvc>,
+    pub watch_relay: Option<Arc<WatchRelayServer>>,
 }

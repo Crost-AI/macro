@@ -6,6 +6,8 @@ pub mod backfill_init_service;
 pub mod calendar_outbox;
 /// Access-token adapter for user-initiated calendar mutations.
 pub mod calendar_tokens;
+/// Relay forwarding Google Calendar push notifications to local stacks.
+pub mod calendar_watch_relay;
 pub mod config;
 /// Outbound infrastructure adapters for email provider capabilities.
 pub mod outbound;

@@ -73,6 +73,15 @@ pub fn resolve(
         for (k, v) in local.to_env() {
             env.insert(k, v);
         }
+        // Opt-in calendar push: `just calendar-push enable` materializes this
+        // overlay, and every resolve (up, update, validate, snapshot) picks it
+        // up here so the verbs can never disagree about whether push is on.
+        let calendar_push = super::calendar_push::env_path(instance);
+        if calendar_push.is_file() {
+            load_dotenv_into(&calendar_push, &mut env).with_context(|| {
+                format!("loading calendar push overlay {}", calendar_push.display())
+            })?;
+        }
         // Opt-in local trace export: point services at the local OTLP collector
         // (docker-network alias `otel-collector`) only when one answers on the
         // OTLP HTTP port, so services don't spam export errors when none is
@@ -113,6 +122,18 @@ pub fn resolve(
     if spec.uses_remote_aws {
         apply_dev_overrides(instance, &mut env);
         pull_aws_credentials(&mut env);
+    }
+
+    // The relay secret rides a later layer (Doppler or --env-file), so only
+    // the fully merged map can tell whether calendar push will actually arm.
+    if env.contains_key("CALENDAR_WATCH_RELAY_URL")
+        && !env.contains_key("CALENDAR_WATCH_RELAY_SECRET")
+    {
+        eprintln!(
+            "warning: calendar push is enabled but CALENDAR_WATCH_RELAY_SECRET is missing — \
+             the stack will open watch channels without subscribing to their deliveries; \
+             supply the secret via Doppler or --env-file"
+        );
     }
 
     let generated_path = instance.ensure_artifact_dir()?.join("local.generated.env");

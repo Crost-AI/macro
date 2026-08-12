@@ -213,6 +213,10 @@ async fn main() -> anyhow::Result<()> {
         ),
         CalendarTokenProviderAdapter::new(redis_conn.clone(), auth_service_client.clone()),
     ));
+    let watch_relay =
+        email_service::calendar_watch_relay::WatchRelayServer::from_env(redis_client.inner.clone())
+            .map(Arc::new)
+            .inspect(|_| tracing::info!("serving the calendar watch relay"));
     let api_result = api::setup_and_serve(ApiContext {
         db,
         internal_api_key: config.internal_api_key.clone(),
@@ -235,6 +239,7 @@ async fn main() -> anyhow::Result<()> {
         macro_event_broker: Arc::new(macro_event_broker),
         calendar_service,
         calendar_mutation_service,
+        watch_relay,
     })
     .await;
 
