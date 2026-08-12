@@ -146,6 +146,21 @@ export type CreateImportStatus = 'staged' | 'imported';
  */
 export type ImportStatus = 'staged' | 'importing' | 'imported' | 'discarded';
 /**
+ * Entity types a reminder can be attached to.
+ *
+ * Deliberately narrower than [`EntityType`], which covers plenty of things a
+ * reminder has no business pointing at. The names match the ones `ListEntities`
+ * uses so the model sees one vocabulary across tools.
+ */
+export type ReminderEntityType =
+  | 'document'
+  | 'ai_chat'
+  | 'project'
+  | 'email'
+  | 'channel'
+  | 'call'
+  | 'calendar_event';
+/**
  * A tag color from the fixed palette.
  */
 export type TagColor =
@@ -1352,6 +1367,56 @@ export interface CreateProjectResponse {
   projectName: string;
 }
 /**
+ * Schedule a reminder for the current user. At `remindAt` it is delivered to their Macro inbox as a notification and stays there until they mark it done.
+ *
+ * A reminder is either attached to one Macro item — so clicking it opens that item — or standalone. Attached is the common case ("remind me to reply to this email tomorrow"); standalone is for everything else ("remind me to book a flight").
+ *
+ * Reminders are private: one is only ever delivered to its owner, and there is no way to set one for somebody else. Only one-off reminders can be created — if the user asks for a repeating one, say so rather than creating a single reminder and implying it repeats.
+ *
+ * ## Times are UTC — convert both ways
+ *
+ * Timestamps are absolute instants, in and out, while the user asks in their own timezone. Getting this wrong silently sets the reminder to the wrong hour.
+ *
+ * - **In:** resolve their wording against their local time, then convert. For America/New_York (UTC-4 in August), "3pm tomorrow" on 2026-08-12 is `"2026-08-13T19:00:00Z"`, not `"2026-08-13T15:00:00Z"`.
+ * - **Out:** report the response's UTC value back in their timezone — `"2026-08-13T19:00:00Z"` is "3:00 PM tomorrow".
+ *
+ * Ask for their timezone rather than assuming UTC.
+ *
+ * ## Attaching to an item
+ *
+ * Pass `entityType` and `entityId` together, using ids from ListEntities, GetThread, or search. The user must already have access to what you attach. `entityType` accepts exactly these values, and a type not on the list cannot be attached even if ListEntities returns it:
+ *
+ * - `document` — a Macro document
+ * - `ai_chat` — an AI chat conversation
+ * - `project` — a project, shown as a folder in the app
+ * - `email` — an email thread
+ * - `channel` — a chat channel
+ * - `call` — a call record
+ * - `calendar_event` — a calendar event
+ *
+ * **A channel thread needs its parent channel's id.** `channel` is on the list; `channel_thread` is not. For a thread row, pass `entityType: "channel"` with the row's `channelId` — never the thread's own `id`, which will not resolve. Put what the thread is about in the description, since that is what tells two reminders on the same channel apart.
+ *
+ * For any other unattachable type, create a standalone reminder naming the thing in the description rather than guessing at a type.
+ */
+export interface CreateReminder {
+  /**
+   * What to remind the user about, written as the reminder text they will read — e.g. "Reply to Dana about the Q3 budget". Max 2000 characters.
+   */
+  description: string;
+  /**
+   * Id of the thing the reminder is about, as a UUID. Must be the id of an entity of entityType — for a channel_thread row that means its channelId, not its own id. Requires entityType.
+   */
+  entityId?: string | null;
+  /**
+   * Type of the thing the reminder is about — one of document, ai_chat, project, email, channel, call, calendar_event. Requires entityId; omit both for a standalone reminder.
+   */
+  entityType?: ReminderEntityType | null;
+  /**
+   * When to fire, as an RFC 3339 timestamp in UTC (e.g. "2026-08-08T14:00:00Z"). Must be in the future. Seconds are dropped, so a reminder fires on the minute. Convert from the user's local timezone before sending — see "Times are UTC" in the tool description.
+   */
+  remindAt: string;
+}
+/**
  * Create a new tag — a colored label the user can apply to documents, emails, tasks, AI chats, and projects — in the user's personal set or their team's shared set. The set is provisioned automatically the first time a tag is created. Tags are matched by label, so call ListTags first and avoid creating one whose label duplicates an existing tag in the same set. Returns the new tag's id and its set's propertyDefinitionId, which you can pass straight to SetEntityProperty (add_option_ids) to apply the tag to an item. Use this only to create a brand-new tag; to apply an existing tag to an item, use ListTags then SetEntityProperty instead.
  */
 export interface CreateTag {
@@ -1472,6 +1537,30 @@ export interface DeleteImportEntityResponse {
    * What happened.
    */
   message: string;
+}
+/**
+ * Permanently delete one of the current user's reminders, along with any notification it already produced. Get the `reminderId` from ListReminders or CreateReminder.
+ *
+ * This cannot be undone, and it is not the usual way to clear a reminder. When the user has simply dealt with one, use UpdateReminder with `completed: true` instead: that takes it off their active list but keeps it, still readable with ListReminders `completed: true` and restorable with `completed: false`. Delete is for reminders they want gone rather than finished — one set by mistake, or for something that is no longer happening. If it is not clear which they mean, mark it done.
+ */
+export interface DeleteReminder {
+  /**
+   * The id of the reminder to delete.
+   */
+  reminderId: string;
+}
+/**
+ * Response from the DeleteReminder tool.
+ */
+export interface DeleteReminderResponse {
+  /**
+   * The id of the reminder that was deleted.
+   */
+  reminderId: string;
+  /**
+   * A human-readable summary of the operation.
+   */
+  summary: string;
 }
 /**
  * Permanently delete a tag from the user's personal set or their team's shared set. This removes the tag from every item it is currently applied to, so it is destructive and cannot be undone — confirm with the user first. Both ids come from a ListTags result: `id` is the tag's option id, and `property_definition_id` is the propertyDefinitionId of the set that contains it. To simply remove a tag from a single item without deleting the tag itself, use SetEntityProperty with remove_option_ids instead.
@@ -2403,6 +2492,109 @@ export interface NotificationItem {
    * The user ID of the sender, if any.
    */
   senderId?: string | null;
+}
+/**
+ * Read the current user's reminders, soonest first. **Filtered by default: only reminders the user has not marked done**, which is what "what are my reminders" means. Pass `completed: true` for the ones they have dealt with. To re-read a reminder you already have the id for, pass it in `reminderIds`.
+ *
+ * Filters:
+ * - `overdue: true` / `false` — already fired and waiting on the user, or still upcoming
+ * - `completed: true` / `false` — dealt with, or still outstanding
+ * - `entityType` + `entityId` — reminders about one specific thing. `entityType` takes the same values CreateReminder accepts: document, ai_chat, project, email, channel, call, calendar_event
+ *
+ * The two flags are independent and compose: firing does not complete a reminder, so overdue and not completed is the needs-attention case, and a completed reminder never fires whether or not its time has passed.
+ *
+ * Each reminder comes back with its `id` (pass to UpdateReminder or DeleteReminder), `description`, `nextRunAt`, `overdue`, and what it is attached to. `nextRunAt` is UTC, so convert before quoting it: for America/New_York (UTC-4 in August), `"2026-08-13T19:00:00Z"` is "3:00 PM tomorrow".
+ *
+ * A `recurrence` field means the reminder repeats — rare, and currently broken: nothing in the app creates one and the dispatcher never fires them, so it sits at its `nextRunAt` without arriving. Say that rather than implying it is scheduled.
+ */
+export interface ListReminders {
+  /**
+   * Filter on whether the user has marked the reminder done. Defaults to false — only reminders still outstanding. Set true for ones already dealt with.
+   */
+  completed?: boolean | null;
+  /**
+   * Return only reminders attached to the thing with this id. Requires entityType.
+   */
+  entityId?: string | null;
+  /**
+   * Return only reminders attached to a thing of this type. Requires entityId.
+   */
+  entityType?: ReminderEntityType | null;
+  /**
+   * Maximum number of reminders to return. Defaults to 20, capped at 100.
+   */
+  limit?: number | null;
+  /**
+   * Filter on whether the reminder has already fired. True returns only reminders past their time, false only ones still upcoming. Omit for both.
+   */
+  overdue?: boolean | null;
+  /**
+   * Return only these reminders, by id. Use this to re-read a reminder you already know the id of. Omit to list all of them.
+   */
+  reminderIds?: string[] | null;
+}
+/**
+ * Response from the ListReminders tool.
+ */
+export interface ListRemindersResponse {
+  /**
+   * The matching reminders, soonest firing first.
+   */
+  reminders: ToolReminder[];
+  /**
+   * A human-readable summary of what came back.
+   */
+  summary: string;
+}
+/**
+ * A reminder as the model sees it.
+ */
+export interface ToolReminder {
+  /**
+   * Whether the user has marked the reminder as dealt with.
+   */
+  completed: boolean;
+  /**
+   * What the user wanted to be reminded about.
+   */
+  description: string;
+  /**
+   * Whether the reminder will fire at all. A disabled reminder keeps its
+   * schedule but is skipped by the dispatcher.
+   */
+  enabled: boolean;
+  /**
+   * The id of the thing the reminder is about.
+   */
+  entityId?: string | null;
+  /**
+   * The type of thing the reminder is about, when it is about something and
+   * that type is one these tools name. The app can attach a reminder to
+   * kinds of thing this list does not cover, so `entityId` may be present
+   * with no `entityType` beside it — the reminder is about something, but
+   * not something these tools can name or filter on.
+   */
+  entityType?: ReminderEntityType | null;
+  /**
+   * The reminder's id. Pass this to UpdateReminder or DeleteReminder.
+   */
+  id: string;
+  /**
+   * When the reminder fires next, RFC 3339 in UTC. The user thinks in their
+   * own timezone — convert before quoting this back to them.
+   */
+  nextRunAt: string;
+  /**
+   * Whether `nextRunAt` has already passed, evaluated against the server
+   * clock. An overdue reminder is one the user has been notified about and
+   * has not dealt with yet.
+   */
+  overdue: boolean;
+  /**
+   * For a repeating reminder, its cron expression and timezone. Absent on a
+   * one-shot, which is everything this toolset can create.
+   */
+  recurrence?: string | null;
 }
 /**
  * List the skills the user can access, most recently updated first. Skills are markdown documents containing instructions for AI to read and follow; after finding a relevant skill, read its instructions with ReadContent using the returned document id. Use this to discover what skills exist; when looking for a specific skill by name, prefer SearchSkills.
@@ -3789,6 +3981,47 @@ export interface TextEditorCodeExecutionToolError {
 export interface TextEditorCodeExecutionResponse {
   content: TextEditorCodeExecutionContent;
   tool_use_id: string;
+}
+/**
+ * Change one of the current user's reminders: reword it, move when it fires, or mark it done. Get the `reminderId` from ListReminders or CreateReminder.
+ *
+ * Pass only the fields you are changing; anything omitted is left alone. At least one must be given.
+ *
+ * - Snooze or reschedule: set `remindAt`
+ * - Mark done: `completed: true` — the user has dealt with it and it leaves their active list
+ * - Reopen: `completed: false`
+ * - Reword: set `description`
+ *
+ * Marking done is the normal way to clear a reminder the user has handled, and it is reversible: the reminder drops out of the default ListReminders results but is still there, readable with `completed: true` and restorable with `completed: false`. Reach for DeleteReminder only when the user wants the reminder not to exist; that cannot be undone.
+ *
+ * Two things this tool will not do. It cannot change what a reminder is attached to — create a new reminder and delete this one instead. And setting `remindAt` on a repeating reminder replaces the repetition with that single firing, so only do it if the user asked to stop it repeating.
+ *
+ * ## Times are UTC — convert both ways
+ *
+ * Timestamps are absolute instants, in and out, while the user asks in their own timezone. Getting this wrong silently sets the reminder to the wrong hour.
+ *
+ * - **In:** resolve their wording against their local time, then convert. For America/New_York (UTC-4 in August), "3pm tomorrow" on 2026-08-12 is `"2026-08-13T19:00:00Z"`, not `"2026-08-13T15:00:00Z"`.
+ * - **Out:** report the response's UTC value back in their timezone — `"2026-08-13T19:00:00Z"` is "3:00 PM tomorrow".
+ *
+ * Ask for their timezone rather than assuming UTC.
+ */
+export interface UpdateReminder {
+  /**
+   * Mark the reminder as dealt with (true) or put it back on the active list (false).
+   */
+  completed?: boolean | null;
+  /**
+   * Replacement reminder text. Max 2000 characters.
+   */
+  description?: string | null;
+  /**
+   * Reschedule to this RFC 3339 timestamp in UTC (e.g. "2026-08-08T14:00:00Z"). Must be in the future — to move a reminder that has already fired, give it a new future time. Convert from the user's local timezone before sending; see "Times are UTC" in the tool description.
+   */
+  remindAt?: string | null;
+  /**
+   * The id of the reminder to change.
+   */
+  reminderId: string;
 }
 /**
  * Add or remove a single label from every message in a Gmail thread. In Gmail, nearly all inbox operations are just label add/remove operations, so this tool is the primitive for archiving, marking read/unread, starring, trashing, marking important/spam, and applying or removing custom labels.

@@ -377,6 +377,10 @@ async fn build_tool_context(args: ToolContextBuildArgs<'_>) -> anyhow::Result<To
         email_tool_context,
         call_tool_context,
         notification_tool_context,
+        reminders_tool_context: ai_tools::build_reminders_tool_context(
+            db.clone(),
+            entity_access_service.clone(),
+        ),
         import_tool_context: ToolImportToolContext::unwired(),
         chat_tool_context,
         channel_tool_context,

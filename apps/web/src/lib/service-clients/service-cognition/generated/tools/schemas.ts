@@ -772,6 +772,85 @@ export const CreateProjectResponse = z.object({
   projectName: z.string(),
 });
 
+export const CreateReminder = z.object({
+  description: z.string(),
+  entityId: z.union([z.string().uuid(), z.null()]).optional(),
+  entityType: z
+    .union([
+      z.any().superRefine((x, ctx) => {
+        const schemas = [
+          z.literal('document'),
+          z.literal('ai_chat'),
+          z.literal('project'),
+          z.literal('email'),
+          z.literal('channel'),
+          z.literal('call'),
+          z.literal('calendar_event'),
+        ];
+        const errors = schemas.reduce<z.ZodError[]>(
+          (errors, schema) =>
+            ((result) => (result.error ? [...errors, result.error] : errors))(
+              schema.safeParse(x)
+            ),
+          []
+        );
+        if (schemas.length - errors.length !== 1) {
+          ctx.addIssue({
+            path: ctx.path,
+            code: 'invalid_union',
+            unionErrors: errors,
+            message: 'Invalid input: Should pass single schema',
+          });
+        }
+      }),
+      z.null(),
+    ])
+    .optional(),
+  remindAt: z.string().datetime({ offset: true }),
+});
+
+export const ToolReminder = z.object({
+  completed: z.boolean(),
+  description: z.string(),
+  enabled: z.boolean(),
+  entityId: z.union([z.string(), z.null()]).optional(),
+  entityType: z
+    .union([
+      z.any().superRefine((x, ctx) => {
+        const schemas = [
+          z.literal('document'),
+          z.literal('ai_chat'),
+          z.literal('project'),
+          z.literal('email'),
+          z.literal('channel'),
+          z.literal('call'),
+          z.literal('calendar_event'),
+        ];
+        const errors = schemas.reduce<z.ZodError[]>(
+          (errors, schema) =>
+            ((result) => (result.error ? [...errors, result.error] : errors))(
+              schema.safeParse(x)
+            ),
+          []
+        );
+        if (schemas.length - errors.length !== 1) {
+          ctx.addIssue({
+            path: ctx.path,
+            code: 'invalid_union',
+            unionErrors: errors,
+            message: 'Invalid input: Should pass single schema',
+          });
+        }
+      }),
+      z.null(),
+    ])
+    .optional(),
+  id: z.string().uuid(),
+  nextRunAt: z.string().datetime({ offset: true }),
+  overdue: z.boolean(),
+  recurrence: z.union([z.string(), z.null()]).optional(),
+});
+
 export const CreateTag = z.object({
   color: z.any().superRefine((x, ctx) => {
     const schemas = [
@@ -861,6 +940,13 @@ export const DeleteImportEntity = z.object({ id: z.string().uuid() });
 export const DeleteImportEntityResponse = z.object({
   discarded: z.boolean(),
   message: z.string(),
+});
+
+export const DeleteReminder = z.object({ reminderId: z.string().uuid() });
+
+export const DeleteReminderResponse = z.object({
+  reminderId: z.string().uuid(),
+  summary: z.string(),
 });
 
 export const DeleteTag = z.object({
@@ -1749,6 +1835,93 @@ export const ListNotificationsResponse = z.object({
       senderId: z.union([z.string(), z.null()]).optional(),
     })
   ),
+});
+
+export const ListReminders = z.object({
+  completed: z.union([z.boolean(), z.null()]).optional(),
+  entityId: z.union([z.string().uuid(), z.null()]).optional(),
+  entityType: z
+    .union([
+      z.any().superRefine((x, ctx) => {
+        const schemas = [
+          z.literal('document'),
+          z.literal('ai_chat'),
+          z.literal('project'),
+          z.literal('email'),
+          z.literal('channel'),
+          z.literal('call'),
+          z.literal('calendar_event'),
+        ];
+        const errors = schemas.reduce<z.ZodError[]>(
+          (errors, schema) =>
+            ((result) => (result.error ? [...errors, result.error] : errors))(
+              schema.safeParse(x)
+            ),
+          []
+        );
+        if (schemas.length - errors.length !== 1) {
+          ctx.addIssue({
+            path: ctx.path,
+            code: 'invalid_union',
+            unionErrors: errors,
+            message: 'Invalid input: Should pass single schema',
+          });
+        }
+      }),
+      z.null(),
+    ])
+    .optional(),
+  limit: z.union([z.number().int().gte(0), z.null()]).optional(),
+  overdue: z.union([z.boolean(), z.null()]).optional(),
+  reminderIds: z.union([z.array(z.string().uuid()), z.null()]).optional(),
+});
+
+export const ListRemindersResponse = z.object({
+  reminders: z.array(
+    z.object({
+      completed: z.boolean(),
+      description: z.string(),
+      enabled: z.boolean(),
+      entityId: z.union([z.string(), z.null()]).optional(),
+      entityType: z
+        .union([
+          z.any().superRefine((x, ctx) => {
+            const schemas = [
+              z.literal('document'),
+              z.literal('ai_chat'),
+              z.literal('project'),
+              z.literal('email'),
+              z.literal('channel'),
+              z.literal('call'),
+              z.literal('calendar_event'),
+            ];
+            const errors = schemas.reduce<z.ZodError[]>(
+              (errors, schema) =>
+                ((result) =>
+                  result.error ? [...errors, result.error] : errors)(
+                  schema.safeParse(x)
+                ),
+              []
+            );
+            if (schemas.length - errors.length !== 1) {
+              ctx.addIssue({
+                path: ctx.path,
+                code: 'invalid_union',
+                unionErrors: errors,
+                message: 'Invalid input: Should pass single schema',
+              });
+            }
+          }),
+          z.null(),
+        ])
+        .optional(),
+      id: z.string().uuid(),
+      nextRunAt: z.string().datetime({ offset: true }),
+      overdue: z.boolean(),
+      recurrence: z.union([z.string(), z.null()]).optional(),
+    })
+  ),
+  summary: z.string(),
 });
 
 export const ListSkills = z.record(z.any());
@@ -3400,6 +3573,15 @@ export const TextEditorCodeExecutionResponse = z.object({
     }
   }),
   tool_use_id: z.string(),
+});
+
+export const UpdateReminder = z.object({
+  completed: z.union([z.boolean(), z.null()]).optional(),
+  description: z.union([z.string(), z.null()]).optional(),
+  remindAt: z
+    .union([z.string().datetime({ offset: true }), z.null()])
+    .optional(),
+  reminderId: z.string().uuid(),
 });
 
 export const UpdateThreadLabels = z.object({

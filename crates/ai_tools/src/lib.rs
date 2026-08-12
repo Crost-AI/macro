@@ -29,6 +29,7 @@ use import::inbound::toolset::import_toolset;
 use notification::inbound::ai_tool::notification_toolset;
 use projects::inbound::toolset::project_toolset;
 use properties::inbound::toolset::properties_toolset;
+use reminders::inbound::toolset::reminders_toolset;
 use schemas::read;
 use search_tools::{LoadTools, SearchTools};
 use self_knowledge::SelfKnowledge;
@@ -55,12 +56,13 @@ pub use tool_context::{
     ToolEntityCreator, ToolForeignEntityService, ToolFrecencyService, ToolImportService,
     ToolImportToolContext, ToolNotificationQueue, ToolNotificationService,
     ToolNotificationToolContext, ToolProjectService, ToolProjectToolContext, ToolPropertiesService,
-    ToolPropertiesToolContext, ToolServiceContext, ToolSkillService, ToolSkillToolContext,
-    ToolSoupService, ToolSystemPropertiesService, ToolTeamService, ToolTeamToolContext,
-    ToolUserEmailService, build_channel_tool_context_with_dispatcher,
-    build_channel_tool_context_with_side_effects, build_channel_tool_context_without_side_effects,
-    build_crm_tool_context, build_project_tool_context, build_properties_service,
-    build_properties_tool_context, build_skill_tool_context, build_task_properties_adapter,
+    ToolPropertiesToolContext, ToolRemindersService, ToolRemindersToolContext, ToolServiceContext,
+    ToolSkillService, ToolSkillToolContext, ToolSoupService, ToolSystemPropertiesService,
+    ToolTeamService, ToolTeamToolContext, ToolUserEmailService,
+    build_channel_tool_context_with_dispatcher, build_channel_tool_context_with_side_effects,
+    build_channel_tool_context_without_side_effects, build_crm_tool_context,
+    build_project_tool_context, build_properties_service, build_properties_tool_context,
+    build_reminders_tool_context, build_skill_tool_context, build_task_properties_adapter,
     build_team_repository, build_team_tool_context,
 };
 pub type AiToolSet = AsyncToolCollection<ToolServiceContext>;
@@ -102,6 +104,7 @@ pub(crate) fn subagent_toolset() -> AiToolSet {
 pub fn all_tools() -> ToolSetWithPrompt {
     let toolset = subagent_toolset()
         .add_subtoolset::<ToolNotificationToolContext>(notification_toolset())
+        .add_subtoolset::<ToolRemindersToolContext>(reminders_toolset())
         .add_subtoolset::<ToolEmailToolContext>(email_toolset())
         .add_subtoolset::<ToolImportToolContext>(import_toolset())
         .add_tool::<Subagent, ToolServiceContext>()
@@ -130,6 +133,7 @@ pub fn all_tool_frontend_schemas() -> FrontendSchemas {
 pub fn mcp_tools() -> ToolSetWithPrompt {
     let toolset = subagent_toolset()
         .add_subtoolset::<ToolNotificationToolContext>(notification_toolset())
+        .add_subtoolset::<ToolRemindersToolContext>(reminders_toolset())
         .add_subtoolset::<ToolEmailToolContext>(email_mcp_toolset())
         .add_subtoolset::<ToolImportToolContext>(import_toolset())
         .add_tool::<Subagent, ToolServiceContext>();
