@@ -319,12 +319,13 @@ For the default instance, omit `--instance`.
 
 By default a local stack only notices provider-side calendar edits on its
 5-minute poll. Calendar push closes that gap to seconds by relaying Google's
-`events.watch` webhook deliveries through the dev deployment: Google requires
-a watch channel's address to be public HTTPS on a domain verified in the
-Cloud project owning the OAuth client, which a laptop can never satisfy, so
-local channels open against dev's already-verified webhook address with a
-per-instance token, and the local pubsub workers subscribe OUT to dev's relay
-(SSE) for deliveries addressed to that token. No tunnel, no DNS, no inbound
+`events.watch` webhook deliveries through the dev-only
+`calendar-event-local-tunnel` service: Google requires a watch channel's
+address to be public HTTPS on a domain verified in the Cloud project owning
+the OAuth client, which a laptop can never satisfy, so local channels open
+against `calendar-event-local-tunnel-dev.macro.com` with a per-instance
+token, and the local pubsub workers subscribe OUT to that service (SSE) for
+deliveries addressed to their token. No tunnel daemon, no DNS, no inbound
 connectivity to your machine.
 
 ```bash
@@ -351,8 +352,8 @@ just calendar-push disable --instance agent-a
 
 A running stack keeps push until it restarts. On graceful shutdown (stop,
 destroy, restart) the stack calls `channels.stop` at Google for every open
-channel; anything that slips through lapses at its natural expiry, and dev
-rejects those strays centrally, so they never reach your machine.
+channel; anything that slips through lapses at its natural expiry, and the
+tunnel drops those strays centrally, so they never reach your machine.
 
 The no-Google fake path still works for plumbing checks: stamp
 `watch_channel_id`/`watch_resource_id` on a `calendars` row, then POST to the
