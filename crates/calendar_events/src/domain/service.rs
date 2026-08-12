@@ -664,18 +664,23 @@ where
             .await
         {
             Ok(()) => {
-                repository
+                match repository
                     .clear_watch_channel(channel.calendar_id, &channel.channel_id)
                     .await
-                    .inspect_err(|error| {
+                {
+                    Ok(()) => summary.stopped += 1,
+                    // Kept bookkeeping means a later pass retries the whole
+                    // teardown; the stop call tolerates already-gone channels,
+                    // so the retry converges.
+                    Err(error) => {
                         tracing::warn!(
                             error=?error,
                             calendar_id=%channel.calendar_id,
                             "stopped a watch channel but failed to clear its bookkeeping"
                         );
-                    })
-                    .ok();
-                summary.stopped += 1;
+                        summary.failed += 1;
+                    }
+                }
             }
             Err(error) => {
                 tracing::warn!(

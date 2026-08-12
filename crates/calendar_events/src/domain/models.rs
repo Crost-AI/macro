@@ -871,8 +871,9 @@ pub struct GoogleWatchChannel {
 pub struct WatchChannelStopSummary {
     /// Channels confirmed stopped (or already gone) and cleared.
     pub stopped: usize,
-    /// Channels that could not be stopped this pass; their bookkeeping is
-    /// kept so a later pass or natural expiry finishes the job.
+    /// Channels not fully torn down this pass — the stop call or its
+    /// bookkeeping cleanup failed. Their bookkeeping is kept so a later pass
+    /// or natural expiry finishes the job.
     pub failed: usize,
 }
 

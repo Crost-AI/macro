@@ -706,6 +706,7 @@ async fn google_coordinator_keeps_calendar_permission_health_separate_from_gmail
 #[derive(Clone, Default)]
 struct FakeTeardownRepo {
     channels: Vec<ActiveWatchChannel>,
+    fail_clear_for: Option<String>,
     cleared: Arc<Mutex<Vec<(Uuid, String)>>>,
 }
 
@@ -715,6 +716,9 @@ impl WatchChannelTeardownRepository for FakeTeardownRepo {
     }
 
     async fn clear_watch_channel(&self, calendar_id: Uuid, channel_id: &str) -> Result<(), Report> {
+        if self.fail_clear_for.as_deref() == Some(channel_id) {
+            return Err(rootcause::report!(CalendarValidationError::MissingIdentity).into());
+        }
         self.cleared
             .lock()
             .unwrap()
@@ -844,6 +848,34 @@ async fn stop_all_keeps_bookkeeping_for_channels_that_fail_to_stop() {
 
     assert_eq!(summary.stopped, 1);
     assert_eq!(summary.failed, 1);
+    let cleared = repo.cleared.lock().unwrap();
+    assert_eq!(cleared.len(), 1);
+    assert_eq!(cleared[0].1, "chan-ok");
+}
+
+#[tokio::test]
+async fn stop_all_counts_a_failed_bookkeeping_clear_as_failed() {
+    let link = Uuid::now_v7();
+    let repo = FakeTeardownRepo {
+        channels: vec![
+            active_channel(link, "a@example.com", "chan-ok"),
+            active_channel(link, "a@example.com", "chan-uncleared"),
+        ],
+        fail_clear_for: Some("chan-uncleared".to_owned()),
+        ..Default::default()
+    };
+    let stopper = FakeStopper::default();
+    let tokens = FakeTokens::default();
+
+    let summary = stop_all_watch_channels(&repo, &stopper, &tokens)
+        .await
+        .unwrap();
+
+    assert_eq!(summary.stopped, 1);
+    assert_eq!(
+        summary.failed, 1,
+        "a stopped channel whose bookkeeping survives is not fully torn down"
+    );
     let cleared = repo.cleared.lock().unwrap();
     assert_eq!(cleared.len(), 1);
     assert_eq!(cleared[0].1, "chan-ok");
