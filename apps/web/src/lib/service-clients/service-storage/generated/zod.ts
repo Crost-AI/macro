@@ -2233,12 +2233,32 @@ export const getChannelResponse = zod
       .array(
         zod
           .object({
-            agent_session_message_id: zod
-              .string()
-              .nullish()
-              .describe(
-                'The agent session turn this placeholder renders, as the composite\n`\"{agent_session_id}:{turn}\"`. Set only on agent-turn placeholders;\njoin it against the folded messages of the channel\'s agent session.'
-              ),
+            agent_session_message: zod
+              .union([
+                zod.null(),
+                zod
+                  .object({
+                    agent_session_id: zod
+                      .uuid()
+                      .describe(
+                        'Agent session whose folded message this renders.'
+                      ),
+                    author: zod
+                      .enum(['user', 'agent'])
+                      .describe(
+                        'Which side of the conversation produced a message.\n\nThe identity-free discriminant of [`Author`], usable in a key where\n[`Author`] itself carries a payload.\n\nThe wire names a [`MessageId`] is written with and parsed back from are\nthe strum-derived `snake_case` variant names - one source of truth for\nboth directions.'
+                      ),
+                    turn: zod
+                      .number()
+                      .describe(
+                        'Turn within that session, assigned in log order from zero.'
+                      ),
+                  })
+                  .describe(
+                    'Identifies the folded agent-session message a placeholder message renders.\n\nNested rather than three sibling fields, because the three only ever make\nsense together: a message either names a folded message or has a body.'
+                  ),
+              ])
+              .optional(),
             attachments: zod
               .array(
                 zod
@@ -2325,12 +2345,32 @@ export const getChannelResponse = zod
                   .array(
                     zod
                       .object({
-                        agent_session_message_id: zod
-                          .string()
-                          .nullish()
-                          .describe(
-                            'The agent session turn this placeholder renders, as the composite\n`\"{agent_session_id}:{turn}\"`. Set only on agent-turn placeholders.'
-                          ),
+                        agent_session_message: zod
+                          .union([
+                            zod.null(),
+                            zod
+                              .object({
+                                agent_session_id: zod
+                                  .uuid()
+                                  .describe(
+                                    'Agent session whose folded message this renders.'
+                                  ),
+                                author: zod
+                                  .enum(['user', 'agent'])
+                                  .describe(
+                                    'Which side of the conversation produced a message.\n\nThe identity-free discriminant of [`Author`], usable in a key where\n[`Author`] itself carries a payload.\n\nThe wire names a [`MessageId`] is written with and parsed back from are\nthe strum-derived `snake_case` variant names - one source of truth for\nboth directions.'
+                                  ),
+                                turn: zod
+                                  .number()
+                                  .describe(
+                                    'Turn within that session, assigned in log order from zero.'
+                                  ),
+                              })
+                              .describe(
+                                'Identifies the folded agent-session message a placeholder message renders.\n\nNested rather than three sibling fields, because the three only ever make\nsense together: a message either names a folded message or has a body.'
+                              ),
+                          ])
+                          .optional(),
                         attachments: zod
                           .array(
                             zod
@@ -2735,12 +2775,32 @@ export const getChannelMessagesResponse = zod
       .array(
         zod
           .object({
-            agent_session_message_id: zod
-              .string()
-              .nullish()
-              .describe(
-                'The agent session turn this placeholder renders, as the composite\n`\"{agent_session_id}:{turn}\"`. Set only on agent-turn placeholders;\njoin it against the folded messages of the channel\'s agent session.'
-              ),
+            agent_session_message: zod
+              .union([
+                zod.null(),
+                zod
+                  .object({
+                    agent_session_id: zod
+                      .uuid()
+                      .describe(
+                        'Agent session whose folded message this renders.'
+                      ),
+                    author: zod
+                      .enum(['user', 'agent'])
+                      .describe(
+                        'Which side of the conversation produced a message.\n\nThe identity-free discriminant of [`Author`], usable in a key where\n[`Author`] itself carries a payload.\n\nThe wire names a [`MessageId`] is written with and parsed back from are\nthe strum-derived `snake_case` variant names - one source of truth for\nboth directions.'
+                      ),
+                    turn: zod
+                      .number()
+                      .describe(
+                        'Turn within that session, assigned in log order from zero.'
+                      ),
+                  })
+                  .describe(
+                    'Identifies the folded agent-session message a placeholder message renders.\n\nNested rather than three sibling fields, because the three only ever make\nsense together: a message either names a folded message or has a body.'
+                  ),
+              ])
+              .optional(),
             attachments: zod
               .array(
                 zod
@@ -2827,12 +2887,32 @@ export const getChannelMessagesResponse = zod
                   .array(
                     zod
                       .object({
-                        agent_session_message_id: zod
-                          .string()
-                          .nullish()
-                          .describe(
-                            'The agent session turn this placeholder renders, as the composite\n`\"{agent_session_id}:{turn}\"`. Set only on agent-turn placeholders.'
-                          ),
+                        agent_session_message: zod
+                          .union([
+                            zod.null(),
+                            zod
+                              .object({
+                                agent_session_id: zod
+                                  .uuid()
+                                  .describe(
+                                    'Agent session whose folded message this renders.'
+                                  ),
+                                author: zod
+                                  .enum(['user', 'agent'])
+                                  .describe(
+                                    'Which side of the conversation produced a message.\n\nThe identity-free discriminant of [`Author`], usable in a key where\n[`Author`] itself carries a payload.\n\nThe wire names a [`MessageId`] is written with and parsed back from are\nthe strum-derived `snake_case` variant names - one source of truth for\nboth directions.'
+                                  ),
+                                turn: zod
+                                  .number()
+                                  .describe(
+                                    'Turn within that session, assigned in log order from zero.'
+                                  ),
+                              })
+                              .describe(
+                                'Identifies the folded agent-session message a placeholder message renders.\n\nNested rather than three sibling fields, because the three only ever make\nsense together: a message either names a folded message or has a body.'
+                              ),
+                          ])
+                          .optional(),
                         attachments: zod
                           .array(
                             zod
@@ -3029,12 +3109,32 @@ export const postChannelMessagesResponse = zod
       .array(
         zod
           .object({
-            agent_session_message_id: zod
-              .string()
-              .nullish()
-              .describe(
-                'The agent session turn this placeholder renders, as the composite\n`\"{agent_session_id}:{turn}\"`. Set only on agent-turn placeholders;\njoin it against the folded messages of the channel\'s agent session.'
-              ),
+            agent_session_message: zod
+              .union([
+                zod.null(),
+                zod
+                  .object({
+                    agent_session_id: zod
+                      .uuid()
+                      .describe(
+                        'Agent session whose folded message this renders.'
+                      ),
+                    author: zod
+                      .enum(['user', 'agent'])
+                      .describe(
+                        'Which side of the conversation produced a message.\n\nThe identity-free discriminant of [`Author`], usable in a key where\n[`Author`] itself carries a payload.\n\nThe wire names a [`MessageId`] is written with and parsed back from are\nthe strum-derived `snake_case` variant names - one source of truth for\nboth directions.'
+                      ),
+                    turn: zod
+                      .number()
+                      .describe(
+                        'Turn within that session, assigned in log order from zero.'
+                      ),
+                  })
+                  .describe(
+                    'Identifies the folded agent-session message a placeholder message renders.\n\nNested rather than three sibling fields, because the three only ever make\nsense together: a message either names a folded message or has a body.'
+                  ),
+              ])
+              .optional(),
             attachments: zod
               .array(
                 zod
@@ -3121,12 +3221,32 @@ export const postChannelMessagesResponse = zod
                   .array(
                     zod
                       .object({
-                        agent_session_message_id: zod
-                          .string()
-                          .nullish()
-                          .describe(
-                            'The agent session turn this placeholder renders, as the composite\n`\"{agent_session_id}:{turn}\"`. Set only on agent-turn placeholders.'
-                          ),
+                        agent_session_message: zod
+                          .union([
+                            zod.null(),
+                            zod
+                              .object({
+                                agent_session_id: zod
+                                  .uuid()
+                                  .describe(
+                                    'Agent session whose folded message this renders.'
+                                  ),
+                                author: zod
+                                  .enum(['user', 'agent'])
+                                  .describe(
+                                    'Which side of the conversation produced a message.\n\nThe identity-free discriminant of [`Author`], usable in a key where\n[`Author`] itself carries a payload.\n\nThe wire names a [`MessageId`] is written with and parsed back from are\nthe strum-derived `snake_case` variant names - one source of truth for\nboth directions.'
+                                  ),
+                                turn: zod
+                                  .number()
+                                  .describe(
+                                    'Turn within that session, assigned in log order from zero.'
+                                  ),
+                              })
+                              .describe(
+                                'Identifies the folded agent-session message a placeholder message renders.\n\nNested rather than three sibling fields, because the three only ever make\nsense together: a message either names a folded message or has a body.'
+                              ),
+                          ])
+                          .optional(),
                         attachments: zod
                           .array(
                             zod
@@ -3263,12 +3383,32 @@ export const getMessageWithContextResponse = zod
       .array(
         zod
           .object({
-            agent_session_message_id: zod
-              .string()
-              .nullish()
-              .describe(
-                'The agent session turn this placeholder renders, as the composite\n`\"{agent_session_id}:{turn}\"`. Set only on agent-turn placeholders.'
-              ),
+            agent_session_message: zod
+              .union([
+                zod.null(),
+                zod
+                  .object({
+                    agent_session_id: zod
+                      .uuid()
+                      .describe(
+                        'Agent session whose folded message this renders.'
+                      ),
+                    author: zod
+                      .enum(['user', 'agent'])
+                      .describe(
+                        'Which side of the conversation produced a message.\n\nThe identity-free discriminant of [`Author`], usable in a key where\n[`Author`] itself carries a payload.\n\nThe wire names a [`MessageId`] is written with and parsed back from are\nthe strum-derived `snake_case` variant names - one source of truth for\nboth directions.'
+                      ),
+                    turn: zod
+                      .number()
+                      .describe(
+                        'Turn within that session, assigned in log order from zero.'
+                      ),
+                  })
+                  .describe(
+                    'Identifies the folded agent-session message a placeholder message renders.\n\nNested rather than three sibling fields, because the three only ever make\nsense together: a message either names a folded message or has a body.'
+                  ),
+              ])
+              .optional(),
             channel_id: zod.uuid().describe('Channel id.'),
             content: zod
               .string()
@@ -3339,12 +3479,30 @@ export const getThreadRepliesParams = zod.object({
 
 export const getThreadRepliesResponseItem = zod
   .object({
-    agent_session_message_id: zod
-      .string()
-      .nullish()
-      .describe(
-        'The agent session turn this placeholder renders, as the composite\n`\"{agent_session_id}:{turn}\"`. Set only on agent-turn placeholders.'
-      ),
+    agent_session_message: zod
+      .union([
+        zod.null(),
+        zod
+          .object({
+            agent_session_id: zod
+              .uuid()
+              .describe('Agent session whose folded message this renders.'),
+            author: zod
+              .enum(['user', 'agent'])
+              .describe(
+                'Which side of the conversation produced a message.\n\nThe identity-free discriminant of [`Author`], usable in a key where\n[`Author`] itself carries a payload.\n\nThe wire names a [`MessageId`] is written with and parsed back from are\nthe strum-derived `snake_case` variant names - one source of truth for\nboth directions.'
+              ),
+            turn: zod
+              .number()
+              .describe(
+                'Turn within that session, assigned in log order from zero.'
+              ),
+          })
+          .describe(
+            'Identifies the folded agent-session message a placeholder message renders.\n\nNested rather than three sibling fields, because the three only ever make\nsense together: a message either names a folded message or has a body.'
+          ),
+      ])
+      .optional(),
     attachments: zod
       .array(
         zod
