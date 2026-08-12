@@ -12,7 +12,7 @@
 use std::io::Read;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 use super::instance::Instance;
 
@@ -31,13 +31,25 @@ fn token_path(instance: &Instance) -> PathBuf {
 }
 
 /// Mint the instance's channel token once and reuse it across enables, so
-/// re-enabling never orphans channels opened under a previous token.
+/// re-enabling never orphans channels opened under a previous token. Only a
+/// genuinely absent file mints: any other read failure (or a corrupt empty
+/// file) must not silently rotate the token out from under open channels.
 fn ensure_token(instance: &Instance) -> Result<String> {
     let path = token_path(instance);
-    if let Ok(existing) = std::fs::read_to_string(&path) {
-        let existing = existing.trim();
-        if !existing.is_empty() {
+    match std::fs::read_to_string(&path) {
+        Ok(existing) => {
+            let existing = existing.trim();
+            if existing.is_empty() {
+                bail!(
+                    "calendar push token file {} is empty — delete it to mint a fresh token",
+                    path.display()
+                );
+            }
             return Ok(existing.to_owned());
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| format!("reading {}", path.display()));
         }
     }
     let mut bytes = [0u8; 32];
