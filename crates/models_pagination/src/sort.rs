@@ -34,6 +34,43 @@ impl Sortable for SimpleSortMethod {
 #[serde(rename_all = "snake_case")]
 pub struct Frecency;
 
+/// Sort by the requesting user's most recent mutation of each entity, as
+/// recorded in the activity log. Doubles as a filter: entities the user has
+/// never mutated have no value to sort on and are absent from the page.
+///
+/// Serialized as the string `"touched_by_me"` (not the derived `null` a unit
+/// struct would produce) so cursors carrying it stay self-describing and can
+/// never be confused with a [`Frecency`] cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TouchedByMe;
+
+/// The wire tag for [`TouchedByMe`].
+const TOUCHED_BY_ME_TAG: &str = "touched_by_me";
+
+impl Serialize for TouchedByMe {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(TOUCHED_BY_ME_TAG)
+    }
+}
+
+impl<'de> Deserialize<'de> for TouchedByMe {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let tag = std::borrow::Cow::<str>::deserialize(deserializer)?;
+        if tag == TOUCHED_BY_ME_TAG {
+            Ok(TouchedByMe)
+        } else {
+            Err(serde::de::Error::invalid_value(
+                serde::de::Unexpected::Str(&tag),
+                &TOUCHED_BY_ME_TAG,
+            ))
+        }
+    }
+}
+
+impl Sortable for TouchedByMe {
+    type Value = DateTime<Utc>;
+}
+
 /// the possible values of the cursor when sorting by frecency
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub enum FrecencyValue {
@@ -72,22 +109,6 @@ impl std::cmp::Ord for FrecencyValue {
 
 impl Sortable for Frecency {
     type Value = FrecencyValue;
-}
-
-/// either a [SimpleSortMethod] or an [AdvancedSortMethod]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum SortMethod {
-    /// A [SimpleSortMethod] with some extra params A
-    Simple(
-        /// the [SimplpleSortMethod]
-        SimpleSortMethod,
-    ),
-    /// A [AdvancedSortMethod] with some extra params B
-    Advanced(
-        /// the [AdvancedSortMethod]
-        Frecency,
-    ),
 }
 
 impl std::fmt::Display for SimpleSortMethod {

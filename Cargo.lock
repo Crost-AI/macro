@@ -13943,6 +13943,7 @@ dependencies = [
 name = "soup"
 version = "0.1.0"
 dependencies = [
+ "activity",
  "ai_toolset",
  "anyhow",
  "async-trait",

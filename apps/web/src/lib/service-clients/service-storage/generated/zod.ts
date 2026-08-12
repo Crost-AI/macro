@@ -7853,10 +7853,11 @@ export const getItemsSoupQueryParams = zod.object({
       'updated_at',
       'viewed_updated',
       'frecency',
+      'touched_by_me',
     ])
     .optional()
     .describe(
-      'Sort method. Options are viewed_at, created_at, updated_at, viewed_updated. Defaults to viewed_at.'
+      'Sort method. Options are viewed_at, created_at, updated_at,\nviewed_updated, frecency, touched_by_me. Defaults to viewed_at.'
     ),
   sort_direction: zod
     .enum(['asc', 'desc'])
@@ -11473,6 +11474,7 @@ export const postItemsSoupBody = zod
                 'updated_at',
                 'viewed_updated',
                 'frecency',
+                'touched_by_me',
               ])
               .describe(
                 'Sort options accepted by non-grouped soup API endpoints.'
@@ -14562,6 +14564,7 @@ export const postItemsSoupAstBody = zod
                 'updated_at',
                 'viewed_updated',
                 'frecency',
+                'touched_by_me',
               ])
               .describe(
                 'Sort options accepted by non-grouped soup API endpoints.'

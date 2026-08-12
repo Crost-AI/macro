@@ -8393,7 +8393,7 @@
           {
             "name": "sort_method",
             "in": "query",
-            "description": "Sort method. Options are viewed_at, created_at, updated_at, viewed_updated. Defaults to viewed_at.",
+            "description": "Sort method. Options are viewed_at, created_at, updated_at,\nviewed_updated, frecency, touched_by_me. Defaults to viewed_at.",
             "required": false,
             "schema": {
               "$ref": "#/components/schemas/SoupApiSort"
@@ -19708,7 +19708,7 @@
               },
               {
                 "$ref": "#/components/schemas/SoupApiSort",
-                "description": "Sort method. Options are viewed_at, created_at, updated_at, viewed_updated. Defaults to viewed_at."
+                "description": "Sort method. Options are viewed_at, created_at, updated_at,\nviewed_updated, frecency, touched_by_me. Defaults to viewed_at."
               }
             ]
           }
@@ -21732,7 +21732,8 @@
           "created_at",
           "updated_at",
           "viewed_updated",
-          "frecency"
+          "frecency",
+          "touched_by_me"
         ]
       },
       "SoupApiSortDirection": {
