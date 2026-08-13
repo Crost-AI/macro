@@ -168,222 +168,6 @@ export const getRecentActivityHandlerResponse = zod.object({
 });
 
 /**
- * Served unfolded for a client that runs the fold itself.
-
-Answers for any channel, not only an agent one: a channel with no session
-gets an empty log rather than a `404`. Clients call this on every channel
-load, because knowing whether a channel is an agent channel first would
-cost them a lookup they do not otherwise make.
-
-The whole log, with no paging: the fold is a left fold over the frames from
-the beginning, so a reader that skipped any of them would derive different
-turn numbering - and turn numbering is what joins these to the channel's
-placeholder rows.
- * @summary The raw protocol log of the agent session behind a channel.
- */
-export const getAgentChannelLogParams = zod.object({
-  channel_id: zod.uuid().describe("ID of the session's dedicated channel"),
-});
-
-export const getAgentChannelLogResponse = zod
-  .object({
-    agentSessionId: zod
-      .uuid()
-      .nullish()
-      .describe(
-        'The session the entries belong to, absent when no agent session owns\nthe channel.\n\nAbsent rather than a `404`, because every channel asks. A client has\nno cheap way to know whether a channel is an agent channel before it\nlooks: the channel record it would have to consult is only ever\nfetched as part of a list, which can predate the channel. So \"no\nsession here\" is an ordinary answer to an ordinary question, not a\nfailure.'
-      ),
-    bot: zod
-      .union([
-        zod.null(),
-        zod
-          .object({
-            avatarUrl: zod
-              .string()
-              .nullish()
-              .describe('Avatar, when it has one.'),
-            id: zod.string(),
-            name: zod.string().describe('Display name.'),
-          })
-          .describe(
-            'The agent behind a session, as much of it as rendering a message needs.'
-          ),
-      ])
-      .optional(),
-    entries: zod
-      .array(
-        zod
-          .object({
-            content: zod
-              .object({})
-              .describe(
-                'The protocol envelope, verbatim. Opaque here: it is Agent Runtime\nProtocol, whose shape belongs to the fold rather than this endpoint.'
-              ),
-            direction: zod
-              .enum(['to_server', 'to_runtime'])
-              .describe(
-                "Which way a logged frame travelled, mirroring [`Message`]'s discriminant."
-              ),
-          })
-          .describe(
-            "The two fields [`AgentSessionLogEntryDto`] flattens in.\n\nSchema only. Nothing constructs one: the entry serializes through\n[`Message`], and this exists so the generated clients see `direction` and\n`content` as named fields instead of an open map. A hand-built copy could\ndrift from the fold's wire format, and the point of the endpoint is that it\ncannot - so this describes that format without being able to produce it."
-          )
-          .and(
-            zod.object({
-              userId: zod
-                .string()
-                .nullish()
-                .describe(
-                  "The user whose action produced the frame, absent when no user did.\n\nOnly prompts carry one, and only when the frame was attributed at the\ntime - a replayed or recorded session's are anonymous."
-                ),
-            })
-          )
-          .describe(
-            'One entry of a session\'s protocol log.\n\nSerializes as `{\"userId\": ..., \"direction\": ..., \"content\": ...}` - the\nframe\'s own two fields, flattened in beside the attribution, which is the\nsame shape a recorded session\'s JSONL carries. A reader can deserialize the\n`direction`\/`content` pair straight back into the fold\'s own log type\nrather than through a transport vocabulary of its own.\n\n`agentSessionId` is not repeated per entry: every entry in a response\nbelongs to the session named once at the top.\n\n`Deserialize` is for the wire-contract tests only - nothing server-side\ndecodes its own response type.'
-          )
-      )
-      .describe(
-        'Every logged frame, oldest first. Folding depends on this order. Empty\nwhen there is no session.'
-      ),
-  })
-  .describe(
-    "Response body for a channel's raw agent-session log.\n\nThe frames themselves: this endpoint does not fold, its readers do."
-  );
-
-/**
- * @summary Get an agent session by id.
- */
-export const getAgentSessionParams = zod.object({
-  session_id: zod.uuid().describe('ID of the agent session'),
-});
-
-export const getAgentSessionResponse = zod
-  .object({
-    acpSessionId: zod
-      .string()
-      .nullish()
-      .describe('The ACP session id, if one exists.'),
-    botId: zod.uuid().describe('The bot running the agent.'),
-    channelId: zod.uuid().describe("The session's dedicated channel."),
-    createdAt: zod.iso.datetime({}).describe('When the session was created.'),
-    harness: zod.string().describe('Harness slug.'),
-    id: zod.uuid().describe('The session id.'),
-    model: zod.string().describe('Model slug.'),
-    modifiedAt: zod.iso
-      .datetime({})
-      .describe('When the session was last modified.'),
-    originatingMessageId: zod
-      .uuid()
-      .nullish()
-      .describe('The exact message that invoked the bot, if any.'),
-    repoUrl: zod.string().describe('The repository the session works with.'),
-    status: zod
-      .union([
-        zod
-          .object({
-            kind: zod.enum(['no_messages']),
-          })
-          .describe('No status updates received.'),
-        zod
-          .object({
-            event: zod
-              .string()
-              .describe('The wire name of the system event, e.g. `acp_ready`.'),
-            kind: zod.enum(['event']),
-          })
-          .describe('The last system event received from the runtime.'),
-        zod
-          .object({
-            kind: zod.enum(['disconnected']),
-          })
-          .describe('The session disconnected without sending a closed event.'),
-      ])
-      .describe(
-        "Transport representation of a session's status, mirroring\n[`SessionStatus`]."
-      ),
-    threadId: zod
-      .uuid()
-      .nullish()
-      .describe(
-        'The root message of the thread the session was created from, if any.'
-      ),
-  })
-  .describe('Response body describing an agent session.');
-
-/**
- * @summary Replace an agent session.
- */
-export const updateAgentSessionParams = zod.object({
-  session_id: zod.uuid().describe('ID of the agent session'),
-});
-
-export const updateAgentSessionBody = zod
-  .object({
-    acpSessionId: zod
-      .string()
-      .nullish()
-      .describe('The ACP session id, if one exists.'),
-    botId: zod.uuid().describe('The bot running the agent.'),
-    channelId: zod
-      .uuid()
-      .describe(
-        "The session's dedicated channel. Immutable; echo the value returned\nby the get endpoint."
-      ),
-    createdAt: zod.iso
-      .datetime({})
-      .describe(
-        'When the session was created. Immutable; echo the value returned by\nthe get endpoint.'
-      ),
-    harness: zod.string().describe('Harness slug.'),
-    model: zod.string().describe('Model slug.'),
-    originatingMessageId: zod
-      .uuid()
-      .nullish()
-      .describe('The exact message that invoked the bot, if any.'),
-    repoUrl: zod.string().describe('The repository the session works with.'),
-    status: zod
-      .union([
-        zod
-          .object({
-            kind: zod.enum(['no_messages']),
-          })
-          .describe('No status updates received.'),
-        zod
-          .object({
-            event: zod
-              .string()
-              .describe('The wire name of the system event, e.g. `acp_ready`.'),
-            kind: zod.enum(['event']),
-          })
-          .describe('The last system event received from the runtime.'),
-        zod
-          .object({
-            kind: zod.enum(['disconnected']),
-          })
-          .describe('The session disconnected without sending a closed event.'),
-      ])
-      .describe(
-        "Transport representation of a session's status, mirroring\n[`SessionStatus`]."
-      ),
-    threadId: zod
-      .uuid()
-      .nullish()
-      .describe(
-        'The root message of the thread the session was created from, if any.'
-      ),
-  })
-  .describe(
-    'Request body for replacing an agent session. This is full-resource `PUT`\nsemantics: fetch the session, modify it, and send the whole thing back.\n`channelId` and `createdAt` are immutable; echo the values returned by the\nget endpoint.'
-  );
-
-/**
- * @summary Delete an agent session and its dedicated channel.
- */
-export const deleteAgentSessionParams = zod.object({
-  session_id: zod.uuid().describe('ID of the agent session'),
-});
-
-/**
  * @summary Deletes a single unthreaded anchor for a document
 If you need to delete a threaded anchor, see the delete comment handler
  */
@@ -1995,9 +1779,8 @@ export const getAttachmentReferencesResponse = zod
                   .describe('Optional channel name (DMs do not have a name).'),
                 message_content: zod
                   .string()
-                  .nullish()
                   .describe(
-                    'Full message content (might be used for preview\/snippet). `None` on\nagent-turn placeholder messages.'
+                    'Full message content (might be used for preview\/snippet).'
                   ),
                 message_created_at: zod.iso
                   .datetime({})
@@ -2231,32 +2014,6 @@ export const getChannelResponse = zod
       .array(
         zod
           .object({
-            agent_session_message: zod
-              .union([
-                zod.null(),
-                zod
-                  .object({
-                    agent_session_id: zod
-                      .uuid()
-                      .describe(
-                        'Agent session whose folded message this renders.'
-                      ),
-                    author: zod
-                      .enum(['user', 'agent'])
-                      .describe(
-                        'Which side of the conversation produced a message.\n\nThe identity-free discriminant of [`Author`], usable in a key where\n[`Author`] itself carries a payload.\n\nThe wire names a [`MessageId`] is written with and parsed back from are\nthe strum-derived `snake_case` variant names - one source of truth for\nboth directions.'
-                      ),
-                    turn: zod
-                      .number()
-                      .describe(
-                        'Turn within that session, assigned in log order from zero.'
-                      ),
-                  })
-                  .describe(
-                    'Identifies the folded agent-session message a placeholder message renders.\n\nNested rather than three sibling fields, because the three only ever make\nsense together: a message either names a folded message or has a body.'
-                  ),
-              ])
-              .optional(),
             attachments: zod
               .array(
                 zod
@@ -2280,12 +2037,7 @@ export const getChannelResponse = zod
               )
               .describe('Attachments on this message.'),
             channel_id: zod.uuid().describe('Channel id.'),
-            content: zod
-              .string()
-              .nullish()
-              .describe(
-                'Message content. `None` on agent-turn placeholder messages, whose body\nis folded from the agent session log and joined in by the client.'
-              ),
+            content: zod.string().describe('Message content.'),
             created_at: zod.iso
               .datetime({})
               .describe('When the message was created.'),
@@ -2343,32 +2095,6 @@ export const getChannelResponse = zod
                   .array(
                     zod
                       .object({
-                        agent_session_message: zod
-                          .union([
-                            zod.null(),
-                            zod
-                              .object({
-                                agent_session_id: zod
-                                  .uuid()
-                                  .describe(
-                                    'Agent session whose folded message this renders.'
-                                  ),
-                                author: zod
-                                  .enum(['user', 'agent'])
-                                  .describe(
-                                    'Which side of the conversation produced a message.\n\nThe identity-free discriminant of [`Author`], usable in a key where\n[`Author`] itself carries a payload.\n\nThe wire names a [`MessageId`] is written with and parsed back from are\nthe strum-derived `snake_case` variant names - one source of truth for\nboth directions.'
-                                  ),
-                                turn: zod
-                                  .number()
-                                  .describe(
-                                    'Turn within that session, assigned in log order from zero.'
-                                  ),
-                              })
-                              .describe(
-                                'Identifies the folded agent-session message a placeholder message renders.\n\nNested rather than three sibling fields, because the three only ever make\nsense together: a message either names a folded message or has a body.'
-                              ),
-                          ])
-                          .optional(),
                         attachments: zod
                           .array(
                             zod
@@ -2393,12 +2119,7 @@ export const getChannelResponse = zod
                               .describe('An attachment on a message.')
                           )
                           .describe('Attachments on this reply.'),
-                        content: zod
-                          .string()
-                          .nullish()
-                          .describe(
-                            'Reply content. `None` on agent-turn placeholder messages.'
-                          ),
+                        content: zod.string().describe('Reply content.'),
                         created_at: zod.iso
                           .datetime({})
                           .describe('When the reply was created.'),
@@ -2773,32 +2494,6 @@ export const getChannelMessagesResponse = zod
       .array(
         zod
           .object({
-            agent_session_message: zod
-              .union([
-                zod.null(),
-                zod
-                  .object({
-                    agent_session_id: zod
-                      .uuid()
-                      .describe(
-                        'Agent session whose folded message this renders.'
-                      ),
-                    author: zod
-                      .enum(['user', 'agent'])
-                      .describe(
-                        'Which side of the conversation produced a message.\n\nThe identity-free discriminant of [`Author`], usable in a key where\n[`Author`] itself carries a payload.\n\nThe wire names a [`MessageId`] is written with and parsed back from are\nthe strum-derived `snake_case` variant names - one source of truth for\nboth directions.'
-                      ),
-                    turn: zod
-                      .number()
-                      .describe(
-                        'Turn within that session, assigned in log order from zero.'
-                      ),
-                  })
-                  .describe(
-                    'Identifies the folded agent-session message a placeholder message renders.\n\nNested rather than three sibling fields, because the three only ever make\nsense together: a message either names a folded message or has a body.'
-                  ),
-              ])
-              .optional(),
             attachments: zod
               .array(
                 zod
@@ -2822,12 +2517,7 @@ export const getChannelMessagesResponse = zod
               )
               .describe('Attachments on this message.'),
             channel_id: zod.uuid().describe('Channel id.'),
-            content: zod
-              .string()
-              .nullish()
-              .describe(
-                'Message content. `None` on agent-turn placeholder messages, whose body\nis folded from the agent session log and joined in by the client.'
-              ),
+            content: zod.string().describe('Message content.'),
             created_at: zod.iso
               .datetime({})
               .describe('When the message was created.'),
@@ -2885,32 +2575,6 @@ export const getChannelMessagesResponse = zod
                   .array(
                     zod
                       .object({
-                        agent_session_message: zod
-                          .union([
-                            zod.null(),
-                            zod
-                              .object({
-                                agent_session_id: zod
-                                  .uuid()
-                                  .describe(
-                                    'Agent session whose folded message this renders.'
-                                  ),
-                                author: zod
-                                  .enum(['user', 'agent'])
-                                  .describe(
-                                    'Which side of the conversation produced a message.\n\nThe identity-free discriminant of [`Author`], usable in a key where\n[`Author`] itself carries a payload.\n\nThe wire names a [`MessageId`] is written with and parsed back from are\nthe strum-derived `snake_case` variant names - one source of truth for\nboth directions.'
-                                  ),
-                                turn: zod
-                                  .number()
-                                  .describe(
-                                    'Turn within that session, assigned in log order from zero.'
-                                  ),
-                              })
-                              .describe(
-                                'Identifies the folded agent-session message a placeholder message renders.\n\nNested rather than three sibling fields, because the three only ever make\nsense together: a message either names a folded message or has a body.'
-                              ),
-                          ])
-                          .optional(),
                         attachments: zod
                           .array(
                             zod
@@ -2935,12 +2599,7 @@ export const getChannelMessagesResponse = zod
                               .describe('An attachment on a message.')
                           )
                           .describe('Attachments on this reply.'),
-                        content: zod
-                          .string()
-                          .nullish()
-                          .describe(
-                            'Reply content. `None` on agent-turn placeholder messages.'
-                          ),
+                        content: zod.string().describe('Reply content.'),
                         created_at: zod.iso
                           .datetime({})
                           .describe('When the reply was created.'),
@@ -3107,32 +2766,6 @@ export const postChannelMessagesResponse = zod
       .array(
         zod
           .object({
-            agent_session_message: zod
-              .union([
-                zod.null(),
-                zod
-                  .object({
-                    agent_session_id: zod
-                      .uuid()
-                      .describe(
-                        'Agent session whose folded message this renders.'
-                      ),
-                    author: zod
-                      .enum(['user', 'agent'])
-                      .describe(
-                        'Which side of the conversation produced a message.\n\nThe identity-free discriminant of [`Author`], usable in a key where\n[`Author`] itself carries a payload.\n\nThe wire names a [`MessageId`] is written with and parsed back from are\nthe strum-derived `snake_case` variant names - one source of truth for\nboth directions.'
-                      ),
-                    turn: zod
-                      .number()
-                      .describe(
-                        'Turn within that session, assigned in log order from zero.'
-                      ),
-                  })
-                  .describe(
-                    'Identifies the folded agent-session message a placeholder message renders.\n\nNested rather than three sibling fields, because the three only ever make\nsense together: a message either names a folded message or has a body.'
-                  ),
-              ])
-              .optional(),
             attachments: zod
               .array(
                 zod
@@ -3156,12 +2789,7 @@ export const postChannelMessagesResponse = zod
               )
               .describe('Attachments on this message.'),
             channel_id: zod.uuid().describe('Channel id.'),
-            content: zod
-              .string()
-              .nullish()
-              .describe(
-                'Message content. `None` on agent-turn placeholder messages, whose body\nis folded from the agent session log and joined in by the client.'
-              ),
+            content: zod.string().describe('Message content.'),
             created_at: zod.iso
               .datetime({})
               .describe('When the message was created.'),
@@ -3219,32 +2847,6 @@ export const postChannelMessagesResponse = zod
                   .array(
                     zod
                       .object({
-                        agent_session_message: zod
-                          .union([
-                            zod.null(),
-                            zod
-                              .object({
-                                agent_session_id: zod
-                                  .uuid()
-                                  .describe(
-                                    'Agent session whose folded message this renders.'
-                                  ),
-                                author: zod
-                                  .enum(['user', 'agent'])
-                                  .describe(
-                                    'Which side of the conversation produced a message.\n\nThe identity-free discriminant of [`Author`], usable in a key where\n[`Author`] itself carries a payload.\n\nThe wire names a [`MessageId`] is written with and parsed back from are\nthe strum-derived `snake_case` variant names - one source of truth for\nboth directions.'
-                                  ),
-                                turn: zod
-                                  .number()
-                                  .describe(
-                                    'Turn within that session, assigned in log order from zero.'
-                                  ),
-                              })
-                              .describe(
-                                'Identifies the folded agent-session message a placeholder message renders.\n\nNested rather than three sibling fields, because the three only ever make\nsense together: a message either names a folded message or has a body.'
-                              ),
-                          ])
-                          .optional(),
                         attachments: zod
                           .array(
                             zod
@@ -3269,12 +2871,7 @@ export const postChannelMessagesResponse = zod
                               .describe('An attachment on a message.')
                           )
                           .describe('Attachments on this reply.'),
-                        content: zod
-                          .string()
-                          .nullish()
-                          .describe(
-                            'Reply content. `None` on agent-turn placeholder messages.'
-                          ),
+                        content: zod.string().describe('Reply content.'),
                         created_at: zod.iso
                           .datetime({})
                           .describe('When the reply was created.'),
@@ -3381,39 +2978,8 @@ export const getMessageWithContextResponse = zod
       .array(
         zod
           .object({
-            agent_session_message: zod
-              .union([
-                zod.null(),
-                zod
-                  .object({
-                    agent_session_id: zod
-                      .uuid()
-                      .describe(
-                        'Agent session whose folded message this renders.'
-                      ),
-                    author: zod
-                      .enum(['user', 'agent'])
-                      .describe(
-                        'Which side of the conversation produced a message.\n\nThe identity-free discriminant of [`Author`], usable in a key where\n[`Author`] itself carries a payload.\n\nThe wire names a [`MessageId`] is written with and parsed back from are\nthe strum-derived `snake_case` variant names - one source of truth for\nboth directions.'
-                      ),
-                    turn: zod
-                      .number()
-                      .describe(
-                        'Turn within that session, assigned in log order from zero.'
-                      ),
-                  })
-                  .describe(
-                    'Identifies the folded agent-session message a placeholder message renders.\n\nNested rather than three sibling fields, because the three only ever make\nsense together: a message either names a folded message or has a body.'
-                  ),
-              ])
-              .optional(),
             channel_id: zod.uuid().describe('Channel id.'),
-            content: zod
-              .string()
-              .nullish()
-              .describe(
-                'Message content. `None` on agent-turn placeholder messages.'
-              ),
+            content: zod.string().describe('Message content.'),
             created_at: zod.iso
               .datetime({})
               .describe('When the message was created.'),
@@ -3477,30 +3043,6 @@ export const getThreadRepliesParams = zod.object({
 
 export const getThreadRepliesResponseItem = zod
   .object({
-    agent_session_message: zod
-      .union([
-        zod.null(),
-        zod
-          .object({
-            agent_session_id: zod
-              .uuid()
-              .describe('Agent session whose folded message this renders.'),
-            author: zod
-              .enum(['user', 'agent'])
-              .describe(
-                'Which side of the conversation produced a message.\n\nThe identity-free discriminant of [`Author`], usable in a key where\n[`Author`] itself carries a payload.\n\nThe wire names a [`MessageId`] is written with and parsed back from are\nthe strum-derived `snake_case` variant names - one source of truth for\nboth directions.'
-              ),
-            turn: zod
-              .number()
-              .describe(
-                'Turn within that session, assigned in log order from zero.'
-              ),
-          })
-          .describe(
-            'Identifies the folded agent-session message a placeholder message renders.\n\nNested rather than three sibling fields, because the three only ever make\nsense together: a message either names a folded message or has a body.'
-          ),
-      ])
-      .optional(),
     attachments: zod
       .array(
         zod
@@ -3517,10 +3059,7 @@ export const getThreadRepliesResponseItem = zod
           .describe('An attachment on a message.')
       )
       .describe('Attachments on this reply.'),
-    content: zod
-      .string()
-      .nullish()
-      .describe('Reply content. `None` on agent-turn placeholder messages.'),
+    content: zod.string().describe('Reply content.'),
     created_at: zod.iso.datetime({}).describe('When the reply was created.'),
     edited_at: zod.iso
       .datetime({})
@@ -3745,20 +3284,12 @@ export const getChannelsResponse = zod
               .describe(
                 'Whether the requesting user is an active participant of the channel.'
               ),
-            kind: zod
-              .enum(['normal', 'agent'])
-              .describe('Channel kind in API responses.'),
             latest_message: zod
               .union([
                 zod.null(),
                 zod
                   .object({
-                    content: zod
-                      .string()
-                      .nullish()
-                      .describe(
-                        'Message content. `None` on agent-turn placeholder messages.'
-                      ),
+                    content: zod.string().describe('Message content.'),
                     created_at: zod.iso
                       .datetime({})
                       .describe('Creation timestamp.'),
@@ -3789,12 +3320,7 @@ export const getChannelsResponse = zod
                 zod.null(),
                 zod
                   .object({
-                    content: zod
-                      .string()
-                      .nullish()
-                      .describe(
-                        'Message content. `None` on agent-turn placeholder messages.'
-                      ),
+                    content: zod.string().describe('Message content.'),
                     created_at: zod.iso
                       .datetime({})
                       .describe('Creation timestamp.'),
@@ -7940,6 +7466,7 @@ export const listFavoritesResponse = zod
                 'crm_contact',
                 'reminder',
                 'skill',
+                'agent_session',
               ])
               .describe('The type of an entity in Macro')
               .describe('The type of the favorited entity.'),
@@ -7985,6 +7512,7 @@ export const addFavoriteBody = zod
         'crm_contact',
         'reminder',
         'skill',
+        'agent_session',
       ])
       .describe('The type of an entity in Macro')
       .describe('The type of the entity to favorite.'),
@@ -8031,6 +7559,7 @@ export const addFavoriteResponse = zod
         'crm_contact',
         'reminder',
         'skill',
+        'agent_session',
       ])
       .describe('The type of an entity in Macro')
       .describe('The type of the favorited entity.'),
@@ -8074,6 +7603,7 @@ export const reorderFavoritesBody = zod
                 'crm_contact',
                 'reminder',
                 'skill',
+                'agent_session',
               ])
               .describe('The type of an entity in Macro')
               .describe('The type of the favorited entity.'),
@@ -8110,6 +7640,7 @@ export const removeFavoriteByEntityParams = zod.object({
       'crm_contact',
       'reminder',
       'skill',
+      'agent_session',
     ])
     .describe('The type of the favorited entity.'),
   entity_id: zod.string().describe('The id of the favorited entity.'),
@@ -9735,10 +9266,7 @@ export const getItemsSoupResponse = zod
                             .object({
                               content: zod
                                 .string()
-                                .nullish()
-                                .describe(
-                                  'Message content. `None` on agent-turn placeholder messages.'
-                                ),
+                                .describe('Message content.'),
                               created_at: zod.iso
                                 .datetime({})
                                 .describe('Creation timestamp.'),
@@ -9773,10 +9301,7 @@ export const getItemsSoupResponse = zod
                             .object({
                               content: zod
                                 .string()
-                                .nullish()
-                                .describe(
-                                  'Message content. `None` on agent-turn placeholder messages.'
-                                ),
+                                .describe('Message content.'),
                               created_at: zod.iso
                                 .datetime({})
                                 .describe('Creation timestamp.'),
@@ -9854,12 +9379,7 @@ export const getItemsSoupResponse = zod
                     )
                     .describe('Attachments on this message.'),
                   channel_id: zod.uuid().describe('Channel id.'),
-                  content: zod
-                    .string()
-                    .nullish()
-                    .describe(
-                      'Message content. `None` on agent-turn placeholder messages.'
-                    ),
+                  content: zod.string().describe('Message content.'),
                   created_at: zod.iso
                     .datetime({})
                     .describe('Creation timestamp.'),
@@ -9945,12 +9465,7 @@ export const getItemsSoupResponse = zod
                                     .describe('An attachment on a message.')
                                 )
                                 .describe('Attachments on this reply.'),
-                              content: zod
-                                .string()
-                                .nullish()
-                                .describe(
-                                  'Reply content. `None` on agent-turn placeholder messages.'
-                                ),
+                              content: zod.string().describe('Reply content.'),
                               created_at: zod.iso
                                 .datetime({})
                                 .describe('Creation timestamp.'),
@@ -11271,6 +10786,7 @@ export const getItemsSoupResponse = zod
                                 'crm_contact',
                                 'reminder',
                                 'skill',
+                                'agent_session',
                               ])
                               .describe('The type of an entity in Macro')
                               .describe("The referenced entity's type."),
@@ -13378,10 +12894,7 @@ export const postItemsSoupResponse = zod
                             .object({
                               content: zod
                                 .string()
-                                .nullish()
-                                .describe(
-                                  'Message content. `None` on agent-turn placeholder messages.'
-                                ),
+                                .describe('Message content.'),
                               created_at: zod.iso
                                 .datetime({})
                                 .describe('Creation timestamp.'),
@@ -13416,10 +12929,7 @@ export const postItemsSoupResponse = zod
                             .object({
                               content: zod
                                 .string()
-                                .nullish()
-                                .describe(
-                                  'Message content. `None` on agent-turn placeholder messages.'
-                                ),
+                                .describe('Message content.'),
                               created_at: zod.iso
                                 .datetime({})
                                 .describe('Creation timestamp.'),
@@ -13497,12 +13007,7 @@ export const postItemsSoupResponse = zod
                     )
                     .describe('Attachments on this message.'),
                   channel_id: zod.uuid().describe('Channel id.'),
-                  content: zod
-                    .string()
-                    .nullish()
-                    .describe(
-                      'Message content. `None` on agent-turn placeholder messages.'
-                    ),
+                  content: zod.string().describe('Message content.'),
                   created_at: zod.iso
                     .datetime({})
                     .describe('Creation timestamp.'),
@@ -13588,12 +13093,7 @@ export const postItemsSoupResponse = zod
                                     .describe('An attachment on a message.')
                                 )
                                 .describe('Attachments on this reply.'),
-                              content: zod
-                                .string()
-                                .nullish()
-                                .describe(
-                                  'Reply content. `None` on agent-turn placeholder messages.'
-                                ),
+                              content: zod.string().describe('Reply content.'),
                               created_at: zod.iso
                                 .datetime({})
                                 .describe('Creation timestamp.'),
@@ -14914,6 +14414,7 @@ export const postItemsSoupResponse = zod
                                 'crm_contact',
                                 'reminder',
                                 'skill',
+                                'agent_session',
                               ])
                               .describe('The type of an entity in Macro')
                               .describe("The referenced entity's type."),
@@ -16487,10 +15988,7 @@ export const postItemsSoupAstResponse = zod
                             .object({
                               content: zod
                                 .string()
-                                .nullish()
-                                .describe(
-                                  'Message content. `None` on agent-turn placeholder messages.'
-                                ),
+                                .describe('Message content.'),
                               created_at: zod.iso
                                 .datetime({})
                                 .describe('Creation timestamp.'),
@@ -16525,10 +16023,7 @@ export const postItemsSoupAstResponse = zod
                             .object({
                               content: zod
                                 .string()
-                                .nullish()
-                                .describe(
-                                  'Message content. `None` on agent-turn placeholder messages.'
-                                ),
+                                .describe('Message content.'),
                               created_at: zod.iso
                                 .datetime({})
                                 .describe('Creation timestamp.'),
@@ -16606,12 +16101,7 @@ export const postItemsSoupAstResponse = zod
                     )
                     .describe('Attachments on this message.'),
                   channel_id: zod.uuid().describe('Channel id.'),
-                  content: zod
-                    .string()
-                    .nullish()
-                    .describe(
-                      'Message content. `None` on agent-turn placeholder messages.'
-                    ),
+                  content: zod.string().describe('Message content.'),
                   created_at: zod.iso
                     .datetime({})
                     .describe('Creation timestamp.'),
@@ -16697,12 +16187,7 @@ export const postItemsSoupAstResponse = zod
                                     .describe('An attachment on a message.')
                                 )
                                 .describe('Attachments on this reply.'),
-                              content: zod
-                                .string()
-                                .nullish()
-                                .describe(
-                                  'Reply content. `None` on agent-turn placeholder messages.'
-                                ),
+                              content: zod.string().describe('Reply content.'),
                               created_at: zod.iso
                                 .datetime({})
                                 .describe('Creation timestamp.'),
@@ -18023,6 +17508,7 @@ export const postItemsSoupAstResponse = zod
                                 'crm_contact',
                                 'reminder',
                                 'skill',
+                                'agent_session',
                               ])
                               .describe('The type of an entity in Macro')
                               .describe("The referenced entity's type."),
@@ -19894,10 +19380,7 @@ export const postItemsSoupAstGroupedResponse = zod
                                   .object({
                                     content: zod
                                       .string()
-                                      .nullish()
-                                      .describe(
-                                        'Message content. `None` on agent-turn placeholder messages.'
-                                      ),
+                                      .describe('Message content.'),
                                     created_at: zod.iso
                                       .datetime({})
                                       .describe('Creation timestamp.'),
@@ -19936,10 +19419,7 @@ export const postItemsSoupAstGroupedResponse = zod
                                   .object({
                                     content: zod
                                       .string()
-                                      .nullish()
-                                      .describe(
-                                        'Message content. `None` on agent-turn placeholder messages.'
-                                      ),
+                                      .describe('Message content.'),
                                     created_at: zod.iso
                                       .datetime({})
                                       .describe('Creation timestamp.'),
@@ -20023,12 +19503,7 @@ export const postItemsSoupAstGroupedResponse = zod
                           )
                           .describe('Attachments on this message.'),
                         channel_id: zod.uuid().describe('Channel id.'),
-                        content: zod
-                          .string()
-                          .nullish()
-                          .describe(
-                            'Message content. `None` on agent-turn placeholder messages.'
-                          ),
+                        content: zod.string().describe('Message content.'),
                         created_at: zod.iso
                           .datetime({})
                           .describe('Creation timestamp.'),
@@ -20122,10 +19597,7 @@ export const postItemsSoupAstGroupedResponse = zod
                                       .describe('Attachments on this reply.'),
                                     content: zod
                                       .string()
-                                      .nullish()
-                                      .describe(
-                                        'Reply content. `None` on agent-turn placeholder messages.'
-                                      ),
+                                      .describe('Reply content.'),
                                     created_at: zod.iso
                                       .datetime({})
                                       .describe('Creation timestamp.'),
@@ -21482,6 +20954,7 @@ export const postItemsSoupAstGroupedResponse = zod
                                       'crm_contact',
                                       'reminder',
                                       'skill',
+                                      'agent_session',
                                     ])
                                     .describe('The type of an entity in Macro')
                                     .describe("The referenced entity's type."),
@@ -23005,10 +22478,7 @@ export const postItemsSoupAstGroupedResponse = zod
                                   .object({
                                     content: zod
                                       .string()
-                                      .nullish()
-                                      .describe(
-                                        'Message content. `None` on agent-turn placeholder messages.'
-                                      ),
+                                      .describe('Message content.'),
                                     created_at: zod.iso
                                       .datetime({})
                                       .describe('Creation timestamp.'),
@@ -23047,10 +22517,7 @@ export const postItemsSoupAstGroupedResponse = zod
                                   .object({
                                     content: zod
                                       .string()
-                                      .nullish()
-                                      .describe(
-                                        'Message content. `None` on agent-turn placeholder messages.'
-                                      ),
+                                      .describe('Message content.'),
                                     created_at: zod.iso
                                       .datetime({})
                                       .describe('Creation timestamp.'),
@@ -23134,12 +22601,7 @@ export const postItemsSoupAstGroupedResponse = zod
                           )
                           .describe('Attachments on this message.'),
                         channel_id: zod.uuid().describe('Channel id.'),
-                        content: zod
-                          .string()
-                          .nullish()
-                          .describe(
-                            'Message content. `None` on agent-turn placeholder messages.'
-                          ),
+                        content: zod.string().describe('Message content.'),
                         created_at: zod.iso
                           .datetime({})
                           .describe('Creation timestamp.'),
@@ -23233,10 +22695,7 @@ export const postItemsSoupAstGroupedResponse = zod
                                       .describe('Attachments on this reply.'),
                                     content: zod
                                       .string()
-                                      .nullish()
-                                      .describe(
-                                        'Reply content. `None` on agent-turn placeholder messages.'
-                                      ),
+                                      .describe('Reply content.'),
                                     created_at: zod.iso
                                       .datetime({})
                                       .describe('Creation timestamp.'),
@@ -24593,6 +24052,7 @@ export const postItemsSoupAstGroupedResponse = zod
                                       'crm_contact',
                                       'reminder',
                                       'skill',
+                                      'agent_session',
                                     ])
                                     .describe('The type of an entity in Macro')
                                     .describe("The referenced entity's type."),
@@ -26646,6 +26106,7 @@ export const listRemindersQueryParams = zod.object({
       'crm_contact',
       'reminder',
       'skill',
+      'agent_session',
     ])
     .optional()
     .describe(
@@ -26728,6 +26189,7 @@ export const listRemindersResponse = zod
                     'crm_contact',
                     'reminder',
                     'skill',
+                    'agent_session',
                   ])
                   .describe('The type of an entity in Macro'),
               ])
@@ -26813,6 +26275,7 @@ export const createReminderBody = zod
             'crm_contact',
             'reminder',
             'skill',
+            'agent_session',
           ])
           .describe('The type of an entity in Macro'),
       ])
@@ -26895,6 +26358,7 @@ export const getReminderResponse = zod
             'crm_contact',
             'reminder',
             'skill',
+            'agent_session',
           ])
           .describe('The type of an entity in Macro'),
       ])
@@ -27037,6 +26501,7 @@ export const updateReminderResponse = zod
             'crm_contact',
             'reminder',
             'skill',
+            'agent_session',
           ])
           .describe('The type of an entity in Macro'),
       ])
