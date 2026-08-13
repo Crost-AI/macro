@@ -11636,7 +11636,8 @@
           "sender",
           "content",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "suppressed_preview_urls"
         ],
         "properties": {
           "channel_id": {
@@ -11675,6 +11676,13 @@
           "sender_id": {
             "type": "string",
             "description": "Sender user id."
+          },
+          "suppressed_preview_urls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Link-preview URLs the sender removed from this message."
           },
           "thread_id": {
             "type": ["string", "null"],
@@ -11846,6 +11854,7 @@
           "content",
           "created_at",
           "updated_at",
+          "suppressed_preview_urls",
           "thread",
           "reactions",
           "attachments"
@@ -11901,6 +11910,13 @@
           "sender_id": {
             "type": "string",
             "description": "Sender user id."
+          },
+          "suppressed_preview_urls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Link-preview URLs the sender removed from this message."
           },
           "thread": {
             "$ref": "#/components/schemas/ApiThreadInfo",
@@ -12395,6 +12411,7 @@
           "content",
           "created_at",
           "updated_at",
+          "suppressed_preview_urls",
           "reactions",
           "attachments"
         ],
@@ -12439,6 +12456,13 @@
           "sender_id": {
             "type": "string",
             "description": "Sender user id."
+          },
+          "suppressed_preview_urls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Link-preview URLs the sender removed from this reply."
           },
           "updated_at": {
             "type": "string",
@@ -19769,6 +19793,13 @@
           "nonce": {
             "type": ["string", "null"],
             "description": "Optional optimistic-update nonce."
+          },
+          "suppressed_preview_urls": {
+            "type": ["array", "null"],
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional replacement set of link-preview URLs removed from the\nmessage (\"remove preview\"); `None` leaves it unchanged."
           }
         }
       },

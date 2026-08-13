@@ -81,6 +81,8 @@ type TargetMessageState = {
   editedAt: string | null | undefined;
   updatedAt: string;
   attachments: ApiMessageAttachment[];
+  /** Omitted = leave the message's suppressed previews unchanged. */
+  suppressedPreviewUrls?: string[];
 };
 
 function makeMessageTarget(args: {

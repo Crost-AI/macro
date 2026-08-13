@@ -183,6 +183,7 @@ where
                                 created_at: r.created_at,
                                 updated_at: r.updated_at,
                                 edited_at: r.edited_at,
+                                suppressed_preview_urls: r.suppressed_preview_urls.clone(),
                                 reactions: reactions.get(&r.id).cloned().unwrap_or_default(),
                                 attachments: attachments.get(&r.id).cloned().unwrap_or_default(),
                             })
@@ -201,6 +202,7 @@ where
                     updated_at: row.updated_at,
                     edited_at: row.edited_at,
                     deleted_at: row.deleted_at,
+                    suppressed_preview_urls: row.suppressed_preview_urls,
                     thread: ThreadInfo {
                         reply_count: td.map_or(0, |td| td.reply_count),
                         latest_reply_at: td.and_then(|td| td.latest_reply_at),
@@ -246,6 +248,7 @@ where
                 created_at: row.created_at,
                 updated_at: row.updated_at,
                 edited_at: row.edited_at,
+                suppressed_preview_urls: row.suppressed_preview_urls,
                 reactions: reactions.get(&row.id).cloned().unwrap_or_default(),
                 attachments: attachments.get(&row.id).cloned().unwrap_or_default(),
             })
@@ -704,6 +707,7 @@ where
             mentions: replacement_mentions,
             attachment_ids_to_delete,
             attachments_to_add,
+            suppressed_preview_urls,
             nonce,
             notification_policy,
         } = req;
@@ -745,6 +749,34 @@ where
                 nonce.clone(),
             )
             .await?;
+        }
+
+        // Applied before any content patch so the content patch's returned
+        // message already carries the new suppression state.
+        if let Some(urls) = suppressed_preview_urls {
+            let message = self
+                .repo
+                .set_message_suppressed_previews(channel_id, message_id, urls)
+                .await
+                .map_err(|e| ChannelMutationErr::Repo(e.into()))?;
+
+            // A content patch below dispatches its own MessageChanged with the
+            // same suppression state; only a suppression-only patch needs one.
+            if content.is_none() {
+                let channel_participants = self
+                    .repo
+                    .get_participants(channel_id)
+                    .await
+                    .map_err(|e| ChannelMutationErr::Repo(e.into()))?;
+                self.events.dispatch(ChannelEvent::MessageChanged {
+                    channel_id,
+                    actor: actor.clone(),
+                    message,
+                    recipients: participant_ids(&channel_participants),
+                    nonce: nonce.clone(),
+                    posted_notification: None,
+                });
+            }
         }
 
         if let Some(content) = content.as_ref() {

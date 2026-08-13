@@ -284,6 +284,7 @@ fn context_message(
 ) -> ChannelContextMessage {
     let now = Utc::now();
     ChannelContextMessage {
+        suppressed_preview_urls: vec![],
         id,
         channel_id,
         thread_id: None,
@@ -301,6 +302,7 @@ fn context_message(
 fn thread_reply(id: Uuid, sender_id: &str, content: &str) -> ThreadReply {
     let now = Utc::now();
     ThreadReply {
+        suppressed_preview_urls: vec![],
         id,
         sender_id: sender_id.to_string(),
         bot_profile: None,
@@ -335,6 +337,7 @@ fn mention_event(
             edited_at: None,
             deleted_at: None,
             triggered_by: None,
+            suppressed_preview_urls: vec![],
         },
         reply_thread_id: thread_id.unwrap_or(trigger_id),
         requesting_user: user_id(sender_email),

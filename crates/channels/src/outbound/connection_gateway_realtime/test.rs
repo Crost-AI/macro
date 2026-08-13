@@ -6,6 +6,7 @@ use chrono::Utc;
 fn message(sender_id: Sender) -> MutatedMessage {
     let now = Utc::now();
     MutatedMessage {
+        suppressed_preview_urls: vec![],
         id: Uuid::new_v4(),
         channel_id: Uuid::new_v4(),
         thread_id: None,

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            UPDATE comms_messages\n            SET\n                updated_at = NOW(),\n                edited_at = NOW(),\n                deleted_at = CASE\n                    WHEN $2 = false AND (content IS NULL OR content ~ '^[\\s]*$') THEN NOW()\n                    ELSE deleted_at\n                END\n            WHERE id = $1\n            RETURNING\n                id,\n                channel_id,\n                sender_id,\n                triggered_by_user_id,\n                content,\n                created_at,\n                updated_at,\n                thread_id,\n                edited_at::timestamptz AS \"edited_at?\",\n                deleted_at::timestamptz AS \"deleted_at?\"\n            ",
+  "query": "\n            UPDATE comms_messages\n            SET content = $1, updated_at = NOW(), edited_at = NOW()\n            WHERE id = $2 AND channel_id = $3\n            RETURNING\n                id,\n                channel_id,\n                sender_id,\n                triggered_by_user_id,\n                content,\n                created_at,\n                updated_at,\n                thread_id,\n                edited_at::timestamptz AS \"edited_at?\",\n                deleted_at::timestamptz AS \"deleted_at?\",\n                suppressed_preview_urls\n            ",
   "describe": {
     "columns": [
       {
@@ -52,12 +52,18 @@
         "ordinal": 9,
         "name": "deleted_at?",
         "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 10,
+        "name": "suppressed_preview_urls",
+        "type_info": "TextArray"
       }
     ],
     "parameters": {
       "Left": [
+        "Text",
         "Uuid",
-        "Bool"
+        "Uuid"
       ]
     },
     "nullable": [
@@ -70,8 +76,9 @@
       false,
       true,
       null,
-      null
+      null,
+      false
     ]
   },
-  "hash": "256ccfc280aaca7d1eff2bd993b29d29e94abe7ec9ad2574d53e138413e049cd"
+  "hash": "06601012e49e0d20d7adf9f58732ca10c5e1c422896a90363feb5c47342b0581"
 }

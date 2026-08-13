@@ -9,6 +9,7 @@ import type { PatchMessageRequestAttachmentsToAdd } from './patchMessageRequestA
 import type { PatchMessageRequestContent } from './patchMessageRequestContent';
 import type { PatchMessageRequestMentions } from './patchMessageRequestMentions';
 import type { PatchMessageRequestNonce } from './patchMessageRequestNonce';
+import type { PatchMessageRequestSuppressedPreviewUrls } from './patchMessageRequestSuppressedPreviewUrls';
 
 /**
  * Request to patch a channel message.
@@ -24,4 +25,7 @@ export interface PatchMessageRequest {
   mentions?: PatchMessageRequestMentions;
   /** Optional optimistic-update nonce. */
   nonce?: PatchMessageRequestNonce;
+  /** Optional replacement set of link-preview URLs removed from the
+message ("remove preview"); `None` leaves it unchanged. */
+  suppressed_preview_urls?: PatchMessageRequestSuppressedPreviewUrls;
 }

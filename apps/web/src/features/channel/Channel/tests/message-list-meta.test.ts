@@ -18,6 +18,7 @@ function createMessage(
     updated_at: createdAt,
     sender,
     sender_id: senderId,
+    suppressed_preview_urls: [],
     attachments: [],
     reactions: [],
     thread: {

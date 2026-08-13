@@ -139,6 +139,7 @@ function makeOptimisticTopLevelMessage(
     updated_at: now,
     deleted_at: undefined,
     edited_at: undefined,
+    suppressed_preview_urls: [],
     attachments,
     reactions: [],
     thread: {
@@ -162,6 +163,7 @@ function makeOptimisticThreadReply(
     created_at: now,
     updated_at: now,
     edited_at: undefined,
+    suppressed_preview_urls: [],
     attachments,
     reactions: [],
   };
@@ -404,6 +406,59 @@ export function rollbackUpdateChannelMessage(
     updatedAt: normalizeDateValue(context.previousUpdatedAt) ?? '',
     attachments: context.previousAttachments,
   });
+}
+
+type SuppressLinkPreviewParams = {
+  channelID: string;
+  messageID: string;
+  /** Replacement set of suppressed preview URLs for the message. */
+  suppressedPreviewUrls: string[];
+};
+
+/**
+ * Mutation to remove link previews from a message for every participant
+ * (sender-only; Slack's "remove preview"). The caller is expected to hide the
+ * preview locally for instant feedback and undo on error.
+ */
+export function useSuppressLinkPreviewMutation(
+  callbacks?: MutationCallbacks<
+    MessageResponse,
+    Error,
+    SuppressLinkPreviewParams,
+    void
+  >
+) {
+  return useMutation(() => ({
+    gcTime: 0,
+    mutationFn: async (vars: SuppressLinkPreviewParams) => {
+      return await throwOnErr(
+        async () =>
+          await storageServiceClient.patchMessage({
+            channel_id: vars.channelID,
+            message_id: vars.messageID,
+            suppressed_preview_urls: vars.suppressedPreviewUrls,
+          })
+      );
+    },
+    ...withCallbacks<MessageResponse, Error, SuppressLinkPreviewParams, void>(
+      {
+        onError(error) {
+          console.error('failed to remove link preview', error);
+          toast.failure('Failed to remove link preview');
+        },
+        onSettled: (_data, _error, vars) => {
+          softInvalidateTargetCaches(
+            vars.channelID,
+            resolveMessageTarget({
+              channelId: vars.channelID,
+              messageId: vars.messageID,
+            })
+          );
+        },
+      },
+      callbacks
+    ),
+  }));
 }
 
 type SendMessageParams = {

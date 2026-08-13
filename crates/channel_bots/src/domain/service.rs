@@ -307,6 +307,7 @@ where
                     mentions: None,
                     attachment_ids_to_delete: None,
                     attachments_to_add: None,
+                    suppressed_preview_urls: None,
                     nonce: None,
                     notification_policy: PatchMessageNotificationPolicy::NotifyAsPostedMessage,
                 },

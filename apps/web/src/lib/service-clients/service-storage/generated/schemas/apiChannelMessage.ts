@@ -36,6 +36,8 @@ export interface ApiChannelMessage {
   sender: ApiMessageSender;
   /** Sender user id. */
   sender_id: string;
+  /** Link-preview URLs the sender removed from this message. */
+  suppressed_preview_urls: string[];
   /** Thread metadata and preview. */
   thread: ApiThreadInfo;
   /** When the message was last updated. */

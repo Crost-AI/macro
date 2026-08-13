@@ -16,6 +16,7 @@ function legacyMessage(
     content: 'hello',
     created_at: '2026-05-28T10:00:00.000Z',
     updated_at: '2026-05-28T10:00:00.000Z',
+    suppressed_preview_urls: [],
     attachments: [],
     reactions: [],
     thread: {
@@ -26,6 +27,7 @@ function legacyMessage(
           content: 'reply',
           created_at: '2026-05-28T10:01:00.000Z',
           updated_at: '2026-05-28T10:01:00.000Z',
+          suppressed_preview_urls: [],
           attachments: [],
           reactions: [],
         },

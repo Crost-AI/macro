@@ -348,6 +348,8 @@ export function replaceTopLevelMessageStateInChannelMessages(
     editedAt: string | null | undefined;
     updatedAt: string;
     attachments: ApiMessageAttachment[];
+    /** Omitted = leave the message's suppressed previews unchanged. */
+    suppressedPreviewUrls?: string[];
   }
 ): ChannelMessagesData | undefined {
   if (!data) return data;
@@ -360,6 +362,8 @@ export function replaceTopLevelMessageStateInChannelMessages(
           edited_at: nextState.editedAt ?? undefined,
           updated_at: nextState.updatedAt,
           attachments: nextState.attachments,
+          suppressed_preview_urls:
+            nextState.suppressedPreviewUrls ?? message.suppressed_preview_urls,
         }
       : message
   );
@@ -534,6 +538,8 @@ export function replaceThreadReplyStateInChannelMessages(
     editedAt: string | null | undefined;
     updatedAt: string;
     attachments: ApiMessageAttachment[];
+    /** Omitted = leave the reply's suppressed previews unchanged. */
+    suppressedPreviewUrls?: string[];
   }
 ): ChannelMessagesData | undefined {
   if (!data) return data;
@@ -550,6 +556,8 @@ export function replaceThreadReplyStateInChannelMessages(
         edited_at: nextState.editedAt ?? undefined,
         updated_at: nextState.updatedAt,
         attachments: nextState.attachments,
+        suppressed_preview_urls:
+          nextState.suppressedPreviewUrls ?? reply.suppressed_preview_urls,
       };
     });
 
@@ -740,6 +748,8 @@ export function replaceTopLevelMessageStateInChannelMessagesByIds(
     editedAt: string | null | undefined;
     updatedAt: string;
     attachments: ApiMessageAttachment[];
+    /** Omitted = leave the message's suppressed previews unchanged. */
+    suppressedPreviewUrls?: string[];
   }
 ): ApiChannelMessage[] | undefined {
   if (!data) return data;
@@ -751,6 +761,8 @@ export function replaceTopLevelMessageStateInChannelMessagesByIds(
           edited_at: nextState.editedAt ?? undefined,
           updated_at: nextState.updatedAt,
           attachments: nextState.attachments,
+          suppressed_preview_urls:
+            nextState.suppressedPreviewUrls ?? message.suppressed_preview_urls,
         }
       : message
   );

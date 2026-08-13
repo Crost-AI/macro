@@ -317,6 +317,10 @@ export type ApiChannelContextMessage = {
      */
     sender_id: string;
     /**
+     * Link-preview URLs the sender removed from this message.
+     */
+    suppressed_preview_urls: Array<string>;
+    /**
      * Parent thread id for replies.
      */
     thread_id?: string | null;
@@ -482,6 +486,10 @@ export type ApiChannelMessage = {
      * Sender user id.
      */
     sender_id: string;
+    /**
+     * Link-preview URLs the sender removed from this message.
+     */
+    suppressed_preview_urls: Array<string>;
     /**
      * Thread metadata and preview.
      */
@@ -895,6 +903,10 @@ export type ApiThreadReply = {
      * Sender user id.
      */
     sender_id: string;
+    /**
+     * Link-preview URLs the sender removed from this reply.
+     */
+    suppressed_preview_urls: Array<string>;
     /**
      * When the reply was last updated.
      */
@@ -5527,6 +5539,11 @@ export type PatchMessageRequest = {
      * Optional optimistic-update nonce.
      */
     nonce?: string | null;
+    /**
+     * Optional replacement set of link-preview URLs removed from the
+     * message ("remove preview"); `None` leaves it unchanged.
+     */
+    suppressed_preview_urls?: Array<string> | null;
 };
 
 export type PatchProjectRequestV2 = {

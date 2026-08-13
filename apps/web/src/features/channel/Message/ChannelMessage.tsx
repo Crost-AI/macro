@@ -66,11 +66,15 @@ function MessageContentSlot(props: {
   );
 }
 
-function MessageFooter(props: { messageEditor?: MessageEditor }) {
+function MessageFooter(props: {
+  channelId: string;
+  messageEditor?: MessageEditor;
+}) {
   const message = useMessage();
 
   return (
     <Show when={!isEditingMessage(props.messageEditor, message().id)}>
+      <Message.LinkPreviews channelId={props.channelId} />
       <Message.Attachments />
       <Message.Reactions />
     </Show>
@@ -155,7 +159,10 @@ function RegularMessageLayout(props: {
         placement="footer"
         class="ph-no-capture flex flex-col min-w-0"
       >
-        <MessageFooter messageEditor={props.messageEditor} />
+        <MessageFooter
+          channelId={props.channelId}
+          messageEditor={props.messageEditor}
+        />
       </Message.Slot>
       <MessageActionsSlot messageEditor={props.messageEditor} />
     </Message.Layout>
@@ -188,7 +195,10 @@ function GroupedMessageLayout(props: {
         placement="footer"
         class="ph-no-capture flex flex-col min-w-0"
       >
-        <MessageFooter messageEditor={props.messageEditor} />
+        <MessageFooter
+          channelId={props.channelId}
+          messageEditor={props.messageEditor}
+        />
       </Message.Slot>
       <MessageActionsSlot messageEditor={props.messageEditor} />
     </Message.Layout>

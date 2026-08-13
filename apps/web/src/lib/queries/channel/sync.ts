@@ -94,6 +94,7 @@ export function handleCommsMessage(payload: CommsMessagePayload): void {
             editedAt: payload.edited_at,
             updatedAt: payload.updated_at,
             attachments: existingState.attachments,
+            suppressedPreviewUrls: payload.suppressed_preview_urls,
           });
         } else if (target.kind === 'thread_reply') {
           const reply: ApiThreadReply = {
@@ -104,6 +105,7 @@ export function handleCommsMessage(payload: CommsMessagePayload): void {
             created_at: payload.created_at,
             updated_at: payload.updated_at,
             edited_at: payload.edited_at,
+            suppressed_preview_urls: payload.suppressed_preview_urls ?? [],
             attachments: [],
             reactions: [],
           };
@@ -118,6 +120,7 @@ export function handleCommsMessage(payload: CommsMessagePayload): void {
             created_at: payload.created_at,
             updated_at: payload.updated_at,
             edited_at: payload.edited_at,
+            suppressed_preview_urls: payload.suppressed_preview_urls ?? [],
             attachments: [],
             reactions: [],
             thread: {

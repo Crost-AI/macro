@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT\n                id,\n                channel_id,\n                thread_id,\n                sender_id,\n                triggered_by_user_id,\n                content,\n                created_at,\n                updated_at,\n                edited_at::timestamptz AS \"edited_at?\",\n                deleted_at::timestamptz AS \"deleted_at?\"\n            FROM comms_messages\n            WHERE id = $1 AND channel_id = $2\n            ",
+  "query": "\n            SELECT\n                id,\n                thread_id AS \"thread_id!\",\n                sender_id,\n                triggered_by_user_id,\n                content,\n                created_at,\n                updated_at,\n                edited_at::timestamptz AS \"edited_at?\",\n                suppressed_preview_urls\n            FROM comms_messages\n            WHERE thread_id = $1\n              AND deleted_at IS NULL\n            ORDER BY created_at ASC, id ASC\n            ",
   "describe": {
     "columns": [
       {
@@ -10,58 +10,51 @@
       },
       {
         "ordinal": 1,
-        "name": "channel_id",
+        "name": "thread_id!",
         "type_info": "Uuid"
       },
       {
         "ordinal": 2,
-        "name": "thread_id",
-        "type_info": "Uuid"
-      },
-      {
-        "ordinal": 3,
         "name": "sender_id",
         "type_info": "Text"
       },
       {
-        "ordinal": 4,
+        "ordinal": 3,
         "name": "triggered_by_user_id",
         "type_info": "Text"
       },
       {
-        "ordinal": 5,
+        "ordinal": 4,
         "name": "content",
         "type_info": "Text"
       },
       {
-        "ordinal": 6,
+        "ordinal": 5,
         "name": "created_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 7,
+        "ordinal": 6,
         "name": "updated_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 8,
+        "ordinal": 7,
         "name": "edited_at?",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 9,
-        "name": "deleted_at?",
-        "type_info": "Timestamptz"
+        "ordinal": 8,
+        "name": "suppressed_preview_urls",
+        "type_info": "TextArray"
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid",
         "Uuid"
       ]
     },
     "nullable": [
-      false,
       false,
       true,
       false,
@@ -70,8 +63,8 @@
       false,
       false,
       null,
-      null
+      false
     ]
   },
-  "hash": "d82d977779927364228d9652cd1958df1fa31ba45ef06790f540139098e3d10f"
+  "hash": "01738f001534b71871949bb24e7bd8b7812a1f1acdf51de8352676d3b9db717b"
 }
