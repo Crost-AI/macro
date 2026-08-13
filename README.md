@@ -260,7 +260,7 @@ Macro is fully open source — not "open core" — under the GNU Affero General 
 
 Macro is dual licensed. You can run, modify, and self-host it under the AGPLv3 at no cost; the [FAQ](https://docs.macro.com/faq) covers what self-hosting involves. Companies that can't work within the AGPLv3's reciprocity terms — building a proprietary product on top of Macro, embedding it, reselling it — can buy a commercial license instead: [licensing@macro.com](mailto:licensing@macro.com). For managed hosting or commercial arrangements, contact [self-host@macro.com](mailto:self-host@macro.com).
 
-[LICENSING.md](LICENSING.md) has the whole picture: which license applies to you, why contributions need a [CLA](CLA.md), and what we commit to in exchange — Macro stays AGPLv3, nothing moves into a proprietary edition, and a permissive release if we ever stop developing it as open source.
+[LICENSING.md](LICENSING.md) has the whole picture: which license applies to you, why contributions need a [CLA](CLA.md), and what we commit to in exchange — Macro stays AGPLv3, and nothing moves into a proprietary edition.
 
 <br />
 
@@ -272,7 +272,7 @@ Have an idea, want to contribute, or want to work on Macro?
 - Contributions: see our [contribution guidelines](CONTRIBUTING.md) and sign the [CLA](CLA.md)
 - Hiring: [teo@macro.com](mailto:teo@macro.com)
 
-Commercial licenses and hosted Macro are what fund the open side: bounties on community-reported issues, grants for sustained contributors, paid maintainer time on outside PRs, self-hosting as a first-class target, and sponsorship of the upstream projects Macro is built on. We publish the totals once a year — see [reinvesting commercial revenue in the community](LICENSING.md#reinvesting-commercial-revenue-in-the-community).
+Commercial licenses and hosted Macro are what fund the open side. We reinvest that revenue back into Macro as an open source project and into the community around it — see [reinvesting commercial revenue in the community](LICENSING.md#reinvesting-commercial-revenue-in-the-community).
 
 <br />
 

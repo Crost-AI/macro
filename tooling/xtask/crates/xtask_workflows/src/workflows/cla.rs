@@ -2,10 +2,12 @@
 //! License Agreement.
 //!
 //! Contributors sign by commenting on their PR; the action records the
-//! signature (GitHub username, comment id, timestamp, CLA version) in
-//! `macro-inc/cla-signatures` so this repository's history stays clean. See
-//! `CLA.md`, `CLA-ENTITY.md`, and `LICENSING.md` for the documents themselves,
-//! and `docs/CLA_OPERATIONS.md` for the one-time setup and day-to-day handling.
+//! signature (GitHub username, comment id, timestamp, CLA version) on the
+//! orphan `cla-signatures` branch of this repository, which keeps signature
+//! commits out of `main` without needing a second repository or a PAT — the
+//! default `GITHUB_TOKEN` can push to an unprotected branch. See `CLA.md`,
+//! `CLA-ENTITY.md`, and `LICENSING.md` for the documents themselves, and
+//! `docs/CLA_OPERATIONS.md` for setup and day-to-day handling.
 //!
 //! Uses `pull_request_target` rather than `pull_request` because a fork PR needs
 //! write access to comment and to set a status. Nothing here checks out or runs
@@ -25,11 +27,9 @@ const CLA_ACTION_SHA: &str = "ca4a40a7d1004f18d9960b404b97e5f30a505a08";
 /// "How to sign" section of `CLA.md`.
 const SIGN_SENTENCE: &str = "I have read the CLA Document and I hereby sign the CLA";
 
-/// Repository holding the signature file, so signing does not commit to this
-/// repo. Requires the `CLA_SIGNATURES_TOKEN` secret (a PAT with `repo` scope on
-/// it).
-const SIGNATURES_ORG: &str = "macro-inc";
-const SIGNATURES_REPO: &str = "cla-signatures";
+/// Branch holding the signature file. Must stay unprotected so the default
+/// `GITHUB_TOKEN` can commit signatures to it.
+const SIGNATURES_BRANCH: &str = "cla-signatures";
 
 /// Build the workflow.
 pub fn cla() -> Workflow {
@@ -61,7 +61,8 @@ fn cla_job() -> Job {
         .permissions(Permissions {
             // `actions: write` lets the action re-run itself after a signature.
             actions: Some(Level::Write),
-            contents: Some(Level::Read),
+            // Commits the signature file to the `cla-signatures` branch.
+            contents: Some(Level::Write),
             issues: Some(Level::Write),
             pull_requests: Some(Level::Write),
             statuses: Some(Level::Write),
@@ -74,20 +75,13 @@ fn cla_step() -> Step<gh_workflow::Use> {
     Step::new("Check CLA signature")
         .uses("contributor-assistant", "github-action", CLA_ACTION_SHA)
         .add_env(("GITHUB_TOKEN", "${{ secrets.GITHUB_TOKEN }}"))
-        .add_env((
-            "PERSONAL_ACCESS_TOKEN",
-            "${{ secrets.CLA_SIGNATURES_TOKEN }}",
-        ))
         .add_with(("path-to-signatures", "signatures/v1/cla.json"))
         .add_with((
             "path-to-document",
             "https://github.com/macro-inc/macro/blob/main/CLA.md",
         ))
-        .add_with(("branch", "main"))
-        .add_with(("remote-organization-name", SIGNATURES_ORG))
-        .add_with(("remote-repository-name", SIGNATURES_REPO))
-        // Bots cannot agree to anything. Macro employees contribute under their
-        // employment agreements; add their usernames here to skip the check.
+        .add_with(("branch", SIGNATURES_BRANCH))
+        // Bots cannot agree to anything.
         .add_with(("allowlist", "*[bot]"))
         .add_with(("custom-pr-sign-comment", SIGN_SENTENCE))
         // Contributors keep their own copyright, so leave merged PRs unlocked.

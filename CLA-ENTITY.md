@@ -27,10 +27,11 @@ numbered sections below are what the Entity is agreeing to.
 Thank you for your interest in contributing to Macro. This Contributor License
 Agreement ("**Agreement**") documents the rights granted by the entity
 identified in the signature block below ("**You**", "**Your**", the
-"**Entity**") to Macro, Inc. ("**Macro**", "**we**", "**us**").
+"**Entity**") to Coparse Inc, doing business as Macro ("**Macro**", "**we**",
+"**us**").
 
 By accepting this Agreement, You accept and agree to the following terms and
-conditions for Your present and future Contributions submitted to Macro. Except
+conditions for Your present and future Contributions Submitted to Macro. Except
 for the licenses granted in this Agreement to Macro and to recipients of
 software distributed by Macro, You reserve all right, title, and interest in and
 to Your Contributions.
@@ -218,9 +219,12 @@ version applies only to Contributions Submitted after You accept it.
 ## How to sign
 
 Email [legal@macro.com](mailto:legal@macro.com) with the completed signature
-block and Schedule A below. We countersign and record the agreement, and add
-your Designated Contributors to the CLA bot's allowlist so their pull requests
-pass the CLA check.
+block and Schedule A below. We countersign and record the agreement.
+
+Your Designated Contributors should also sign the
+[individual CLA](CLA.md) on their first pull request, which is how the CLA check
+on that pull request passes. The two grants overlap, harmlessly — this Agreement
+is what covers the Entity's rights in the work.
 
 ```
 Entity name:      ______________________________________________

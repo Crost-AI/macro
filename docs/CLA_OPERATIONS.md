@@ -19,60 +19,57 @@ I have read the CLA Document and I hereby sign the CLA
 ```
 
 The action then records the signature — GitHub username, user id, comment id,
-timestamp, and pull request number — in `signatures/v1/cla.json` in the
-`macro-inc/cla-signatures` repository, and re-runs the check. A signature covers
-all of that contributor's future pull requests. Commenting `recheck` re-runs the
-check without signing.
+timestamp, and pull request number — in `signatures/v1/cla.json` on the
+`cla-signatures` branch of this repository, and re-runs the check. A signature
+covers all of that contributor's future pull requests. Commenting `recheck`
+re-runs the check without signing.
 
-Signatures live in a separate repository so signing does not add commits to
-`macro-inc/macro`, and so signature history is auditable on its own.
+Signatures live on their own branch so signing does not add commits to `main`.
+That branch is also why no token or second repository is involved: the default
+`GITHUB_TOKEN` can commit to an unprotected branch, so there is no PAT to create
+or rotate.
+
+`CONTRIBUTING.md` also states that opening a pull request constitutes agreement
+to the CLA. That is a backstop for the gap between opening a PR and the bot
+recording a signature — not a replacement for the recorded signature, which is
+the thing that is actually worth having.
 
 ## One-time setup
 
-Do these in order. Until all three are done the check will fail for everyone,
-so do them in one sitting.
+1. **Create the `cla-signatures` branch.** An orphan branch with a single commit
+   is ideal, so it carries no code:
 
-1. **Create the signature store.** A repository named
-   `macro-inc/cla-signatures` with a `main` branch and at least one commit (an
-   empty `README.md` is enough). Private is fine — the action writes to it with
-   a token, and nothing public needs to read it. Do not add branch protection
-   that blocks direct pushes to `main`; the action commits straight to it.
+   ```sh
+   git checkout --orphan cla-signatures
+   git rm -rf . >/dev/null
+   printf 'CLA signatures recorded by the CLA workflow. Do not edit by hand.\n' > README.md
+   git add README.md && git commit -m 'chore(cla): initialize signature branch'
+   git push -u origin cla-signatures
+   git checkout main
+   ```
 
-2. **Add the `CLA_SIGNATURES_TOKEN` secret** to `macro-inc/macro` (Settings →
-   Secrets and variables → Actions). It needs to be a token that can push to
-   `macro-inc/cla-signatures`:
-   - A fine-grained PAT scoped to `macro-inc/cla-signatures` with
-     **Contents: Read and write**, or
-   - a classic PAT with `repo` scope.
+   Leave it unprotected — the action commits directly to it.
 
-   Use a machine account rather than a personal one if you can, so the
-   signature commits are not attributed to whoever happened to create the token
-   and the check does not break when someone leaves. Note the expiry date
-   somewhere — an expired token fails every PR.
-
-3. **Make the check required.** Settings → Branches → branch protection for
+2. **Make the check required.** Settings → Branches → branch protection for
    `main` → require the `CLA Assistant` status check. Without this the check is
    advisory and an unsigned PR can still be merged.
 
 ## Day-to-day
 
 **Someone contributes on behalf of a company.** Point them at
-[`CLA-ENTITY.md`](../CLA-ENTITY.md) and have them email `legal@macro.com`. Once
-the entity agreement is countersigned, add each Designated Contributor's GitHub
-username to the `allowlist` input in `cla.rs` — their individual signature is
-not needed because the entity's grant already covers them — and regenerate with
-`cargo x workflows`. Keep the countersigned agreement and its Schedule A
-somewhere durable; the allowlist is a bot configuration, not a record.
+[`CLA-ENTITY.md`](../CLA-ENTITY.md) and have them email `legal@macro.com`. Keep
+the countersigned agreement and its Schedule A somewhere durable. Their people
+can still sign individually on their PRs; the two grants overlap harmlessly, and
+an entity grant plus an individual signature is a stronger record than either
+alone.
 
 **Macro employees.** Employee contributions are covered by their employment
-agreements, so they do not need to sign. They are not allowlisted by default:
-add usernames to the `allowlist` input in `cla.rs` if the check becomes noisy
-for internal PRs. Verify against the employment paperwork before allowlisting
-anyone — an allowlist entry is a decision that Macro already holds the rights,
-and it is the one place in this system where a wrong entry silently loses a
-grant.
+agreements, but the check applies to them too and signing is a one-time comment,
+so leave it that way. Allowlisting a person is a standing assertion that Macro
+already holds the rights to their work, and a wrong entry there silently loses a
+grant — not worth it to save one comment.
 
-**Bots.** Covered by the `*[bot]` allowlist entry.
+**Bots.** Covered by the `*[bot]` allowlist entry in `cla.rs`.
 
 **A contributor asks to withdraw.** They cannot revoke the license already
 granted for contributions we have merged (Section 2 of the CLA is irrevocable),

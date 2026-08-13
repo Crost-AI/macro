@@ -104,50 +104,21 @@ the CLA, and we hold ourselves to them publicly.
 2. **Nothing gets held back.** We will not move features out of this repository
    into a proprietary edition. If we ship it, it is here.
 
-3. **No rug pull.** If Macro, Inc. ever stops developing and distributing Macro
-   as open source — through acquisition, wind-down, or a change of strategy — we
-   will release the then-current codebase under the Apache License 2.0 so the
-   community can carry it forward without us. We will require any successor to
-   the copyrights in this project to honor commitments 1 and 3.
-
-4. **Your work stays yours.** You keep your copyright. We maintain contributor
+3. **Your work stays yours.** You keep your copyright. We maintain contributor
    attribution in the git history and credit substantive contributions in
    release notes.
 
-5. **We say what changed.** Any future version of the CLA, and any material
+4. **We say what changed.** Any future version of the CLA, and any material
    change to this document, ships as a pull request in this repository with the
    reasoning in the description — not as a quiet edit.
 
 ## Reinvesting commercial revenue in the community
 
 Dual licensing only works as a bargain if the commercial side funds the open
-side. Concretely, revenue from commercial licenses and hosted Macro pays for:
-
-- **Paid work on community-reported issues.** We fund bounties on issues labeled
-  `bounty`, sized by scope and impact, alongside the security bounties we
-  already pay for reports to
-  [security@macro.com](mailto:security@macro.com).
-- **Grants for sustained contributors.** Direct grants and sponsorships for
-  people doing ongoing work on Macro — maintaining a subsystem, a client, a
-  packaging target — so that the work does not have to be a hobby.
-- **Paid maintainer time on the community.** Macro engineers are allocated time
-  for code review, issue triage, and self-hosting support as part of their job,
-  not as an after-hours favor. Review latency on outside pull requests is
-  something we measure.
-- **Self-hosting as a first-class target.** Documentation, container images,
-  migrations, and release engineering for self-hosters get funded even though
-  self-hosters are, by design, not paying us.
-- **Upstream dependencies.** We sponsor the open source projects Macro is built
-  on. We are a Rust and SolidJS product standing on a lot of volunteer work, and
-  we intend to pay into that ecosystem rather than only draw from it.
-- **Free access for the people who build it.** Contributors get hosted Macro at
-  no charge, and we keep free and discounted plans for open source projects,
-  nonprofits, and students.
-
-We publish what this added up to once a year: what we spent on bounties, grants,
-and upstream sponsorship, and where it went. If the commercial side of Macro
-grows, the community side grows with it — that is the point of the arrangement,
-and an annual number is how you hold us to it.
+side. We reinvest revenue from commercial licenses and hosted Macro back into
+Macro as an open source project and into the community around it. There is no
+separate proprietary product for that money to disappear into — it pays for the
+same codebase everyone else runs.
 
 ## Contact
 

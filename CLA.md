@@ -31,7 +31,8 @@ assignment, is explained in [LICENSING.md](LICENSING.md#why-we-ask-for-a-cla).
 
 Thank you for your interest in contributing to Macro. This Contributor License
 Agreement ("**Agreement**") documents the rights granted by contributors to
-Macro, Inc. ("**Macro**", "**we**", "**us**"). It protects You as a
+Coparse Inc, doing business as Macro ("**Macro**", "**we**", "**us**"). It
+protects You as a
 contributor, as well as Macro and the users of the Project, by making the
 licensing of contributions explicit. It does not change Your right to use Your
 own Contributions for any other purpose.
@@ -224,8 +225,9 @@ that time.
 Open a pull request against a Macro repository. Our CLA bot will comment on
 your first pull request with a link and instructions; accepting takes one
 comment and applies to all of your future contributions. Your acceptance is
-recorded, with the version of this Agreement you accepted, in
-[macro-inc/cla-signatures](https://github.com/macro-inc/cla-signatures).
+recorded, with the version of this Agreement you accepted, on the
+`cla-signatures` branch of
+[macro-inc/macro](https://github.com/macro-inc/macro/tree/cla-signatures).
 
 If you would rather sign offline, or if you are signing on behalf of an
 organization, email [legal@macro.com](mailto:legal@macro.com).

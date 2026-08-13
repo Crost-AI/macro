@@ -75,18 +75,21 @@ do that with your permission. So we ask contributors to sign a CLA:
 **How to sign.** Open your pull request as usual. Our CLA bot comments on it
 with a link and instructions; you accept by leaving one comment. It's a one-time
 thing that covers all your future contributions, and the check turns green
-within a minute or so. Signatures are recorded in
-[macro-inc/cla-signatures](https://github.com/macro-inc/cla-signatures).
+within a minute or so. Signatures are recorded on this repository's
+[`cla-signatures` branch](https://github.com/macro-inc/macro/tree/cla-signatures).
 
 **What it does and doesn't do.** You keep the copyright in your work and can
 reuse it anywhere, under any license, without asking us — it's a license grant,
 not an assignment. What you're granting is the right to relicense your
 contribution, including under proprietary terms. We'd rather say that plainly
-than hide it. What we commit to in return — Macro stays AGPLv3, nothing gets
-moved into a proprietary edition, and a permissive release if we ever stop
-maintaining it as open source — is written down in
+than hide it. What we commit to in return — Macro stays AGPLv3, and nothing gets
+moved into a proprietary edition — is written down in
 [LICENSING.md](LICENSING.md#what-we-commit-to), along with how commercial
-revenue gets reinvested in the community.
+revenue gets reinvested in the project and community.
+
+By opening a pull request against this repository you agree to the terms of the
+CLA for the contributions in it, whether or not the bot has recorded your
+signature yet.
 
 Not everything needs a CLA. Bug reports, reproductions, design feedback, and
 discussion don't — only contributions of copyrightable work do.
