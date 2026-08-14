@@ -94,7 +94,11 @@ const FavoritePopoverRow = (props: {
  * dismissable layers) fight nested context menus — a plain panel below the
  * context menu's z-modal layer behaves like the old sidebar rows did.
  */
-export const RailFavoritesMenu = (props: { class?: string }) => {
+export const RailFavoritesMenu = (props: {
+  class?: string;
+  /** Extra tooltip suppression (e.g. while any rail context menu is open). */
+  tooltipDisabled?: () => boolean;
+}) => {
   // Non-suspending accessor: a pending or failed favorites query must not
   // take the rail down; the panel just shows its empty state until loaded.
   const favoritesData = useFavoritesData();
@@ -132,7 +136,9 @@ export const RailFavoritesMenu = (props: { class?: string }) => {
         class={props.class}
         label="Favorites"
         tooltipPlacement="right"
-        tooltipDisabled={open()}
+        tooltipDisabled={
+          open() || contextMenuOpen() || props.tooltipDisabled?.()
+        }
         onMouseDown={(e: MouseEvent) => {
           if (e.button !== 0) return;
           e.preventDefault();

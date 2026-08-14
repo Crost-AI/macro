@@ -149,6 +149,17 @@ const [hiddenRailLinks, setHiddenRailLinks] = makePersisted(
   { name: 'rail-hidden-links' }
 );
 
+/**
+ * How many rail context menus (per-icon or rail background) are open. Counted
+ * rather than a boolean because closing one menu can overlap opening another;
+ * tooltips render above menus (z-tool-tip > z-modal), so every rail tooltip
+ * is suppressed while any of these menus is up.
+ */
+const [openRailContextMenus, setOpenRailContextMenus] = createSignal(0);
+const trackRailContextMenu = (open: boolean) =>
+  setOpenRailContextMenus((count) => Math.max(0, count + (open ? 1 : -1)));
+const anyRailContextMenuOpen = () => openRailContextMenus() > 0;
+
 const RailLinkButton = (props: {
   link: RailLink;
   /** Unread count shown as a corner badge when > 0. */
@@ -194,7 +205,7 @@ const RailLinkButton = (props: {
   };
 
   return (
-    <ContextMenu>
+    <ContextMenu onOpenChange={trackRailContextMenu}>
       <ContextMenu.Trigger
         class="shrink-0"
         onContextMenu={(e: MouseEvent) => e.stopPropagation()}
@@ -210,6 +221,7 @@ const RailLinkButton = (props: {
           )}
           label={`Go to ${props.link.label}`}
           tooltipPlacement="right"
+          tooltipDisabled={anyRailContextMenuOpen()}
           hotkey={
             props.link.standaloneHotkey
               ? props.link.hotkeyToken
@@ -343,7 +355,7 @@ export const IconRailSidebar = (props: IconRailSidebarProps) => {
     <Show when={isVisible()}>
       {/* Right-clicking rail whitespace offers the sidebar-wide reset; the
           per-icon menus stop propagation so they never stack on top of it. */}
-      <ContextMenu>
+      <ContextMenu onOpenChange={trackRailContextMenu}>
         <ContextMenu.Trigger
           as="div"
           class={cn(
@@ -379,6 +391,7 @@ export const IconRailSidebar = (props: IconRailSidebarProps) => {
           <RailFavoritesMenu
             // Phosphor glyphs fill ~80% of their viewBox; bump to match.
             class={cn(RAIL_BUTTON_BASE, '[&_svg]:size-6')}
+            tooltipDisabled={anyRailContextMenuOpen}
           />
           <Button
             variant="ghost"
@@ -391,6 +404,7 @@ export const IconRailSidebar = (props: IconRailSidebarProps) => {
             )}
             label="Settings"
             tooltipPlacement="right"
+            tooltipDisabled={anyRailContextMenuOpen()}
             hotkey={TOKENS.global.toggleSettings}
             onMouseDown={(e: MouseEvent) => {
               if (e.button !== 0) return;

@@ -76,7 +76,8 @@ export function useRailBadgeCounts() {
       ).length;
       if (unreadStacks === 0) continue;
       counts.inbox = (counts.inbox ?? 0) + unreadStacks;
-      if (isEmailEntity(entity)) counts.mail = (counts.mail ?? 0) + unreadStacks;
+      if (isEmailEntity(entity))
+        counts.mail = (counts.mail ?? 0) + unreadStacks;
     }
 
     for (const [entityKey, notifications] of Object.entries(

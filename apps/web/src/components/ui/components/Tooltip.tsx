@@ -93,11 +93,19 @@ export function Tooltip(props: TooltipProps) {
 
   onCleanup(() => setOpen(false));
 
+  // `disabled` must win over the controlled open state: Kobalte's open-delay
+  // timer is armed on hover, so a tooltip disabled mid-delay (e.g. a context
+  // menu opened before the delay elapsed) still fires onOpenChange(true).
+  // Gating both the accepted state and the rendered state keeps a disabled
+  // tooltip from ever showing, and closes one that was already visible.
+  const isDisabled = () => props.disabled || !tooltipsEnabled();
+  const isOpen = () => open() && !isDisabled();
+
   return (
     <KobalteTooltip
-      open={open()}
+      open={isOpen()}
       onOpenChange={(isOpen) => {
-        setOpen(isOpen);
+        setOpen(isOpen && !isDisabled());
       }}
       placement={props.placement ?? 'bottom'}
       ignoreSafeArea={true}
@@ -107,7 +115,7 @@ export function Tooltip(props: TooltipProps) {
       closeDelay={0}
       flip={true}
       gutter={4}
-      disabled={props.disabled || !tooltipsEnabled()}
+      disabled={isDisabled()}
     >
       <KobalteTooltip.Trigger
         ref={(ref) => {
@@ -118,7 +126,7 @@ export function Tooltip(props: TooltipProps) {
       >
         {props.children}
       </KobalteTooltip.Trigger>
-      <Show when={open()}>
+      <Show when={isOpen()}>
         <KobalteTooltip.Portal>
           <KobalteTooltip.Content class="z-tool-tip max-w-[calc(100vw-32px)]">
             <Surface
