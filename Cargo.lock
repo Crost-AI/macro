@@ -14656,6 +14656,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "sync_router"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "bebop",
+ "connection_gateway_models",
+ "futures",
+ "macro_config",
+ "macro_entrypoint",
+ "macro_env",
+ "macro_env_var",
+ "mockall",
+ "opentelemetry",
+ "postcard",
+ "redis",
+ "sync_service_bebop_schema",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite 0.28.0",
+ "tracing",
+ "tracing-opentelemetry",
+ "workspace-hack",
+]
+
+[[package]]
 name = "sync_service"
 version = "0.1.0"
 dependencies = [
