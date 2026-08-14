@@ -18,6 +18,3 @@ pub mod machine;
 pub mod manager;
 pub mod model;
 pub mod replica;
-
-#[cfg(test)]
-pub(crate) mod harness;
