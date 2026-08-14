@@ -4,7 +4,9 @@
 
 use crate::domain::models::{ConnectionId, EdgeEvent, Event};
 use anyhow::{Context, Result};
-use connection_gateway_models::fanout::{FromGateway, HEARTBEAT_INTERVAL_SECS, INBOUND_CHANNEL};
+use connection_gateway_models::fanout::{
+    FromGateway, GatewayId, HEARTBEAT_INTERVAL_SECS, INBOUND_CHANNEL,
+};
 use futures::StreamExt;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -29,7 +31,7 @@ pub async fn run(redis_client: &redis::Client, events: mpsc::Sender<Event>) -> R
         .context("failed to subscribe to fanout channel")?;
     debug!(channel = INBOUND_CHANNEL, "subscribed to gateway fanout");
 
-    let mut liveness: HashMap<String, Instant> = HashMap::new();
+    let mut liveness: HashMap<GatewayId, Instant> = HashMap::new();
     let mut sweep = tokio::time::interval(Duration::from_secs(HEARTBEAT_INTERVAL_SECS));
     let mut stream = pubsub.on_message();
 
@@ -62,13 +64,13 @@ pub async fn run(redis_client: &redis::Client, events: mpsc::Sender<Event>) -> R
             }
             _ = sweep.tick() => {
                 let now = Instant::now();
-                let stale: Vec<String> = liveness
+                let stale: Vec<GatewayId> = liveness
                     .iter()
                     .filter(|(_, seen)| now.duration_since(**seen) > GATEWAY_STALE_AFTER)
                     .map(|(gateway, _)| gateway.clone())
                     .collect();
                 for gateway in stale {
-                    warn!(gateway, "gateway heartbeat went quiet; dropping its connections");
+                    warn!(gateway = %gateway, "gateway heartbeat went quiet; dropping its connections");
                     liveness.remove(&gateway);
                     if events
                         .send(Event::Edge(EdgeEvent::GatewayLost { gateway }))
@@ -86,9 +88,9 @@ pub async fn run(redis_client: &redis::Client, events: mpsc::Sender<Event>) -> R
 /// Turn one fanout message into an edge event, updating gateway liveness.
 /// Returns `None` for messages the router doesn't act on (text frames,
 /// heartbeats, `Connected` — the router keys everything off `Subscribe`).
-fn translate(message: FromGateway, liveness: &mut HashMap<String, Instant>) -> Option<Event> {
-    let mark = |liveness: &mut HashMap<String, Instant>, gateway: &str| {
-        liveness.insert(gateway.to_string(), Instant::now());
+fn translate(message: FromGateway, liveness: &mut HashMap<GatewayId, Instant>) -> Option<Event> {
+    let mark = |liveness: &mut HashMap<GatewayId, Instant>, gateway: &GatewayId| {
+        liveness.insert(gateway.clone(), Instant::now());
     };
     match message {
         FromGateway::Heartbeat { gateway } => {

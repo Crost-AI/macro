@@ -63,7 +63,7 @@ impl<Sink: EdgeSink, Downstreams: DownstreamFactory> Router<Sink, Downstreams> {
                     .cloned()
                     .collect();
                 debug!(
-                    gateway,
+                    gateway = %gateway,
                     count = conns.len(),
                     "gateway lost; dropping its connections"
                 );

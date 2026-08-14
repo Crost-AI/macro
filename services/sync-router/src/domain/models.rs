@@ -1,13 +1,15 @@
 //! Core types shared across the router.
 
+pub use connection_gateway_models::fanout::{ConnId, GatewayId};
+
 /// A client connection, globally identified by the gateway instance that owns
 /// its socket plus that gateway's local connection id.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ConnectionId {
     /// Boot-unique id of the gateway instance holding the socket.
-    pub gateway: String,
+    pub gateway: GatewayId,
     /// Gateway-local websocket connection id.
-    pub conn: String,
+    pub conn: ConnId,
 }
 
 /// A document id, as it appears in envelope frames and downstream URLs.
@@ -40,7 +42,7 @@ pub enum EdgeEvent {
     /// A gateway instance stopped heartbeating: every connection it held is gone.
     GatewayLost {
         /// The dead gateway instance's boot-unique id.
-        gateway: String,
+        gateway: GatewayId,
     },
 }
 

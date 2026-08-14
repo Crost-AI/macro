@@ -11,7 +11,9 @@
 
 use crate::model::connection::ConnectionContext;
 use anyhow::{Context, Result};
-use connection_gateway_models::fanout::{FromGateway, HEARTBEAT_INTERVAL_SECS, INBOUND_CHANNEL};
+use connection_gateway_models::fanout::{
+    ConnId, FromGateway, GatewayId, HEARTBEAT_INTERVAL_SECS, INBOUND_CHANNEL,
+};
 use macro_user_id::user_id::MacroUserIdStr;
 use redis::AsyncCommands;
 
@@ -38,8 +40,8 @@ pub async fn connected(ctx: &ConnectionContext<'_>, user_id: &MacroUserIdStr<'st
     publish_best_effort(
         ctx,
         &FromGateway::Connected {
-            gateway: ctx.api_context.fanout_gateway_id.to_string(),
-            conn: ctx.connection_id.to_string(),
+            gateway: GatewayId(ctx.api_context.fanout_gateway_id.to_string()),
+            conn: ConnId(ctx.connection_id.to_string()),
             user_id: user_id.clone(),
         },
     )
@@ -51,8 +53,8 @@ pub async fn frame(ctx: &ConnectionContext<'_>, text: bool, payload: Vec<u8>) {
     publish_best_effort(
         ctx,
         &FromGateway::Frame {
-            gateway: ctx.api_context.fanout_gateway_id.to_string(),
-            conn: ctx.connection_id.to_string(),
+            gateway: GatewayId(ctx.api_context.fanout_gateway_id.to_string()),
+            conn: ConnId(ctx.connection_id.to_string()),
             text,
             payload,
         },
@@ -65,8 +67,8 @@ pub async fn disconnected(ctx: &ConnectionContext<'_>) {
     publish_best_effort(
         ctx,
         &FromGateway::Disconnected {
-            gateway: ctx.api_context.fanout_gateway_id.to_string(),
-            conn: ctx.connection_id.to_string(),
+            gateway: GatewayId(ctx.api_context.fanout_gateway_id.to_string()),
+            conn: ConnId(ctx.connection_id.to_string()),
         },
     )
     .await;
@@ -82,7 +84,7 @@ pub async fn heartbeat_loop(
     loop {
         tick.tick().await;
         let message = FromGateway::Heartbeat {
-            gateway: gateway_id.to_string(),
+            gateway: GatewayId(gateway_id.to_string()),
         };
         let Ok(payload) = postcard::to_stdvec(&message) else {
             continue;
