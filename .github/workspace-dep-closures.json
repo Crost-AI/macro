@@ -599,6 +599,12 @@
       "crates/client/cache-sqlite",
       "crates/maybe_send"
     ],
+    "cache-turso": [
+      "crates/client/cache-core",
+      "crates/client/cache-turso",
+      "crates/client/turso-opfs",
+      "crates/maybe_send"
+    ],
     "cache-wasm": [
       "crates/client/cache-core",
       "crates/client/cache-idb",

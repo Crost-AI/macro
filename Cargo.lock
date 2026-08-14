@@ -2596,6 +2596,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "cache-turso"
+version = "0.1.0"
+dependencies = [
+ "cache-core",
+ "cache-sqlite",
+ "maybe_send",
+ "pollster",
+ "serde_json",
+ "thiserror 2.0.18",
+ "turso-opfs",
+ "turso_core",
+ "wasm-bindgen-test",
+]
+
+[[package]]
 name = "cache-wasm"
 version = "0.3.2"
 dependencies = [
