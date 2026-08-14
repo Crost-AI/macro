@@ -650,12 +650,13 @@ impl ReminderDispatchRepo for PgRemindersRepo {
     #[tracing::instrument(err, skip(self))]
     async fn due_firings(&self, now: DateTime<Utc>) -> Result<Vec<DueFiring>, Self::Err> {
         // Driven by `reminder_due_idx`: (next_run_at) WHERE enabled AND
-        // completed_at IS NULL, with recurring rows filtered out on top.
+        // completed_at IS NULL.
         //
-        // Recurring reminders are excluded here as well as at delivery because
-        // one is never completed and never has its next_run_at advanced, so it
-        // stays due forever — every sweep would re-fan the same rows and pay
-        // for a message each, indefinitely.
+        // Both schedule kinds. A recurring reminder stops being due the moment
+        // delivery rolls its `next_run_at` forward, which is why that advance
+        // shares a transaction with the sent occurrence — see
+        // `complete_occurrence`. Were the two ever to come apart, the row would
+        // fall out of this query permanently rather than merely re-fan.
         //
         // Unbounded on purpose: a sweep publishes ids, so the cost of a large
         // one is a batch send per ten rows, and the ceiling is the queue's
@@ -677,7 +678,6 @@ impl ReminderDispatchRepo for PgRemindersRepo {
             FROM reminder r
             WHERE r.enabled
               AND r.completed_at IS NULL
-              AND r.cron IS NULL
               AND r.next_run_at <= $1
               AND NOT EXISTS (
                   SELECT 1
@@ -706,10 +706,9 @@ impl ReminderDispatchRepo for PgRemindersRepo {
     async fn find_due_reminder(&self, firing: DueFiring) -> Result<Option<DueReminder>, Self::Err> {
         // Matching `next_run_at` exactly is what makes a stale message safe: an
         // edit moves the firing, and this then finds nothing rather than
-        // delivering the reminder at a time the user cancelled.
-        //
-        // `cron IS NULL` is deliberately absent — the domain refuses recurring
-        // reminders itself so the gap stays visible there.
+        // delivering the reminder at a time the user cancelled. It does the
+        // same for a recurring firing that was re-fanned after the series had
+        // already moved past it.
         let row = sqlx::query_as!(
             DueReminderRow,
             r#"
@@ -808,11 +807,20 @@ impl ReminderDispatchRepo for PgRemindersRepo {
         &self,
         reminder_id: Uuid,
         scheduled_for: DateTime<Utc>,
+        advance_to: Option<DateTime<Utc>>,
     ) -> Result<(), Self::Err> {
-        // Only the occurrence. Delivery is not completion: `completed_at` means
-        // the owner is finished with the reminder, and a reminder that has just
-        // arrived in their inbox plainly is not. What stops a delivered firing
-        // being sent twice is this row, which `due_firings` excludes on.
+        // One transaction, because the two writes are only correct together.
+        // Marking the occurrence sent is what stops this firing going out
+        // twice; advancing `next_run_at` is what brings the next one around. A
+        // recurring reminder that got the first without the second would be
+        // excluded by its own sent occurrence and never move again — silently
+        // dead, and invisible until someone noticed the notifications had
+        // stopped. Every other failure here is retryable; that one is not.
+        let mut tx = self.pool.begin().await?;
+
+        // The reminder itself is left alone. Delivery is not completion:
+        // `completed_at` means the owner is finished with the reminder, and one
+        // that has just arrived in their inbox plainly is not.
         sqlx::query!(
             r#"
             UPDATE reminder_occurrence
@@ -821,6 +829,46 @@ impl ReminderDispatchRepo for PgRemindersRepo {
             "#,
             reminder_id,
             scheduled_for,
+        )
+        .execute(tx.as_mut())
+        .await?;
+
+        if let Some(advance_to) = advance_to {
+            // `next_run_at = $2` guards against overwriting a reschedule the
+            // owner made while this delivery was in flight. Their time is a
+            // decision; the advance is bookkeeping, so a mismatch here is a
+            // correct no-op rather than a lost update.
+            sqlx::query!(
+                r#"
+                UPDATE reminder
+                SET next_run_at = $2, updated_at = now()
+                WHERE id = $1 AND next_run_at = $3
+                "#,
+                reminder_id,
+                advance_to,
+                scheduled_for,
+            )
+            .execute(tx.as_mut())
+            .await?;
+        }
+
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    #[tracing::instrument(err, skip(self))]
+    async fn retract_notifications(&self, reminder_id: Uuid) -> Result<(), Self::Err> {
+        // Reaches into `notification` for the same reason `delete_reminder`
+        // does: a reminder *is* its notification's `event_item`, so the two are
+        // one thing to a reader even though they belong to different domains.
+        // `user_notification` cascades from this row.
+        sqlx::query!(
+            r#"
+            DELETE FROM notification
+            WHERE event_item_type = 'reminder' AND event_item_id = $1
+            "#,
+            reminder_id.to_string(),
         )
         .execute(&self.pool)
         .await?;

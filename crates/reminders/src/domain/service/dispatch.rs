@@ -16,7 +16,8 @@ mod test;
 use chrono::{DateTime, Duration, Utc};
 
 use crate::domain::models::{
-    DeliveryOutcome, DueFiring, DueReminder, ReminderDispatchMessage, ReminderError, SweepSummary,
+    DeliveryOutcome, DueFiring, DueReminder, MAX_RECURRING_LATENESS, ReminderDispatchMessage,
+    ReminderError, ReminderSchedule, SweepSummary,
 };
 use crate::domain::ports::{
     Clock, ReminderDispatch, ReminderDispatchQueue, ReminderDispatchRepo, ReminderNotifier,
@@ -31,6 +32,14 @@ use crate::domain::ports::{
 /// releasing. Long enough that a slow delivery is not raced, short enough that
 /// a dead worker does not strand the firing.
 const RETRY_AFTER: Duration = Duration::minutes(5);
+
+/// What to do with a firing once it has been claimed.
+enum Delivery {
+    /// Notify the owner.
+    Notify,
+    /// Skip the notification and only move the series on.
+    RollForward,
+}
 
 /// Delivers due reminders to their owners.
 #[derive(Debug, Clone)]
@@ -79,10 +88,15 @@ where
     ///
     /// Claiming first is what stops two workers double-sending; completing last
     /// is what makes a failed delivery retryable rather than lost.
+    ///
+    /// `advance_to` carries a recurring reminder's next firing through to
+    /// completion, where it lands in the same write that marks this one sent.
     async fn deliver_claimed(
         &self,
         due: &DueReminder,
         now: DateTime<Utc>,
+        advance_to: Option<DateTime<Utc>>,
+        delivery: Delivery,
     ) -> Result<DeliveryOutcome, ReminderError> {
         let reminder_id = due.reminder.id;
         let scheduled_for = due.scheduled_for;
@@ -94,6 +108,34 @@ where
             .map_err(|e| rootcause::Report::new(e).into_dynamic())?;
         if !claimed {
             return Ok(DeliveryOutcome::AlreadyClaimed);
+        }
+
+        if let Delivery::RollForward = delivery {
+            // No notification, so nothing to retract and nothing to release:
+            // completing is the whole job.
+            self.repo
+                .complete_occurrence(reminder_id, scheduled_for, advance_to)
+                .await
+                .map_err(|e| rootcause::Report::new(e).into_dynamic())?;
+
+            return Ok(DeliveryOutcome::RolledForward);
+        }
+
+        // Clear what the previous firing left in the owner's inbox before
+        // adding to it, so a daily reminder reads as one outstanding nudge
+        // rather than a stack of them. Before notifying rather than after, so
+        // it cannot delete the notification this delivery is about to create.
+        //
+        // Non-fatal: failing to tidy up the last firing is no reason to
+        // withhold this one.
+        if due.reminder.schedule.repeats()
+            && let Err(e) = self.repo.retract_notifications(reminder_id).await
+        {
+            tracing::error!(
+                error = ?e,
+                reminder_id = %reminder_id,
+                "failed to retract an earlier reminder notification; delivering anyway",
+            );
         }
 
         if let Err(e) = self.notifier.notify(due).await {
@@ -125,7 +167,7 @@ where
         }
 
         self.repo
-            .complete_occurrence(reminder_id, scheduled_for)
+            .complete_occurrence(reminder_id, scheduled_for, advance_to)
             .await
             .map_err(|e| rootcause::Report::new(e).into_dynamic())?;
 
@@ -189,17 +231,38 @@ where
             return Ok(DeliveryOutcome::Gone);
         };
 
-        // Recurring reminders are modelled but not dispatched yet. Guarded here
-        // rather than in the query because this is the only place that could
-        // actually send one — and completing it would retire the series.
-        if due.reminder.schedule.repeats() {
+        // Where the series goes next, resolved before anything is written so
+        // completion can move the reminder on in the same breath as marking
+        // this firing sent.
+        //
+        // Measured from `now` rather than from the firing being delivered, so a
+        // backlog collapses into one delivery instead of replaying every
+        // occurrence that was missed while nothing was listening. A daily
+        // reminder that went undelivered for a week owes its owner one nudge,
+        // not seven.
+        //
+        // `None` means the cron has no further firing — a year-qualified
+        // expression that has run out. That reminder then behaves exactly like
+        // a delivered one-shot: it stays at its final firing and waits to be
+        // dealt with, rather than needing a state of its own.
+        let advance_to = match &due.reminder.schedule {
+            ReminderSchedule::Once { .. } => None,
+            ReminderSchedule::Recurring { cron, timezone } => cron.next_run_after(now, *timezone),
+        };
+
+        let delivery = if due.reminder.schedule.repeats()
+            && now - due.scheduled_for > MAX_RECURRING_LATENESS
+        {
             tracing::warn!(
                 reminder_id = %due.reminder.id,
-                "skipped a due recurring reminder; recurring dispatch is not implemented",
+                scheduled_for = %due.scheduled_for,
+                "rolling a stale recurring reminder forward instead of delivering it",
             );
-            return Ok(DeliveryOutcome::SkippedRecurring);
-        }
+            Delivery::RollForward
+        } else {
+            Delivery::Notify
+        };
 
-        self.deliver_claimed(&due, now).await
+        self.deliver_claimed(&due, now, advance_to, delivery).await
     }
 }

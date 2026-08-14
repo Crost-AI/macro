@@ -1110,23 +1110,25 @@ async fn due_firings_returns_only_firings_that_have_arrived(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "MACRO_DB_MIGRATIONS")]
-async fn due_firings_exclude_recurring_reminders(pool: PgPool) {
-    // A recurring reminder is never completed and never has its next_run_at
-    // advanced, so if the query returned it the row would stay due forever and
-    // every sweep would pay for a message that delivery then refuses.
+async fn due_firings_include_recurring_reminders(pool: PgPool) {
+    // Both schedule kinds come back. A recurring reminder leaves the due set by
+    // having its next_run_at advanced at delivery, not by being filtered here.
     insert_user(&pool, USER_A).await;
     let repo = PgRemindersRepo::new(pool.clone());
     let now = at(2026, 8, 1, 12);
 
-    repo.create_reminder(&user(USER_A), &new_reminder("standup", recurring()))
+    let recurring_reminder = repo
+        .create_reminder(&user(USER_A), &new_reminder("standup", recurring()))
         .await
         .expect("recurring reminder should insert");
     let one_shot = create_due(&pool, USER_A, at(2026, 8, 1, 11)).await;
 
     let due = repo.due_firings(now).await.expect("query succeeds");
 
-    assert_eq!(due.len(), 1);
-    assert_eq!(due[0].reminder_id, one_shot.id);
+    let ids: Vec<_> = due.iter().map(|firing| firing.reminder_id).collect();
+    assert_eq!(due.len(), 2);
+    assert!(ids.contains(&recurring_reminder.id));
+    assert!(ids.contains(&one_shot.id));
 }
 
 #[sqlx::test(migrator = "MACRO_DB_MIGRATIONS")]
@@ -1323,7 +1325,7 @@ async fn releasing_a_delivered_firing_does_not_un_send_it(pool: PgPool) {
     repo.claim_occurrence(reminder.id, reminder.next_run_at, no_retry())
         .await
         .expect("claim succeeds");
-    repo.complete_occurrence(reminder.id, reminder.next_run_at)
+    repo.complete_occurrence(reminder.id, reminder.next_run_at, None)
         .await
         .expect("complete succeeds");
     repo.release_occurrence(reminder.id, reminder.next_run_at)
@@ -1404,7 +1406,7 @@ async fn a_delivered_firing_is_never_reclaimed(pool: PgPool) {
     repo.claim_occurrence(reminder.id, reminder.next_run_at, no_retry())
         .await
         .expect("claim succeeds");
-    repo.complete_occurrence(reminder.id, reminder.next_run_at)
+    repo.complete_occurrence(reminder.id, reminder.next_run_at, None)
         .await
         .expect("complete succeeds");
 
@@ -1431,7 +1433,7 @@ async fn a_delivered_firing_stops_being_due_without_completing_the_reminder(pool
     repo.claim_occurrence(reminder.id, reminder.next_run_at, no_retry())
         .await
         .expect("claim succeeds");
-    repo.complete_occurrence(reminder.id, reminder.next_run_at)
+    repo.complete_occurrence(reminder.id, reminder.next_run_at, None)
         .await
         .expect("complete succeeds");
 
@@ -1468,6 +1470,163 @@ async fn a_delivered_firing_stops_being_due_without_completing_the_reminder(pool
 }
 
 #[sqlx::test(migrator = "MACRO_DB_MIGRATIONS")]
+async fn completing_a_recurring_firing_advances_it_to_the_next_one(pool: PgPool) {
+    insert_user(&pool, USER_A).await;
+    let repo = PgRemindersRepo::new(pool.clone());
+    let reminder = repo
+        .create_reminder(&user(USER_A), &new_reminder("standup", recurring()))
+        .await
+        .expect("recurring reminder should insert");
+    let next = at(2026, 9, 9, 13);
+
+    repo.claim_occurrence(reminder.id, reminder.next_run_at, no_retry())
+        .await
+        .expect("claim succeeds");
+    repo.complete_occurrence(reminder.id, reminder.next_run_at, Some(next))
+        .await
+        .expect("complete succeeds");
+
+    // Both halves of the transaction: this firing is spent, and the series has
+    // somewhere to go. Either one alone would be a bug — sent without advanced
+    // is a reminder that goes quiet forever.
+    let sent_at: Option<DateTime<Utc>> = sqlx::query_scalar(
+        r#"SELECT sent_at FROM reminder_occurrence WHERE reminder_id = $1 AND scheduled_for = $2"#,
+    )
+    .bind(reminder.id)
+    .bind(reminder.next_run_at)
+    .fetch_one(&pool)
+    .await
+    .expect("occurrence exists");
+    assert!(sent_at.is_some());
+
+    let stored = repo
+        .get_reminder(&user(USER_A), reminder.id)
+        .await
+        .expect("read succeeds")
+        .expect("reminder still exists");
+    assert_eq!(stored.next_run_at, next);
+    assert!(
+        stored.completed_at.is_none(),
+        "a series that fired is not a series its owner has finished with"
+    );
+
+    // Due again at the new firing, and not before it.
+    let before = repo
+        .due_firings(next - Duration::minutes(1))
+        .await
+        .expect("query succeeds");
+    assert!(before.is_empty());
+
+    let after = repo.due_firings(next).await.expect("query succeeds");
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].scheduled_for, next);
+}
+
+#[sqlx::test(migrator = "MACRO_DB_MIGRATIONS")]
+async fn completing_does_not_advance_a_reminder_the_owner_rescheduled(pool: PgPool) {
+    // The owner moved the reminder while the delivery was in flight. Their time
+    // is a decision and the advance is bookkeeping, so the advance must lose.
+    insert_user(&pool, USER_A).await;
+    let repo = PgRemindersRepo::new(pool.clone());
+    let reminder = repo
+        .create_reminder(&user(USER_A), &new_reminder("standup", recurring()))
+        .await
+        .expect("recurring reminder should insert");
+    let chosen = at(2026, 12, 25, 15);
+
+    repo.claim_occurrence(reminder.id, reminder.next_run_at, no_retry())
+        .await
+        .expect("claim succeeds");
+    repo.update_reminder(
+        &user(USER_A),
+        reminder.id,
+        &ReminderUpdate {
+            schedule: Some(ScheduleUpdate {
+                schedule: once_at(chosen),
+                next_run_at: chosen,
+            }),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("reschedule succeeds");
+
+    // The delivery finishes afterwards, still holding the firing it started on.
+    repo.complete_occurrence(reminder.id, reminder.next_run_at, Some(at(2026, 9, 9, 13)))
+        .await
+        .expect("complete succeeds");
+
+    let stored = repo
+        .get_reminder(&user(USER_A), reminder.id)
+        .await
+        .expect("read succeeds")
+        .expect("reminder still exists");
+    assert_eq!(
+        stored.next_run_at, chosen,
+        "the advance must not overwrite a reschedule it raced"
+    );
+}
+
+#[sqlx::test(migrator = "MACRO_DB_MIGRATIONS")]
+async fn retracting_clears_only_this_reminders_notifications(pool: PgPool) {
+    insert_user(&pool, USER_A).await;
+    let repo = PgRemindersRepo::new(pool.clone());
+
+    let fired = repo
+        .create_reminder(&user(USER_A), &new_reminder("standup", recurring()))
+        .await
+        .expect("insert");
+    let untouched = create_due(&pool, USER_A, at(2026, 8, 1, 11)).await;
+
+    for reminder_id in [fired.id, untouched.id] {
+        let notification_id = macro_uuid::generate_uuid_v7();
+        sqlx::query(
+            r#"
+            INSERT INTO notification
+                (id, notification_event_type, event_item_id, event_item_type, service_sender)
+            VALUES ($1, 'reminder', $2, 'reminder', 'reminders')
+            "#,
+        )
+        .bind(notification_id)
+        .bind(reminder_id.to_string())
+        .execute(&pool)
+        .await
+        .expect("notification should insert");
+        sqlx::query(r#"INSERT INTO user_notification (user_id, notification_id) VALUES ($1, $2)"#)
+            .bind(USER_A)
+            .bind(notification_id)
+            .execute(&pool)
+            .await
+            .expect("user_notification should insert");
+    }
+
+    repo.retract_notifications(fired.id)
+        .await
+        .expect("retract succeeds");
+
+    let remaining: Vec<String> = sqlx::query_scalar(
+        r#"SELECT event_item_id FROM notification WHERE event_item_type = 'reminder'"#,
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("query succeeds");
+    assert_eq!(remaining, vec![untouched.id.to_string()]);
+
+    // user_notification cascades, so the owner's inbox row goes with it rather
+    // than being left pointing at nothing.
+    let orphaned: i64 = sqlx::query_scalar(
+        r#"
+        SELECT count(*) FROM user_notification un
+        WHERE NOT EXISTS (SELECT 1 FROM notification n WHERE n.id = un.notification_id)
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("query succeeds");
+    assert_eq!(orphaned, 0);
+}
+
+#[sqlx::test(migrator = "MACRO_DB_MIGRATIONS")]
 async fn a_rescheduled_reminder_becomes_due_again_after_delivery(pool: PgPool) {
     // The sent occurrence is keyed on the firing, so moving the firing makes the
     // reminder due again with nothing having to clear it.
@@ -1478,7 +1637,7 @@ async fn a_rescheduled_reminder_becomes_due_again_after_delivery(pool: PgPool) {
     repo.claim_occurrence(reminder.id, reminder.next_run_at, no_retry())
         .await
         .expect("claim succeeds");
-    repo.complete_occurrence(reminder.id, reminder.next_run_at)
+    repo.complete_occurrence(reminder.id, reminder.next_run_at, None)
         .await
         .expect("complete succeeds");
 

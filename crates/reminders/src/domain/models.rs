@@ -17,6 +17,27 @@ use uuid::Uuid;
 /// stay sane. Mirrored by the `reminder_description_max_length` DB constraint.
 pub const MAX_DESCRIPTION_LEN: usize = 2_000;
 
+/// How late a recurring firing may be and still mean anything.
+///
+/// Past this it describes a moment gone by rather than one to act on, and the
+/// two use cases that care both take it as their cue to move the series on
+/// instead: dispatch rolls a stale firing forward without notifying, and
+/// reviving a reminder that spent months disabled recomputes its firing rather
+/// than leaving one in the past.
+///
+/// Comfortably wider than any delay healthy dispatch produces, so a firing
+/// merely waiting its turn in the queue is never mistaken for an abandoned one.
+pub const MAX_RECURRING_LATENESS: chrono::Duration = chrono::Duration::hours(1);
+
+/// The closest together two firings of a recurring reminder may be.
+///
+/// The sweep ticks once a minute, so a schedule finer than that cannot be
+/// honoured; this sits well above the tick because a reminder arriving every
+/// few minutes is a notification storm rather than a reminder. The composer
+/// only builds daily, weekly and monthly schedules, so this guards the API
+/// rather than anything a user can click.
+pub const MIN_RECURRING_INTERVAL: chrono::Duration = chrono::Duration::minutes(5);
+
 /// Default number of reminders returned by a list request.
 pub const DEFAULT_PAGE_SIZE: u32 = 100;
 
@@ -600,9 +621,11 @@ pub enum DeliveryOutcome {
     /// Nothing left to deliver: the reminder was deleted, completed, disabled,
     /// or rescheduled out from under this message between sweep and delivery.
     Gone,
-    /// The reminder recurs. Recurring dispatch is not implemented, and firing
-    /// one here would deliver it once and complete it forever.
-    SkippedRecurring,
+    /// A recurring firing too far behind to be worth sending, moved on to its
+    /// next occurrence without notifying. Covers a dispatcher outage, and the
+    /// series whose `next_run_at` was frozen before recurring dispatch existed
+    /// — delivering either would announce a reminder about a moment long past.
+    RolledForward,
 }
 
 /// Errors returned by the reminders service.
