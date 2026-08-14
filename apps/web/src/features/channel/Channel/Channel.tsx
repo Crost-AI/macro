@@ -64,6 +64,7 @@ import { threadRepliesQueryOptions } from '@queries/channel/thread-replies';
 import { usePostTypingUpdateMutation } from '@queries/channel/typing';
 import { queryClient } from '@queries/client';
 import { ChannelTypeEnum } from '@service-storage/client';
+import { useBeforeLeave } from '@solidjs/router';
 import {
   type Accessor,
   createEffect,
@@ -256,14 +257,22 @@ export function Channel(props: ChannelProps) {
 
   // Opening stamps the channel read immediately; closing re-stamps it so
   // messages that arrived while it was on screen count as read. `onCleanup`
-  // covers leaving by any route, and also the unmounts a route change never
-  // sees — a split closing, a channel swapped in place — so it subsumes the
-  // `useBeforeLeave` this used to also fire from.
+  // covers unmounts a route change never sees (a split closing, a channel
+  // swapped in place); `useBeforeLeave` covers leaves disposal cannot be
+  // relied on for — a navigation that ends up blocked, content kept alive
+  // across a route change — and runs while this component is still fully
+  // alive rather than during teardown. A switch can fire both; the mutation
+  // is an idempotent upsert and no longer triggers a refetch, so the overlap
+  // costs one duplicate POST.
   onMount(() => {
     markAsViewed();
   });
 
   onCleanup(() => {
+    markAsViewed();
+  });
+
+  useBeforeLeave(() => {
     markAsViewed();
   });
 
