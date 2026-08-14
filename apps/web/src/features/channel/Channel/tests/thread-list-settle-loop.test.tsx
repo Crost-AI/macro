@@ -79,6 +79,28 @@ describe('ThreadList scroll-to-bottom settle loop', () => {
     expect(pumped).toBeLessThan(30);
   });
 
+  it('re-pins to the bottom when content grows after the scroll landed', () => {
+    // The whole point of the settle window: a late-loading image or embed
+    // grows the content and pushes the bottom away after the initial scroll
+    // has already landed. Stopping the polling early must not cost this — if
+    // the settled-frame counter stopped resetting, or the ResizeObserver were
+    // torn down with the polling, the last message would be left cut off.
+    const { container } = renderList(200);
+    for (let i = 0; i < 10 && frames.length > 0; i++) pumpFrame();
+
+    const scroller = container.querySelector(
+      '[data-channel-scroll]'
+    ) as HTMLElement;
+    const settledAt = scroller.scrollTop;
+
+    layout.growContent(2_000);
+
+    expect(scroller.scrollTop).toBeGreaterThan(settledAt);
+    expect(scroller.scrollHeight - scroller.clientHeight).toBe(
+      scroller.scrollTop
+    );
+  });
+
   it('does not touch the scroller after unmount when the settle window ends', () => {
     // Ending the polling early moved the close of the settle window onto a
     // timeout. If that timeout outlives the mount it fires `stop()` against a

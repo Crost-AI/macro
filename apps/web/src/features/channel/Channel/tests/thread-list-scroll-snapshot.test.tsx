@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 import { render } from '@solidjs/testing-library';
 import { createSignal } from 'solid-js';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ThreadList, type ThreadListScrollSnapshot } from '../ThreadList';
 import { installFakeLayout } from './fake-layout';
 
@@ -73,29 +73,50 @@ describe('ThreadList scroll snapshot', () => {
     expect(emitted.at(-1)?.scrollOffset).toBe(4_000);
   });
 
-  it('carries sizes on every snapshot, including mid-scroll ones', () => {
-    // Mid-scroll snapshots reuse the last measured sizes rather than cloning
-    // fresh ones. Reusing must not mean dropping: whichever snapshot teardown
-    // happens to read still has to be restorable.
+  it('reuses one size array across a scroll instead of cloning per event', () => {
+    // This is the optimization itself, so assert the mechanism rather than
+    // truthiness: `handle.cache` copies virtua's per-item size array, and
+    // reading it on every scroll event clones the whole measured list dozens
+    // of times a second. Identical references prove no clone happened.
     const { snapshots, scroller } = renderList();
 
     scroller.scrollTop = 2_000;
     scroller.scrollTop = 5_000;
 
-    expect(snapshots.length).toBeGreaterThan(1);
-    for (const snapshot of snapshots) {
-      expect(snapshot.virtualCache).toBeDefined();
-    }
+    const duringScroll = snapshots.slice(-2);
+    expect(duringScroll).toHaveLength(2);
+    expect(duringScroll[0]?.virtualCache).toBeDefined();
+    expect(duringScroll[1]?.virtualCache).toBe(duringScroll[0]?.virtualCache);
   });
 
-  it('refreshes the sizes once scrolling settles', () => {
-    const { snapshots, scroller } = renderList();
+  it('takes a fresh size array once scrolling settles', () => {
+    // The counterpart: reuse must not become staleness. Settling has to
+    // re-read the sizes, or measurements taken during the scroll never reach
+    // the snapshot that restore depends on.
+    vi.useFakeTimers();
+    try {
+      const { snapshots, scroller } = renderList();
 
-    scroller.scrollTop = 5_000;
-    scroller.dispatchEvent(new Event('scrollend'));
+      // End the open-at-bottom pin deterministically through the path the
+      // component actually exposes for it — a wheel-up aborts the settle loop.
+      // Racing it with a timer advance makes this test order-dependent.
+      scroller.dispatchEvent(
+        Object.assign(new Event('wheel', { bubbles: true }), { deltaY: -1 })
+      );
 
-    const last = snapshots.at(-1);
-    expect(last?.virtualCache).toBeDefined();
-    expect(last?.scrollOffset).toBe(5_000);
+      scroller.scrollTop = 5_000;
+      const midScroll = snapshots.at(-1)?.virtualCache;
+      expect(midScroll).toBeDefined();
+
+      // virtua decides scrolling has ended on a timer of its own; the DOM
+      // `scrollend` event is not what drives `onScrollEnd`.
+      vi.advanceTimersByTime(1_000);
+
+      const settled = snapshots.at(-1);
+      expect(settled?.virtualCache).toBeDefined();
+      expect(settled?.virtualCache).not.toBe(midScroll);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

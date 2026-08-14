@@ -17,6 +17,12 @@ const VIEWPORT_ATTRIBUTE = 'data-channel-scroll';
 type Installed = {
   /** Total scrollable content height, driven by the current item count. */
   setContentSize: (size: number) => void;
+  /**
+   * Grow the content and report it, the way a late-loading image or embed
+   * pushes the bottom of a channel away after the initial scroll has landed.
+   * This is the case the settle loop exists for.
+   */
+  growContent: (by: number) => void;
   /** Deliver every queued resize measurement, repeatedly until quiescent. */
   flushResizes: () => void;
   uninstall: () => void;
@@ -36,6 +42,7 @@ export function installFakeLayout(options: FakeLayoutOptions = {}): Installed {
   const sizeOf = (el: Element) => (isViewport(el) ? viewportSize : itemSize);
 
   const pendingDeliveries: Array<() => void> = [];
+  const liveObservers = new Set<FakeResizeObserver>();
 
   class FakeResizeObserver implements ResizeObserver {
     #callback: ResizeObserverCallback;
@@ -43,6 +50,25 @@ export function installFakeLayout(options: FakeLayoutOptions = {}): Installed {
 
     constructor(callback: ResizeObserverCallback) {
       this.#callback = callback;
+      liveObservers.add(this);
+    }
+
+    /** Re-report every observed element, as a real observer does on resize. */
+    redeliver(): void {
+      for (const target of this.#targets) {
+        this.#callback(
+          [
+            {
+              target,
+              contentRect: {
+                width: 800,
+                height: sizeOf(target),
+              } as DOMRectReadOnly,
+            } as ResizeObserverEntry,
+          ],
+          this
+        );
+      }
     }
 
     observe(target: Element): void {
@@ -74,6 +100,7 @@ export function installFakeLayout(options: FakeLayoutOptions = {}): Installed {
 
     disconnect(): void {
       this.#targets.clear();
+      liveObservers.delete(this);
     }
   }
 
@@ -138,6 +165,10 @@ export function installFakeLayout(options: FakeLayoutOptions = {}): Installed {
   return {
     setContentSize: (size: number) => {
       contentSize = size;
+    },
+    growContent: (by: number) => {
+      contentSize += by;
+      for (const observer of liveObservers) observer.redeliver();
     },
     flushResizes: () => {
       // Newly rendered rows register their own observers while earlier
