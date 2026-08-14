@@ -159,6 +159,8 @@ import type { View } from './generated/schemas/view';
 import type { ViewsResponse } from './generated/schemas/viewsResponse';
 import { saveDocumentHandlerResponse } from './generated/zod';
 import type {
+  CollabSurfaceResponse,
+  CollabSurfaceTokenResponse,
   GetDocumentPermissionsTokenResponse,
   StorageServiceClient,
   ValidateDocumentPermissionsTokenResponse,
@@ -1062,6 +1064,43 @@ export const storageServiceClient = {
           body: JSON.stringify(args),
         }
       );
+    },
+  },
+
+  collabSurfaces: {
+    async ensure(args) {
+      return await dssFetch<CollabSurfaceResponse>(
+        `/collab_surfaces/${args.id}`,
+        {
+          method: 'PUT',
+          body: JSON.stringify({
+            parentEntityType: args.parentEntityType,
+            parentEntityId: args.parentEntityId,
+            initialMarkdown: args.initialMarkdown ?? '',
+          }),
+        }
+      );
+    },
+    async get(args) {
+      return await dssFetch<CollabSurfaceResponse>(
+        `/collab_surfaces/${args.id}`
+      );
+    },
+    // Uses SYNC_PERMISSION_TOKEN_DSS_HOST (like createPermissionToken) so the
+    // token is always signed by the DSS whose JWT secret matches the sync
+    // service's secret.
+    async createToken(args) {
+      return await fetchWithToken<CollabSurfaceTokenResponse>(
+        `${SYNC_PERMISSION_TOKEN_DSS_HOST}/collab_surfaces/${args.id}/token`,
+        {
+          method: 'POST',
+        }
+      );
+    },
+    async delete(args) {
+      return await dssFetch(`/collab_surfaces/${args.id}`, {
+        method: 'DELETE',
+      });
     },
   },
   async getUsersHistory() {
