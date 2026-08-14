@@ -607,8 +607,9 @@
     ],
     "cache-wasm": [
       "crates/client/cache-core",
-      "crates/client/cache-idb",
+      "crates/client/cache-turso",
       "crates/client/cache-wasm",
+      "crates/client/turso-opfs",
       "crates/maybe_send"
     ],
     "cal": [
