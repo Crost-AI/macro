@@ -54,7 +54,6 @@ members = [
   "crates/skills",
   "crates/soup_realtime",
   "crates/sync_machine",
-  "crates/sync_machine_2",
   "crates/system_skills",
   "crates/task_dedup",
   "crates/unfurl",
