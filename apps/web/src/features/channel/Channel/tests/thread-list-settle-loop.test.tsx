@@ -101,6 +101,34 @@ describe('ThreadList scroll-to-bottom settle loop', () => {
     );
   });
 
+  it('stops re-pinning once the settle window has expired', () => {
+    // The counterpart to the test above. Keeping the ResizeObserver alive past
+    // the early polling exit is what makes late growth land, but it has to be
+    // released when the window closes — otherwise every later content resize
+    // drags a reader who has scrolled up back down to the newest message.
+    // Only setTimeout is faked; the frame queue above stays under manual
+    // control.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { container } = renderList(200);
+      for (let i = 0; i < 10 && frames.length > 0; i++) pumpFrame();
+
+      const scroller = container.querySelector(
+        '[data-channel-scroll]'
+      ) as HTMLElement;
+
+      // Close the window, then read away from the bottom.
+      vi.advanceTimersByTime(2_000);
+      scroller.scrollTop = 3_000;
+
+      layout.growContent(2_000);
+
+      expect(scroller.scrollTop).toBe(3_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('does not touch the scroller after unmount when the settle window ends', () => {
     // Ending the polling early moved the close of the settle window onto a
     // timeout. If that timeout outlives the mount it fires `stop()` against a
