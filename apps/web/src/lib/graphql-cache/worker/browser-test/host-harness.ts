@@ -1,4 +1,5 @@
 import { createWorkerCacheHost } from '../../host/worker-host';
+import productionCacheWorkerUrl from './production-cache.engine-worker.ts?worker&url';
 
 const resultNode = document.querySelector('#result');
 if (!(resultNode instanceof HTMLElement))
@@ -43,10 +44,9 @@ const workerProxy = new Proxy(nativeWorker, {
   construct(_target, args: ConstructorParameters<typeof Worker>) {
     const [url, options] = args;
     const epoch = Number(options?.name?.split(':').at(-1));
-    const workerUrl = options?.name?.startsWith('graphql-cache-engine:')
-      ? new URL('./production-cache.engine-worker.ts', import.meta.url)
-      : url;
-    const worker = new nativeWorker(workerUrl, options);
+    const worker = options?.name?.startsWith('graphql-cache-engine:')
+      ? new nativeWorker(productionCacheWorkerUrl, options)
+      : new nativeWorker(url, options);
     if (options?.name?.startsWith('graphql-cache-engine:')) {
       engineWorkers.push(worker);
       const terminate = worker.terminate.bind(worker);

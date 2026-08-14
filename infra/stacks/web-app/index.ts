@@ -63,9 +63,25 @@ const publicAccessBlock = new aws.s3.BucketPublicAccessBlock(
   }
 );
 
-const appArchive = new pulumi.asset.FileArchive(localPath);
+// Stage web delivery and a native/OTA archive separately. Web delivery keeps
+// the Brotli sidecar for targeted S3 upload; native clients need the raw WASM
+// only, so their archive copy removes the sidecar before FileArchive snapshots it.
+const buildOutputPath = './output/app';
+const appArchiveOutputPath = './output/app-archive';
+execSync('rm -rf ./output', { stdio: 'inherit' });
+execSync(`mkdir -p ${buildOutputPath} ${appArchiveOutputPath}`, {
+  stdio: 'inherit',
+});
+execSync(`cp -r ${localPath}/* ${buildOutputPath}`, { stdio: 'inherit' });
+execSync(`cp -r ${localPath}/* ${appArchiveOutputPath}`, {
+  stdio: 'inherit',
+});
+execSync(
+  `find ${appArchiveOutputPath} -type f -name 'cache_wasm_bg*.wasm.br' -delete`,
+  { stdio: 'inherit' }
+);
 
-// Upload the app archive to the S3 bucket
+const appArchive = new pulumi.asset.FileArchive(appArchiveOutputPath);
 new aws.s3.BucketObjectv2(
   'app-archive',
   {
@@ -78,15 +94,6 @@ new aws.s3.BucketObjectv2(
     dependsOn: [ownershipControls, publicAccessBlock],
   }
 );
-
-// Create web-app output folder
-// Remove the existing app folder
-let buildOutputPath = './output/app';
-execSync(`rm -rf ./output`, { stdio: 'inherit' });
-// Create the app folder
-execSync(`mkdir -p ${buildOutputPath}`, { stdio: 'inherit' });
-// Move the files to the app folder
-execSync(`cp -r ${localPath}/* ${buildOutputPath}`, { stdio: 'inherit' });
 // Copy the index.html to the routing lambda
 execSync(`cp ${buildOutputPath}/index.html ./appRouteLambda/index.html`, {
   stdio: 'inherit',
@@ -96,7 +103,11 @@ const syncAssetsCommand = new command.local.Command(
   'sync-assets-command',
   {
     // Source maps are intentionally public in production; the web client is open source.
-    create: pulumi.interpolate`aws s3 sync ./output s3://${webAppAssets.bucket} --acl public-read --delete --exclude "app/app-archive.zip"`,
+    // Cache WASM is over CloudFront's automatic-compression size limit. Keep
+    // raw bytes in dist/archive for Tauri and local preview, but exclude both
+    // raw and sidecar from generic sync. The targeted uploader stores Brotli
+    // bytes at the original .wasm key with application/wasm + Content-Encoding br.
+    create: pulumi.interpolate`bash ../../../apps/web/scripts/cache-wasm/upload-brotli-to-s3.sh ./output/app s3://${webAppAssets.bucket}/app public-read && aws s3 sync ./output s3://${webAppAssets.bucket} --acl public-read --delete --exclude "app/app-archive.zip" --exclude "app-archive/*" --exclude "*cache_wasm_bg*.wasm" --exclude "*cache_wasm_bg*.wasm.br"`,
     triggers: [Date.now()],
   },
   {
@@ -115,12 +126,26 @@ const updateIndexHtmlObjectMetadataCommand = webAppAssets.id.apply(
 );
 
 // Run the command to update the index.html object metadata
-new command.local.Command(
+const indexHtmlObjectMetadataCommand = new command.local.Command(
   'index-html-object-metadata-command',
   {
     create: updateIndexHtmlObjectMetadataCommand,
   },
   { dependsOn: [webAppAssets, syncAssetsCommand], replaceOnChanges: ['*'] }
+);
+
+// Prune only after the current WASM, generic assets, index content, and index
+// metadata have all published. Any earlier failure preserves all prior keys.
+new command.local.Command(
+  'prune-old-cache-wasm-command',
+  {
+    create: pulumi.interpolate`bash ../../../apps/web/scripts/cache-wasm/prune-old-brotli-from-s3.sh ./output/app s3://${webAppAssets.bucket}/app`,
+    triggers: [Date.now()],
+  },
+  {
+    dependsOn: [indexHtmlObjectMetadataCommand],
+    replaceOnChanges: ['*'],
+  }
 );
 
 // First, create an IAM role and attach the AWSLambdaBasicExecutionRole policy

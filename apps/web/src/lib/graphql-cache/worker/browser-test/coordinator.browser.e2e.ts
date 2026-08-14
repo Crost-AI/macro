@@ -1,9 +1,12 @@
 import { expect, test } from '@playwright/test';
 
+const harnessPath = (projectName: string, path = ''): string =>
+  projectName.includes('production') ? `/app/${path}` : `/${path}`;
+
 test('three pages fence graceful, abrupt, stale, and worker-only ownership', async ({
   context,
   page,
-}) => {
+}, testInfo) => {
   const browserErrors: string[] = [];
   const watch = (candidate: typeof page): void => {
     candidate.on('console', (message) => {
@@ -14,7 +17,7 @@ test('three pages fence graceful, abrupt, stale, and worker-only ownership', asy
   watch(page);
   context.on('page', watch);
 
-  await page.goto('/');
+  await page.goto(harnessPath(testInfo.project.name));
   const result = page.locator('#result');
   await expect(result).toHaveAttribute('data-status', 'passed', {
     timeout: 40_000,
@@ -70,7 +73,7 @@ test('three pages fence graceful, abrupt, stale, and worker-only ownership', asy
 test('production CacheHost performs fresh init and active reread after owner loss', async ({
   context,
   page,
-}) => {
+}, testInfo) => {
   const browserErrors: string[] = [];
   const watch = (candidate: typeof page): void => {
     candidate.on('console', (message) => {
@@ -81,7 +84,7 @@ test('production CacheHost performs fresh init and active reread after owner los
   watch(page);
   context.on('page', watch);
 
-  await page.goto('/host.html');
+  await page.goto(harnessPath(testInfo.project.name, 'host.html'));
   const result = page.locator('#result');
   await expect(result).toHaveAttribute('data-status', 'passed', {
     timeout: 60_000,
@@ -125,14 +128,14 @@ test('production CacheHost performs fresh init and active reread after owner los
 
 test('direct cutover lazily deletes only the former normalized-cache IDB', async ({
   page,
-}) => {
+}, testInfo) => {
   const browserErrors: string[] = [];
   page.on('console', (message) => {
     if (message.type() === 'error') browserErrors.push(message.text());
   });
   page.on('pageerror', (error) => browserErrors.push(error.message));
 
-  await page.goto('/cutover.html');
+  await page.goto(harnessPath(testInfo.project.name, 'cutover.html'));
   const result = page.locator('#result');
   await expect(result).toHaveAttribute('data-status', 'passed', {
     timeout: 60_000,
@@ -160,7 +163,7 @@ test('direct cutover lazily deletes only the former normalized-cache IDB', async
 test('production cache-wasm Turso engine preserves graceful data and atomically recovers abrupt loss', async ({
   context,
   page,
-}) => {
+}, testInfo) => {
   const browserErrors: string[] = [];
   const watch = (candidate: typeof page): void => {
     candidate.on('console', (message) => {
@@ -171,7 +174,7 @@ test('production cache-wasm Turso engine preserves graceful data and atomically 
   watch(page);
   context.on('page', watch);
 
-  await page.goto('/production.html');
+  await page.goto(harnessPath(testInfo.project.name, 'production.html'));
   const result = page.locator('#result');
   await expect(result).toHaveAttribute('data-status', 'passed', {
     timeout: 60_000,

@@ -1,6 +1,6 @@
 # Browser normalized cache: IndexedDB to Turso migration plan
 
-Status: **WP-10 non-root cutover complete; root/workflow integration remains with WP-00**
+Status: **WP-11 packaging evidence complete; exposure remains blocked on owner budget acceptance and WP-12 Safari/navigation rollout evidence**
 
 Scope: browser normalized GraphQL cache only. The Tauri native
 `cache-sqlite` host stays unchanged. The `idb` use in collaboration storage and
@@ -789,6 +789,12 @@ workspace member/lockfile entry and regeneration of workflow outputs.
 
 ### WP-11 — WASM packaging and performance
 
+**Status:** implementation and candidate-gate evidence complete. All proposed
+numeric gates pass in the recorded environment, but they are not approved
+rollout budgets. Exposure remains blocked on product-owner acceptance and
+WP-12's Safari/navigation/telemetry evidence. See
+[`graphql-cache-turso-wp11-report.md`](./graphql-cache-turso-wp11-report.md).
+
 **Owner paths**
 
 - `apps/web/justfile` and cache WASM build tooling;
@@ -801,11 +807,13 @@ workspace member/lockfile entry and regeneration of workflow outputs.
 2. Ensure the WASM is external, compressed, lazy, and has the correct MIME
    type.
 3. Assert no Turso npm artifact, extra Turso WASM, shared memory, atomics, or
-   nested worker is emitted.
+   global Worker-derived reference is emitted; content-inspect the separately
+   allowlisted Loro WASM.
 4. Assert the page entry does not import/preload the combined WASM.
 5. Measure and report build time, raw/compressed size, instantiation, DB open,
    and memory against approved budgets.
-6. Verify development and production asset URLs and source maps.
+6. Verify development and production asset URLs, decoded artifact hashes, and
+   source maps.
 
 **Depends on:** WP-07 and G0 measurements.
 

@@ -1,0 +1,160 @@
+{
+  "schemaVersion": 1,
+  "project": "chromium",
+  "browser": "chromium",
+  "mode": "development",
+  "origin": "http://127.0.0.1:4188",
+  "browserVersion": "145.0.7632.6",
+  "executablePath": "/nix/store/6js92rbq8qyyyrblvn7s2nvr0grmyydh-playwright-chromium/chrome-linux64/chrome",
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.7922.34 Safari/537.36",
+  "freshScopeCount": 5,
+  "samples": [
+    {
+      "mode": "development",
+      "activationMs": 55.79999999701977,
+      "browserReadyMs": 563.6999999880791,
+      "hostFirstReadyMs": 585.7999999970198,
+      "workerActivationMs": 507.79999999701977,
+      "linearMemoryBytes": 9961472,
+      "sharedWorkerConstructions": 1,
+      "dedicatedWorkerConstructions": 1,
+      "nestedWorkerConstructions": 0,
+      "wasmFetchCount": 1,
+      "wasmSha256": "5929bdb7359c54b96265457b6014131ced12f69c133c6ba91dc4045608ffd124",
+      "ownerEpochs": [
+        1
+      ],
+      "crossOriginIsolated": false,
+      "sharedArrayBufferAvailable": false,
+      "sharedWorkerUrl": "http://127.0.0.1:4188/@fs/home/sean/dev/macro/macro-turso-wp11-packaging/apps/web/src/lib/graphql-cache/worker/cache.coordinator.shared-worker.ts?worker_file&type=module",
+      "productionEngineUrl": "http://127.0.0.1:4188/@fs/home/sean/dev/macro/macro-turso-wp11-packaging/apps/web/src/lib/graphql-cache/worker/cache.engine-worker.ts?worker_file&type=module",
+      "instrumentedEngineUrl": "http://127.0.0.1:4188/measurement-cache.engine-worker.ts?worker_file&type=module",
+      "browser": "chromium",
+      "wasmUrl": "http://127.0.0.1:4188/@fs/home/sean/dev/macro/macro-turso-wp11-packaging/apps/web/src/lib/graphql-cache/wasm/cache_wasm_bg.wasm"
+    },
+    {
+      "mode": "development",
+      "activationMs": 44.5,
+      "browserReadyMs": 409,
+      "hostFirstReadyMs": 428.1000000089407,
+      "workerActivationMs": 364.5,
+      "linearMemoryBytes": 9961472,
+      "sharedWorkerConstructions": 1,
+      "dedicatedWorkerConstructions": 1,
+      "nestedWorkerConstructions": 0,
+      "wasmFetchCount": 1,
+      "wasmSha256": "5929bdb7359c54b96265457b6014131ced12f69c133c6ba91dc4045608ffd124",
+      "ownerEpochs": [
+        1
+      ],
+      "crossOriginIsolated": false,
+      "sharedArrayBufferAvailable": false,
+      "sharedWorkerUrl": "http://127.0.0.1:4188/@fs/home/sean/dev/macro/macro-turso-wp11-packaging/apps/web/src/lib/graphql-cache/worker/cache.coordinator.shared-worker.ts?worker_file&type=module",
+      "productionEngineUrl": "http://127.0.0.1:4188/@fs/home/sean/dev/macro/macro-turso-wp11-packaging/apps/web/src/lib/graphql-cache/worker/cache.engine-worker.ts?worker_file&type=module",
+      "instrumentedEngineUrl": "http://127.0.0.1:4188/measurement-cache.engine-worker.ts?worker_file&type=module",
+      "browser": "chromium",
+      "wasmUrl": "http://127.0.0.1:4188/@fs/home/sean/dev/macro/macro-turso-wp11-packaging/apps/web/src/lib/graphql-cache/wasm/cache_wasm_bg.wasm"
+    },
+    {
+      "mode": "development",
+      "activationMs": 39.900000005960464,
+      "browserReadyMs": 394,
+      "hostFirstReadyMs": 409.29999999701977,
+      "workerActivationMs": 354,
+      "linearMemoryBytes": 9961472,
+      "sharedWorkerConstructions": 1,
+      "dedicatedWorkerConstructions": 1,
+      "nestedWorkerConstructions": 0,
+      "wasmFetchCount": 1,
+      "wasmSha256": "5929bdb7359c54b96265457b6014131ced12f69c133c6ba91dc4045608ffd124",
+      "ownerEpochs": [
+        1
+      ],
+      "crossOriginIsolated": false,
+      "sharedArrayBufferAvailable": false,
+      "sharedWorkerUrl": "http://127.0.0.1:4188/@fs/home/sean/dev/macro/macro-turso-wp11-packaging/apps/web/src/lib/graphql-cache/worker/cache.coordinator.shared-worker.ts?worker_file&type=module",
+      "productionEngineUrl": "http://127.0.0.1:4188/@fs/home/sean/dev/macro/macro-turso-wp11-packaging/apps/web/src/lib/graphql-cache/worker/cache.engine-worker.ts?worker_file&type=module",
+      "instrumentedEngineUrl": "http://127.0.0.1:4188/measurement-cache.engine-worker.ts?worker_file&type=module",
+      "browser": "chromium",
+      "wasmUrl": "http://127.0.0.1:4188/@fs/home/sean/dev/macro/macro-turso-wp11-packaging/apps/web/src/lib/graphql-cache/wasm/cache_wasm_bg.wasm"
+    },
+    {
+      "mode": "development",
+      "activationMs": 37.5,
+      "browserReadyMs": 379.69999998807907,
+      "hostFirstReadyMs": 400.59999999403954,
+      "workerActivationMs": 342.1000000089407,
+      "linearMemoryBytes": 9961472,
+      "sharedWorkerConstructions": 1,
+      "dedicatedWorkerConstructions": 1,
+      "nestedWorkerConstructions": 0,
+      "wasmFetchCount": 1,
+      "wasmSha256": "5929bdb7359c54b96265457b6014131ced12f69c133c6ba91dc4045608ffd124",
+      "ownerEpochs": [
+        1
+      ],
+      "crossOriginIsolated": false,
+      "sharedArrayBufferAvailable": false,
+      "sharedWorkerUrl": "http://127.0.0.1:4188/@fs/home/sean/dev/macro/macro-turso-wp11-packaging/apps/web/src/lib/graphql-cache/worker/cache.coordinator.shared-worker.ts?worker_file&type=module",
+      "productionEngineUrl": "http://127.0.0.1:4188/@fs/home/sean/dev/macro/macro-turso-wp11-packaging/apps/web/src/lib/graphql-cache/worker/cache.engine-worker.ts?worker_file&type=module",
+      "instrumentedEngineUrl": "http://127.0.0.1:4188/measurement-cache.engine-worker.ts?worker_file&type=module",
+      "browser": "chromium",
+      "wasmUrl": "http://127.0.0.1:4188/@fs/home/sean/dev/macro/macro-turso-wp11-packaging/apps/web/src/lib/graphql-cache/wasm/cache_wasm_bg.wasm"
+    },
+    {
+      "mode": "development",
+      "activationMs": 38.30000001192093,
+      "browserReadyMs": 390.30000001192093,
+      "hostFirstReadyMs": 407.5,
+      "workerActivationMs": 351.79999999701977,
+      "linearMemoryBytes": 9961472,
+      "sharedWorkerConstructions": 1,
+      "dedicatedWorkerConstructions": 1,
+      "nestedWorkerConstructions": 0,
+      "wasmFetchCount": 1,
+      "wasmSha256": "5929bdb7359c54b96265457b6014131ced12f69c133c6ba91dc4045608ffd124",
+      "ownerEpochs": [
+        1
+      ],
+      "crossOriginIsolated": false,
+      "sharedArrayBufferAvailable": false,
+      "sharedWorkerUrl": "http://127.0.0.1:4188/@fs/home/sean/dev/macro/macro-turso-wp11-packaging/apps/web/src/lib/graphql-cache/worker/cache.coordinator.shared-worker.ts?worker_file&type=module",
+      "productionEngineUrl": "http://127.0.0.1:4188/@fs/home/sean/dev/macro/macro-turso-wp11-packaging/apps/web/src/lib/graphql-cache/worker/cache.engine-worker.ts?worker_file&type=module",
+      "instrumentedEngineUrl": "http://127.0.0.1:4188/measurement-cache.engine-worker.ts?worker_file&type=module",
+      "browser": "chromium",
+      "wasmUrl": "http://127.0.0.1:4188/@fs/home/sean/dev/macro/macro-turso-wp11-packaging/apps/web/src/lib/graphql-cache/wasm/cache_wasm_bg.wasm"
+    }
+  ],
+  "p95": {
+    "activationMs": 55.79999999701977,
+    "browserReadyMs": 563.6999999880791,
+    "hostFirstReadyMs": 585.7999999970198,
+    "workerActivationMs": 507.79999999701977,
+    "linearMemoryBytes": 9961472
+  },
+  "assetUrls": {
+    "sharedWorkers": [
+      "http://127.0.0.1:4188/@fs/home/sean/dev/macro/macro-turso-wp11-packaging/apps/web/src/lib/graphql-cache/worker/cache.coordinator.shared-worker.ts?worker_file&type=module"
+    ],
+    "productionEngines": [
+      "http://127.0.0.1:4188/@fs/home/sean/dev/macro/macro-turso-wp11-packaging/apps/web/src/lib/graphql-cache/worker/cache.engine-worker.ts?worker_file&type=module"
+    ],
+    "instrumentedEngines": [
+      "http://127.0.0.1:4188/measurement-cache.engine-worker.ts?worker_file&type=module"
+    ],
+    "wasm": [
+      "http://127.0.0.1:4188/@fs/home/sean/dev/macro/macro-turso-wp11-packaging/apps/web/src/lib/graphql-cache/wasm/cache_wasm_bg.wasm"
+    ]
+  },
+  "sourceMapUrls": [],
+  "delivery": {
+    "basePath": "/",
+    "wasmUrl": "http://127.0.0.1:4188/@fs/home/sean/dev/macro/macro-turso-wp11-packaging/apps/web/src/lib/graphql-cache/wasm/cache_wasm_bg.wasm",
+    "wasmContentType": "application/wasm",
+    "wasmContentEncoding": null,
+    "wasmCompilationSucceeded": true,
+    "wasmSha256": "5929bdb7359c54b96265457b6014131ced12f69c133c6ba91dc4045608ffd124",
+    "localPrecompressedOrigin": false,
+    "liveS3CloudFrontVerified": false
+  }
+}

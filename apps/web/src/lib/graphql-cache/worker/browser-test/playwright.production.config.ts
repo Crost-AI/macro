@@ -15,19 +15,20 @@ export default defineConfig({
   workers: 1,
   reporter: 'line',
   use: {
-    baseURL: 'http://127.0.0.1:4188',
+    baseURL: 'http://127.0.0.1:4189/app/',
     headless: true,
   },
   webServer: {
-    command: `just build-cache-wasm && bunx --bun vite --config ${JSON.stringify(`${directory}/vite.config.ts`)}`,
+    command:
+      'just build-cache-wasm-browser-production && node scripts/cache-wasm/precompressed-preview-server.mjs src/lib/graphql-cache/worker/browser-test/.dist-production',
     cwd: webDirectory,
-    url: 'http://127.0.0.1:4188',
+    url: 'http://127.0.0.1:4189/app/',
     reuseExistingServer: false,
     timeout: 180_000,
   },
   projects: [
     {
-      name: 'chromium',
+      name: 'chromium-production',
       use: {
         ...devices['Desktop Chrome'],
         launchOptions: {
@@ -36,7 +37,7 @@ export default defineConfig({
       },
     },
     {
-      name: 'firefox',
+      name: 'firefox-production',
       use: {
         ...devices['Desktop Firefox'],
         launchOptions: {

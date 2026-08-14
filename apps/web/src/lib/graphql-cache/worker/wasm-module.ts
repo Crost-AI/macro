@@ -123,6 +123,13 @@ export interface CacheWasmModule {
 }
 
 let modulePromise: Promise<CacheWasmModule> | undefined;
+let wasmMemory: WebAssembly.Memory | undefined;
+
+/** Returns the combined module's current unshared linear-memory allocation. */
+export function cacheWasmLinearMemoryBytes(): number {
+  if (!wasmMemory) throw new Error('cache WASM memory is not initialized');
+  return wasmMemory.buffer.byteLength;
+}
 
 /** Loads and initializes the wasm module exactly once per worker context. */
 export function loadCacheWasm(): Promise<CacheWasmModule> {
@@ -135,7 +142,13 @@ export function loadCacheWasm(): Promise<CacheWasmModule> {
       // would 404 in production. This `new URL` pattern is statically
       // analyzable, so vite emits the binary as an asset and rewrites it.
       const wasmUrl = new URL('../wasm/cache_wasm_bg.wasm', import.meta.url);
-      await mod.default({ module_or_path: wasmUrl });
+      const exports = (await mod.default({ module_or_path: wasmUrl })) as {
+        memory?: WebAssembly.Memory;
+      };
+      if (!(exports.memory instanceof WebAssembly.Memory)) {
+        throw new Error('cache WASM did not export its linear memory');
+      }
+      wasmMemory = exports.memory;
       return mod;
     })();
   }

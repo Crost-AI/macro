@@ -1,0 +1,164 @@
+{
+  "schemaVersion": 1,
+  "project": "chromium-production",
+  "browser": "chromium",
+  "mode": "production",
+  "origin": "http://127.0.0.1:4189",
+  "browserVersion": "145.0.7632.6",
+  "executablePath": "/nix/store/6js92rbq8qyyyrblvn7s2nvr0grmyydh-playwright-chromium/chrome-linux64/chrome",
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.7922.34 Safari/537.36",
+  "freshScopeCount": 5,
+  "samples": [
+    {
+      "mode": "production",
+      "activationMs": 25.5,
+      "browserReadyMs": 534.9000000059605,
+      "hostFirstReadyMs": 552.4000000059605,
+      "workerActivationMs": 509.3999999910593,
+      "linearMemoryBytes": 9961472,
+      "sharedWorkerConstructions": 1,
+      "dedicatedWorkerConstructions": 1,
+      "nestedWorkerConstructions": 0,
+      "wasmFetchCount": 1,
+      "wasmSha256": "5929bdb7359c54b96265457b6014131ced12f69c133c6ba91dc4045608ffd124",
+      "ownerEpochs": [
+        1
+      ],
+      "crossOriginIsolated": false,
+      "sharedArrayBufferAvailable": false,
+      "sharedWorkerUrl": "http://127.0.0.1:4189/app/assets/cache.coordinator.shared-worker-CPC1jIFn.js",
+      "productionEngineUrl": "http://127.0.0.1:4189/app/assets/cache.engine-worker-C-ukX9tF.js",
+      "instrumentedEngineUrl": "http://127.0.0.1:4189/app/assets/measurement-cache.engine-worker-DPNtS9S1.js",
+      "browser": "chromium",
+      "wasmUrl": "http://127.0.0.1:4189/app/assets/cache_wasm_bg-Bz3VSCDF.wasm"
+    },
+    {
+      "mode": "production",
+      "activationMs": 23.19999998807907,
+      "browserReadyMs": 369.3999999910593,
+      "hostFirstReadyMs": 387.19999998807907,
+      "workerActivationMs": 346.20000000298023,
+      "linearMemoryBytes": 9961472,
+      "sharedWorkerConstructions": 1,
+      "dedicatedWorkerConstructions": 1,
+      "nestedWorkerConstructions": 0,
+      "wasmFetchCount": 1,
+      "wasmSha256": "5929bdb7359c54b96265457b6014131ced12f69c133c6ba91dc4045608ffd124",
+      "ownerEpochs": [
+        1
+      ],
+      "crossOriginIsolated": false,
+      "sharedArrayBufferAvailable": false,
+      "sharedWorkerUrl": "http://127.0.0.1:4189/app/assets/cache.coordinator.shared-worker-CPC1jIFn.js",
+      "productionEngineUrl": "http://127.0.0.1:4189/app/assets/cache.engine-worker-C-ukX9tF.js",
+      "instrumentedEngineUrl": "http://127.0.0.1:4189/app/assets/measurement-cache.engine-worker-DPNtS9S1.js",
+      "browser": "chromium",
+      "wasmUrl": "http://127.0.0.1:4189/app/assets/cache_wasm_bg-Bz3VSCDF.wasm"
+    },
+    {
+      "mode": "production",
+      "activationMs": 26.299999997019768,
+      "browserReadyMs": 364,
+      "hostFirstReadyMs": 390.79999999701977,
+      "workerActivationMs": 337.59999999403954,
+      "linearMemoryBytes": 9961472,
+      "sharedWorkerConstructions": 1,
+      "dedicatedWorkerConstructions": 1,
+      "nestedWorkerConstructions": 0,
+      "wasmFetchCount": 1,
+      "wasmSha256": "5929bdb7359c54b96265457b6014131ced12f69c133c6ba91dc4045608ffd124",
+      "ownerEpochs": [
+        1
+      ],
+      "crossOriginIsolated": false,
+      "sharedArrayBufferAvailable": false,
+      "sharedWorkerUrl": "http://127.0.0.1:4189/app/assets/cache.coordinator.shared-worker-CPC1jIFn.js",
+      "productionEngineUrl": "http://127.0.0.1:4189/app/assets/cache.engine-worker-C-ukX9tF.js",
+      "instrumentedEngineUrl": "http://127.0.0.1:4189/app/assets/measurement-cache.engine-worker-DPNtS9S1.js",
+      "browser": "chromium",
+      "wasmUrl": "http://127.0.0.1:4189/app/assets/cache_wasm_bg-Bz3VSCDF.wasm"
+    },
+    {
+      "mode": "production",
+      "activationMs": 23.799999997019768,
+      "browserReadyMs": 357.59999999403954,
+      "hostFirstReadyMs": 388.3999999910593,
+      "workerActivationMs": 333.80000001192093,
+      "linearMemoryBytes": 9961472,
+      "sharedWorkerConstructions": 1,
+      "dedicatedWorkerConstructions": 1,
+      "nestedWorkerConstructions": 0,
+      "wasmFetchCount": 1,
+      "wasmSha256": "5929bdb7359c54b96265457b6014131ced12f69c133c6ba91dc4045608ffd124",
+      "ownerEpochs": [
+        1
+      ],
+      "crossOriginIsolated": false,
+      "sharedArrayBufferAvailable": false,
+      "sharedWorkerUrl": "http://127.0.0.1:4189/app/assets/cache.coordinator.shared-worker-CPC1jIFn.js",
+      "productionEngineUrl": "http://127.0.0.1:4189/app/assets/cache.engine-worker-C-ukX9tF.js",
+      "instrumentedEngineUrl": "http://127.0.0.1:4189/app/assets/measurement-cache.engine-worker-DPNtS9S1.js",
+      "browser": "chromium",
+      "wasmUrl": "http://127.0.0.1:4189/app/assets/cache_wasm_bg-Bz3VSCDF.wasm"
+    },
+    {
+      "mode": "production",
+      "activationMs": 28.899999991059303,
+      "browserReadyMs": 366.29999999701977,
+      "hostFirstReadyMs": 390.79999999701977,
+      "workerActivationMs": 337.29999999701977,
+      "linearMemoryBytes": 9961472,
+      "sharedWorkerConstructions": 1,
+      "dedicatedWorkerConstructions": 1,
+      "nestedWorkerConstructions": 0,
+      "wasmFetchCount": 1,
+      "wasmSha256": "5929bdb7359c54b96265457b6014131ced12f69c133c6ba91dc4045608ffd124",
+      "ownerEpochs": [
+        1
+      ],
+      "crossOriginIsolated": false,
+      "sharedArrayBufferAvailable": false,
+      "sharedWorkerUrl": "http://127.0.0.1:4189/app/assets/cache.coordinator.shared-worker-CPC1jIFn.js",
+      "productionEngineUrl": "http://127.0.0.1:4189/app/assets/cache.engine-worker-C-ukX9tF.js",
+      "instrumentedEngineUrl": "http://127.0.0.1:4189/app/assets/measurement-cache.engine-worker-DPNtS9S1.js",
+      "browser": "chromium",
+      "wasmUrl": "http://127.0.0.1:4189/app/assets/cache_wasm_bg-Bz3VSCDF.wasm"
+    }
+  ],
+  "p95": {
+    "activationMs": 28.899999991059303,
+    "browserReadyMs": 534.9000000059605,
+    "hostFirstReadyMs": 552.4000000059605,
+    "workerActivationMs": 509.3999999910593,
+    "linearMemoryBytes": 9961472
+  },
+  "assetUrls": {
+    "sharedWorkers": [
+      "http://127.0.0.1:4189/app/assets/cache.coordinator.shared-worker-CPC1jIFn.js"
+    ],
+    "productionEngines": [
+      "http://127.0.0.1:4189/app/assets/cache.engine-worker-C-ukX9tF.js"
+    ],
+    "instrumentedEngines": [
+      "http://127.0.0.1:4189/app/assets/measurement-cache.engine-worker-DPNtS9S1.js"
+    ],
+    "wasm": [
+      "http://127.0.0.1:4189/app/assets/cache_wasm_bg-Bz3VSCDF.wasm"
+    ]
+  },
+  "sourceMapUrls": [
+    "http://127.0.0.1:4189/app/assets/cache.coordinator.shared-worker-CPC1jIFn.js.map",
+    "http://127.0.0.1:4189/app/assets/cache.engine-worker-C-ukX9tF.js.map",
+    "http://127.0.0.1:4189/app/assets/measurement-cache.engine-worker-DPNtS9S1.js.map"
+  ],
+  "delivery": {
+    "basePath": "/app/",
+    "wasmUrl": "http://127.0.0.1:4189/app/assets/cache_wasm_bg-Bz3VSCDF.wasm",
+    "wasmContentType": "application/wasm",
+    "wasmContentEncoding": "br",
+    "wasmCompilationSucceeded": true,
+    "wasmSha256": "5929bdb7359c54b96265457b6014131ced12f69c133c6ba91dc4045608ffd124",
+    "localPrecompressedOrigin": true,
+    "liveS3CloudFrontVerified": false
+  }
+}

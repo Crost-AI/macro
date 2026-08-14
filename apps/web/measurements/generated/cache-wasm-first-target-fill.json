@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "kind": "first-target-fill-observation",
+  "elapsedMs": 63392,
+  "command": "wasm-pack build ../../crates/client/cache-wasm --target web --release --out-dir src/lib/graphql-cache/wasm",
+  "workingDirectory": "apps/web",
+  "cacheState": "first observed wasm32 target fill in the measurement shell with configured sccache",
+  "measuredRevisionChangeId": "ktmqknurlsrporqovmonoqtzpwznwqls",
+  "toolIdentity": {
+    "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
+    "cargo": "cargo 1.94.0 (85eff7c80 2026-01-15)",
+    "wasmPack": "wasm-pack 0.15.0",
+    "wasmOpt": "wasm-opt version 129"
+  },
+  "wasmSha256": "5929bdb7359c54b96265457b6014131ced12f69c133c6ba91dc4045608ffd124"
+}
