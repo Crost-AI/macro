@@ -113,6 +113,11 @@ export interface CacheEngine {
 export interface CacheWasmModule {
   default: (input?: { module_or_path?: unknown }) => Promise<unknown>;
   openCache(scope: string, hotCapacity?: number): Promise<CacheEngine>;
+  /** Atomically wipes before Turso open while retaining one OPFS owner lock. */
+  openCacheForRecovery(
+    scope: string,
+    hotCapacity?: number
+  ): Promise<CacheEngine>;
   destroyCache(scope: string): Promise<void>;
   schemaHash(): string;
 }

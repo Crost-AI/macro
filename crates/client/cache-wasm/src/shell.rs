@@ -295,20 +295,25 @@ async fn open_storage(scope: &str, owner: OpfsOwner) -> Result<TursoStorage, JsV
     }
 }
 
-async fn acquire_storage(scope: &str) -> Result<TursoStorage, JsValue> {
+async fn acquire_storage(scope: &str, recovery_wipe: bool) -> Result<TursoStorage, JsValue> {
     let owner = OpfsOwner::acquire(&database_identity(scope))
         .await
         .map_err(err_js)?;
+    let owner = if recovery_wipe {
+        owner.recovery_wipe().await.map_err(err_js)?
+    } else {
+        owner
+    };
     open_storage(scope, owner).await
 }
 
-/// Opens (or creates) the cache for `scope` after acquiring its exclusive OPFS
-/// owner lock. The physical identity is derived from `scope` alone; disposable
-/// incomplete or incompatible files are reset and reopened before returning.
-#[wasm_bindgen(js_name = openCache)]
-pub async fn open_cache(scope: String, hot_capacity: Option<u32>) -> Result<CacheEngine, JsValue> {
+async fn open_cache_inner(
+    scope: String,
+    hot_capacity: Option<u32>,
+    recovery_wipe: bool,
+) -> Result<CacheEngine, JsValue> {
     validate_hot_capacity(hot_capacity)?;
-    let storage = acquire_storage(&scope).await?;
+    let storage = acquire_storage(&scope, recovery_wipe).await?;
     Ok(CacheEngine {
         state: Rc::new(Mutex::new(CacheState {
             engine: Some(build_engine(storage, hot_capacity)),
@@ -318,6 +323,24 @@ pub async fn open_cache(scope: String, hot_capacity: Option<u32>) -> Result<Cach
         })),
         ops: Rc::new(RefCell::new(OpInterner::default())),
     })
+}
+
+/// Opens (or creates) the cache for `scope` after acquiring its exclusive OPFS
+/// owner lock. The physical identity is derived from `scope` alone; disposable
+/// incomplete or incompatible files are reset and reopened before returning.
+#[wasm_bindgen(js_name = openCache)]
+pub async fn open_cache(scope: String, hot_capacity: Option<u32>) -> Result<CacheEngine, JsValue> {
+    open_cache_inner(scope, hot_capacity, false).await
+}
+
+/// Acquires the canonical owner once, recovery-wipes before any Turso open,
+/// then opens a fresh cache while continuously retaining that same owner lock.
+#[wasm_bindgen(js_name = openCacheForRecovery)]
+pub async fn open_cache_for_recovery(
+    scope: String,
+    hot_capacity: Option<u32>,
+) -> Result<CacheEngine, JsValue> {
+    open_cache_inner(scope, hot_capacity, true).await
 }
 
 /// Recovery-wipes and recreates the cache database for `scope` while holding

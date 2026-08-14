@@ -586,4 +586,189 @@ describe('CacheWorkerCore', () => {
 
     expect(messages).toContainEqual({ kind: 'cache-changed' });
   });
+
+  it('drains earlier request responses before consuming close and rejects later admission', async () => {
+    const order: string[] = [];
+    let releaseRead!: () => void;
+    let markReadStarted!: () => void;
+    const readStarted = new Promise<void>((resolve) => {
+      markReadStarted = resolve;
+    });
+    const blocker = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const readQuery = vi.fn(async () => {
+      order.push('read:start');
+      markReadStarted();
+      await blocker;
+      order.push('read:done');
+      return { kind: 'miss' as const };
+    });
+    const close = vi.fn(async () => {
+      order.push('close');
+    });
+    loadCacheWasmMock.mockResolvedValue({
+      openCache: vi.fn().mockResolvedValue({ readQuery, close }),
+    });
+    const messages: unknown[] = [];
+    const port = {
+      postMessage: (message: unknown) => {
+        messages.push(message);
+        if ((message as { id?: number }).id === 2) order.push('response');
+      },
+    };
+    const core = new CacheWorkerCore();
+    await core.handleRequest(port, {
+      id: 1,
+      kind: 'init',
+      scope: 'scope-1',
+    });
+
+    const read = core.handleRequest(port, {
+      id: 2,
+      kind: 'read',
+      query: 'query Read { value }',
+    });
+    await readStarted;
+    const drain = core.drain();
+    await core.handleRequest(port, {
+      id: 3,
+      kind: 'clear',
+    });
+    expect(messages).toContainEqual({
+      id: 3,
+      ok: false,
+      error: 'cache engine is draining',
+    });
+    expect(close).not.toHaveBeenCalled();
+
+    releaseRead();
+    await Promise.all([read, drain]);
+    expect(order).toEqual(['read:start', 'read:done', 'response', 'close']);
+  });
+
+  it('uses atomic recovery-open instead of opening before a reset', async () => {
+    const openCache = vi.fn();
+    const openCacheForRecovery = vi.fn().mockResolvedValue({});
+    loadCacheWasmMock.mockResolvedValue({
+      openCache,
+      openCacheForRecovery,
+    });
+    const messages: unknown[] = [];
+    const core = new CacheWorkerCore({ recoveryOpen: true });
+
+    await core.handleRequest(
+      { postMessage: (message: unknown) => messages.push(message) },
+      { id: 1, kind: 'init', scope: 'scope-1', hotCapacity: 17 }
+    );
+
+    expect(openCache).not.toHaveBeenCalled();
+    expect(openCacheForRecovery).toHaveBeenCalledWith('scope-1', 17);
+    expect(messages).toEqual([{ id: 1, ok: true, result: null }]);
+  });
+
+  it('rejects repeated init scope and exact optional capacity mismatches', async () => {
+    const openCache = vi.fn().mockResolvedValue({});
+    loadCacheWasmMock.mockResolvedValue({ openCache });
+    const messages: unknown[] = [];
+    const port = { postMessage: (message: unknown) => messages.push(message) };
+    const core = new CacheWorkerCore();
+
+    await core.handleRequest(port, {
+      id: 1,
+      kind: 'init',
+      scope: 'scope-1',
+    });
+    await core.handleRequest(port, {
+      id: 2,
+      kind: 'init',
+      scope: 'scope-1',
+    });
+    await core.handleRequest(port, {
+      id: 3,
+      kind: 'init',
+      scope: 'scope-2',
+    });
+    await core.handleRequest(port, {
+      id: 4,
+      kind: 'init',
+      scope: 'scope-1',
+      hotCapacity: 1,
+    });
+
+    expect(openCache).toHaveBeenCalledOnce();
+    expect(messages).toEqual([
+      { id: 1, ok: true, result: null },
+      { id: 2, ok: true, result: null },
+      {
+        id: 3,
+        ok: false,
+        error:
+          'cache worker already initialized for scope scope-1, got scope-2',
+      },
+      {
+        id: 4,
+        ok: false,
+        error:
+          'cache worker already initialized with hot capacity undefined, got 1',
+      },
+    ]);
+
+    const capacityMessages: unknown[] = [];
+    const capacityCore = new CacheWorkerCore();
+    await capacityCore.handleRequest(
+      { postMessage: (message: unknown) => capacityMessages.push(message) },
+      { id: 5, kind: 'init', scope: 'scope-1', hotCapacity: 2 }
+    );
+    await capacityCore.handleRequest(
+      { postMessage: (message: unknown) => capacityMessages.push(message) },
+      { id: 6, kind: 'init', scope: 'scope-1' }
+    );
+    expect(capacityMessages.at(-1)).toEqual({
+      id: 6,
+      ok: false,
+      error:
+        'cache worker already initialized with hot capacity 2, got undefined',
+    });
+  });
+
+  it('reports a latched storage-reset marker once before returning failures', async () => {
+    const resetError = Object.assign(
+      new Error('cache storage reset required'),
+      {
+        cacheStorageResetRequired: true as const,
+      }
+    );
+    const readQuery = vi.fn().mockRejectedValue(resetError);
+    loadCacheWasmMock.mockResolvedValue({
+      openCache: vi.fn().mockResolvedValue({ readQuery }),
+    });
+    const onStorageResetRequired = vi.fn();
+    const messages: unknown[] = [];
+    const port = { postMessage: (message: unknown) => messages.push(message) };
+    const core = new CacheWorkerCore({ onStorageResetRequired });
+    await core.handleRequest(port, {
+      id: 1,
+      kind: 'init',
+      scope: 'scope-1',
+    });
+
+    await core.handleRequest(port, {
+      id: 2,
+      kind: 'read',
+      query: 'query Read { value }',
+    });
+    await core.handleRequest(port, {
+      id: 3,
+      kind: 'read',
+      query: 'query ReadAgain { value }',
+    });
+
+    expect(onStorageResetRequired).toHaveBeenCalledTimes(1);
+    expect(onStorageResetRequired).toHaveBeenCalledWith(resetError);
+    expect(messages.slice(-2)).toEqual([
+      { id: 2, ok: false, error: 'cache storage reset required' },
+      { id: 3, ok: false, error: 'cache storage reset required' },
+    ]);
+  });
 });

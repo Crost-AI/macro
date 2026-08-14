@@ -31,6 +31,13 @@ type QueuedEngineRequest = {
   waiters: RequestWaiter[];
 };
 
+export interface CacheWorkerCoreOptions {
+  /** Atomically recovery-wipes before any Turso open during initialization. */
+  recoveryOpen?: boolean;
+  /** Called once when WASM latches a reset-required storage failure. */
+  onStorageResetRequired?: (error: Error) => void;
+}
+
 const NORMAL_READ_PRIORITY = 0;
 const USER_VISIBLE_READ_PRIORITY = 1;
 const CACHE_WRITE_PRIORITY = 2;
@@ -83,7 +90,14 @@ export class CacheWorkerCore {
   /** Serializes engine calls while allowing safe read prioritization. */
   private readonly queue: QueuedEngineRequest[] = [];
   private running = false;
+  private acceptingRequests = true;
+  private activeRequestHandlers = 0;
+  private readonly drainWaiters = new Set<() => void>();
+  private resetRequiredReported = false;
+  private hotCapacity: number | undefined;
   private readonly ports = new Set<PortLike>();
+
+  constructor(private readonly options: CacheWorkerCoreOptions = {}) {}
 
   addPort(port: PortLike): void {
     this.ports.add(port);
@@ -95,15 +109,51 @@ export class CacheWorkerCore {
 
   async handleRequest(port: PortLike, request: CacheRequest): Promise<void> {
     const respond = (response: CacheResponse) => port.postMessage(response);
+    if (!this.acceptingRequests) {
+      respond({
+        id: request.id,
+        ok: false,
+        error: 'cache engine is draining',
+      });
+      return;
+    }
+
+    this.activeRequestHandlers += 1;
     try {
       const result = await this.enqueue(request);
       respond({ id: request.id, ok: true, result });
     } catch (error) {
+      this.reportResetRequired(error);
       respond({
         id: request.id,
         ok: false,
         error: error instanceof Error ? error.message : String(error),
       });
+    } finally {
+      this.activeRequestHandlers -= 1;
+      this.resolveDrainWaitersIfIdle();
+    }
+  }
+
+  /** Stops admission, drains every earlier request/response, then closes OPFS. */
+  async drain(): Promise<void> {
+    this.acceptingRequests = false;
+    if (
+      this.activeRequestHandlers > 0 ||
+      this.running ||
+      this.queue.length > 0
+    ) {
+      await new Promise<void>((resolve) => this.drainWaiters.add(resolve));
+    }
+    if (this.initPromise) await this.initPromise;
+    const engine = this.engine;
+    this.engine = undefined;
+    if (!engine) return;
+    try {
+      await engine.close();
+    } catch (error) {
+      this.reportResetRequired(error);
+      throw error;
     }
   }
 
@@ -129,7 +179,7 @@ export class CacheWorkerCore {
         if (duplicate) {
           duplicate.priority = Math.max(duplicate.priority, priority);
           duplicate.waiters.push({ resolve, reject });
-          this.drain();
+          this.drainQueue();
           return;
         }
       }
@@ -140,7 +190,7 @@ export class CacheWorkerCore {
         readSignature: signature,
         waiters: [{ resolve, reject }],
       });
-      this.drain();
+      this.drainQueue();
     });
   }
 
@@ -149,7 +199,7 @@ export class CacheWorkerCore {
    * Cache-view writes retain FIFO order with each other; overlapping reads
    * may observe the newer state, which is linearizable and avoids stale work.
    */
-  private drain(): void {
+  private drainQueue(): void {
     if (this.running || this.queue.length === 0) return;
 
     let segmentEnd = this.queue.findIndex((queued) =>
@@ -182,7 +232,8 @@ export class CacheWorkerCore {
       )
       .finally(() => {
         this.running = false;
-        this.drain();
+        this.drainQueue();
+        this.resolveDrainWaitersIfIdle();
       });
   }
 
@@ -368,14 +419,50 @@ export class CacheWorkerCore {
           `cache worker already initialized for scope ${this.scope}, got ${scope}`
         );
       }
+      if (this.hotCapacity !== hotCapacity) {
+        throw new Error(
+          `cache worker already initialized with hot capacity ${String(this.hotCapacity)}, got ${String(hotCapacity)}`
+        );
+      }
       return;
     }
     this.scope = scope;
+    this.hotCapacity = hotCapacity;
     this.initPromise = (async () => {
       const wasm = await loadCacheWasm();
-      this.engine = await wasm.openCache(scope, hotCapacity);
+      this.engine = this.options.recoveryOpen
+        ? await wasm.openCacheForRecovery(scope, hotCapacity)
+        : await wasm.openCache(scope, hotCapacity);
     })();
     await this.initPromise;
+  }
+
+  private reportResetRequired(error: unknown): void {
+    if (
+      this.resetRequiredReported ||
+      (typeof error !== 'object' && typeof error !== 'function') ||
+      error === null ||
+      !('cacheStorageResetRequired' in error) ||
+      error.cacheStorageResetRequired !== true
+    ) {
+      return;
+    }
+    this.resetRequiredReported = true;
+    this.options.onStorageResetRequired?.(
+      error instanceof Error ? error : new Error('cache storage reset required')
+    );
+  }
+
+  private resolveDrainWaitersIfIdle(): void {
+    if (
+      this.activeRequestHandlers > 0 ||
+      this.running ||
+      this.queue.length > 0
+    ) {
+      return;
+    }
+    for (const resolve of this.drainWaiters) resolve();
+    this.drainWaiters.clear();
   }
 
   /** Notifies every page connected to this shared engine. */

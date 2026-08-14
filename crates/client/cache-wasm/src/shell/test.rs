@@ -562,6 +562,41 @@ async fn destroy_recovery_wipes_records_and_queue() {
 }
 
 #[wasm_bindgen_test(async)]
+async fn recovery_open_wipes_existing_data_before_opening_fresh_turso() {
+    const SCOPE: &str = "cache-wasm-wp08-recovery-open";
+    let engine = fresh_engine(SCOPE).await;
+    resolved(engine.write_query(
+        None,
+        QUERY.into(),
+        Some("Soup".into()),
+        js(variables()),
+        js(soup_data("must-be-wiped")),
+        Some("user-1".into()),
+    ))
+    .await;
+    resolved(engine.close()).await;
+
+    let replacement = open_cache_for_recovery(SCOPE.into(), None)
+        .await
+        .expect("atomic recovery open");
+    let read: serde_json::Value = from_js(
+        resolved(replacement.read_query(
+            None,
+            QUERY.into(),
+            Some("Soup".into()),
+            js(variables()),
+            JsValue::UNDEFINED,
+        ))
+        .await,
+    );
+    assert_eq!(read["kind"], "miss");
+    let identity: Option<String> = from_js(resolved(replacement.bound_identity()).await);
+    assert_eq!(identity, None);
+
+    close_and_destroy(&replacement, SCOPE).await;
+}
+
+#[wasm_bindgen_test(async)]
 async fn incompatible_initialization_resets_and_identity_reset_does_not_latch() {
     const SCOPE: &str = "cache-wasm-wp07-resets";
     let owner = OpfsOwner::acquire(&database_identity(SCOPE))
