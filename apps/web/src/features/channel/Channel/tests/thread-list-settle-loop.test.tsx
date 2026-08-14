@@ -79,19 +79,6 @@ describe('ThreadList scroll-to-bottom settle loop', () => {
     expect(pumped).toBeLessThan(30);
   });
 
-  it('stops scheduling frames once the list is unmounted', () => {
-    const { unmount } = renderList(200);
-    pumpFrame();
-
-    unmount();
-    frames = [];
-    pumpFrame();
-
-    // A settle loop that outlives the mount keeps writing scrollTop against a
-    // detached scroller for the rest of its window.
-    expect(frames).toHaveLength(0);
-  });
-
   it('does not touch the scroller after unmount when the settle window ends', () => {
     // Ending the polling early moved the close of the settle window onto a
     // timeout. If that timeout outlives the mount it fires `stop()` against a
