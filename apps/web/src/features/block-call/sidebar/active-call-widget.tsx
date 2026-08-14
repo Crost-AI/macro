@@ -18,7 +18,10 @@ import {
   onCleanup,
   Show,
 } from 'solid-js';
-import { dismissIncomingCall, useVisibleIncomingCalls } from './incoming-calls';
+import {
+  dismissIncomingCallEverywhere,
+  useVisibleIncomingCalls,
+} from './incoming-calls';
 
 const SLIM_MAX = 4;
 
@@ -190,7 +193,9 @@ export function SidebarActiveCallWidget(props: {
                     <IncomingCallContextMenu
                       callId={call.callId}
                       channelId={call.channelId}
-                      onDismiss={() => dismissIncomingCall(call.callId)}
+                      onDismiss={() =>
+                        dismissIncomingCallEverywhere(call.callId)
+                      }
                     >
                       <Tooltip label={label()} placement="right">
                         <Button
@@ -256,7 +261,9 @@ export function SidebarActiveCallWidget(props: {
                     <IncomingCallContextMenu
                       callId={call.callId}
                       channelId={call.channelId}
-                      onDismiss={() => dismissIncomingCall(call.callId)}
+                      onDismiss={() =>
+                        dismissIncomingCallEverywhere(call.callId)
+                      }
                     >
                       <div class="flex items-center gap-1.5 w-full rounded-lg p-2 text-ink-extra-muted hover:bg-ink/3">
                         <Tooltip
@@ -322,7 +329,7 @@ export function SidebarActiveCallWidget(props: {
                             onClick={(e) => {
                               e.preventDefault();
                               e.stopPropagation();
-                              dismissIncomingCall(call.callId);
+                              dismissIncomingCallEverywhere(call.callId);
                             }}
                           >
                             <XIcon class="size-3" />
