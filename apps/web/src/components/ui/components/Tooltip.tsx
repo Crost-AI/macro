@@ -3,10 +3,22 @@ import type { Placement } from '@floating-ui/dom';
 import { Tooltip as KobalteTooltip } from '@kobalte/core/tooltip';
 import { Surface } from '@ui';
 import type { ParentProps } from 'solid-js';
-import { createEffect, createSignal, For, on, onCleanup, Show } from 'solid-js';
+import {
+  children,
+  createEffect,
+  createSignal,
+  For,
+  on,
+  onCleanup,
+  Show,
+} from 'solid-js';
+import { Dynamic } from 'solid-js/web';
 import { Hotkey } from '../../ui/components/Hotkey';
 import { tooltipsEnabled } from '../signals/signals';
 import { cn } from '../utils/classname';
+
+/** Matches Kobalte's `openDelay` below, so deferring the root is invisible. */
+const OPEN_DELAY_MS = 400;
 
 type TooltipProps = ParentProps<{
   hotkey?: HotkeyToken | HotkeyToken[];
@@ -29,12 +41,45 @@ type TooltipProps = ParentProps<{
  * </Tooltip>
  */
 export function Tooltip(props: TooltipProps) {
-  const [triggerRef, setTriggerRef] = createSignal<HTMLElement>();
-  const [open, setOpen] = createSignal(false);
-
   if (import.meta.env.MODE === 'test') {
     return <>{props.children}</>;
   }
+
+  const [triggerRef, setTriggerRef] = createSignal<HTMLElement>();
+  const [open, setOpen] = createSignal(false);
+  // A Kobalte tooltip root costs a set of effects, global listeners and timers
+  // per instance, and one is mounted for every button carrying a label. A
+  // virtualized message row holds several, and rows are built and torn down in
+  // waves as the list re-ranges, so the root is deferred until the pointer or
+  // keyboard actually reaches this trigger. Resolving the children once keeps
+  // the same DOM nodes when the placeholder swaps for the real trigger — they
+  // are moved, not rebuilt, so refs and listeners inside them survive.
+  const [activated, setActivated] = createSignal(false);
+  const resolvedChildren = children(() => props.children);
+
+  const isDisabled = () => props.disabled || !tooltipsEnabled();
+
+  /**
+   * Mount the real root, optionally replaying the pointer enter that reached
+   * the placeholder. Kobalte attaches its listeners as it mounts, by which
+   * point the pointer is already inside, so without the replay the hover that
+   * caused activation is never seen and the first hover stays silent. Kobalte
+   * keeps ownership of the open delay and all open/close state; the only thing
+   * deferred here is when its root exists.
+   */
+  const activate = (replayPointerEnter: boolean) => {
+    if (isDisabled() || activated()) return;
+    setActivated(true);
+    if (!replayPointerEnter || typeof PointerEvent !== 'function') return;
+    queueMicrotask(() => {
+      const trigger = triggerRef();
+      if (!trigger?.isConnected) return;
+      // Kobalte ignores `touch` here and opens for anything else.
+      trigger.dispatchEvent(
+        new PointerEvent('pointerenter', { pointerType: 'mouse' })
+      );
+    });
+  };
 
   function tokens(): HotkeyToken[] {
     return props.hotkey == null
@@ -94,68 +139,82 @@ export function Tooltip(props: TooltipProps) {
   onCleanup(() => setOpen(false));
 
   return (
-    <KobalteTooltip
-      open={open()}
-      onOpenChange={(isOpen) => {
-        setOpen(isOpen);
-      }}
-      placement={props.placement ?? 'bottom'}
-      ignoreSafeArea={true}
-      overflowPadding={16}
-      fitViewport={true}
-      openDelay={400}
-      closeDelay={0}
-      flip={true}
-      gutter={4}
-      disabled={props.disabled || !tooltipsEnabled()}
+    <Show
+      when={activated()}
+      fallback={
+        <Dynamic
+          component={props.as ?? 'div'}
+          class={cn('inline-flex items-center', props.class)}
+          onPointerEnter={() => activate(true)}
+          onFocusIn={() => activate(false)}
+        >
+          {resolvedChildren()}
+        </Dynamic>
+      }
     >
-      <KobalteTooltip.Trigger
-        ref={(ref) => {
-          setTriggerRef(ref);
+      <KobalteTooltip
+        open={open()}
+        onOpenChange={(isOpen) => {
+          setOpen(isOpen);
         }}
-        class={cn('inline-flex items-center', props.class)}
-        as={props.as ?? 'div'}
+        placement={props.placement ?? 'bottom'}
+        ignoreSafeArea={true}
+        overflowPadding={16}
+        fitViewport={true}
+        openDelay={OPEN_DELAY_MS}
+        closeDelay={0}
+        flip={true}
+        gutter={4}
+        disabled={isDisabled()}
       >
-        {props.children}
-      </KobalteTooltip.Trigger>
-      <Show when={open()}>
-        <KobalteTooltip.Portal>
-          <KobalteTooltip.Content class="z-tool-tip max-w-[calc(100vw-32px)]">
-            <Surface
-              class="flex items-center justify-center p-2 text-ink-muted text-xs wrap-break-word"
-              depth={3}
-            >
-              <div class="flex flex-row items-center gap-2">
-                <div class="text-xs">{props.label}</div>
-                <Show when={hasHotkey()}>
-                  <div class="flex items-center gap-1 ml-auto">
-                    <For each={tokens()}>
-                      {(token, ndx) => (
-                        <>
-                          <Hotkey token={token} theme="subtle" />
-                          <Show when={ndx() < tokens().length - 1}>
-                            <span class="text-ink-extra-muted">then</span>
-                          </Show>
-                        </>
-                      )}
-                    </For>
-                    <For each={shortcuts()}>
-                      {(shortcut, ndx) => (
-                        <>
-                          <Hotkey shortcut={shortcut} theme="subtle" />
-                          <Show when={ndx() < shortcuts().length - 1}>
-                            <span class="text-ink-extra-muted">then</span>
-                          </Show>
-                        </>
-                      )}
-                    </For>
-                  </div>
-                </Show>
-              </div>
-            </Surface>
-          </KobalteTooltip.Content>
-        </KobalteTooltip.Portal>
-      </Show>
-    </KobalteTooltip>
+        <KobalteTooltip.Trigger
+          ref={(ref) => {
+            setTriggerRef(ref);
+          }}
+          class={cn('inline-flex items-center', props.class)}
+          as={props.as ?? 'div'}
+        >
+          {resolvedChildren()}
+        </KobalteTooltip.Trigger>
+        <Show when={open()}>
+          <KobalteTooltip.Portal>
+            <KobalteTooltip.Content class="z-tool-tip max-w-[calc(100vw-32px)]">
+              <Surface
+                class="flex items-center justify-center p-2 text-ink-muted text-xs wrap-break-word"
+                depth={3}
+              >
+                <div class="flex flex-row items-center gap-2">
+                  <div class="text-xs">{props.label}</div>
+                  <Show when={hasHotkey()}>
+                    <div class="flex items-center gap-1 ml-auto">
+                      <For each={tokens()}>
+                        {(token, ndx) => (
+                          <>
+                            <Hotkey token={token} theme="subtle" />
+                            <Show when={ndx() < tokens().length - 1}>
+                              <span class="text-ink-extra-muted">then</span>
+                            </Show>
+                          </>
+                        )}
+                      </For>
+                      <For each={shortcuts()}>
+                        {(shortcut, ndx) => (
+                          <>
+                            <Hotkey shortcut={shortcut} theme="subtle" />
+                            <Show when={ndx() < shortcuts().length - 1}>
+                              <span class="text-ink-extra-muted">then</span>
+                            </Show>
+                          </>
+                        )}
+                      </For>
+                    </div>
+                  </Show>
+                </div>
+              </Surface>
+            </KobalteTooltip.Content>
+          </KobalteTooltip.Portal>
+        </Show>
+      </KobalteTooltip>
+    </Show>
   );
 }
