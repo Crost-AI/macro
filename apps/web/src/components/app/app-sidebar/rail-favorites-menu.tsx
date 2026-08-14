@@ -19,7 +19,14 @@ import {
 } from '@queries/favorites/favorites';
 import type { Favorite } from '@service-storage/generated/schemas/favorite';
 import { Button, NavRow } from '@ui';
-import { createEffect, createSignal, For, onCleanup, Show } from 'solid-js';
+import {
+  createEffect,
+  createSignal,
+  For,
+  onCleanup,
+  Show,
+  Suspense,
+} from 'solid-js';
 
 const FavoritePopoverRow = (props: {
   favorite: Favorite;
@@ -149,24 +156,29 @@ export const RailFavoritesMenu = (props: {
       </Button>
       <Show when={open()}>
         <div class="absolute bottom-0 left-full z-float ml-2 flex max-h-96 w-64 flex-col overflow-y-auto rounded-xl border border-edge bg-surface p-1.5 shadow-menu">
-          <Show
-            when={favorites().length > 0}
-            fallback={
-              <div class="px-2.5 py-2 text-sm text-ink-muted">
-                No favorites yet
-              </div>
-            }
-          >
-            <For each={favorites()}>
-              {(favorite) => (
-                <FavoritePopoverRow
-                  favorite={favorite}
-                  onContextMenuOpenChange={setContextMenuOpen}
-                  close={() => setOpen(false)}
-                />
-              )}
-            </For>
-          </Show>
+          {/* Row names resolve through the async item-preview cache, which
+              suspends. Without this boundary the suspension bubbles to an
+              ancestor Suspense shared with the split content and blanks it. */}
+          <Suspense>
+            <Show
+              when={favorites().length > 0}
+              fallback={
+                <div class="px-2.5 py-2 text-sm text-ink-muted">
+                  No favorites yet
+                </div>
+              }
+            >
+              <For each={favorites()}>
+                {(favorite) => (
+                  <FavoritePopoverRow
+                    favorite={favorite}
+                    onContextMenuOpenChange={setContextMenuOpen}
+                    close={() => setOpen(false)}
+                  />
+                )}
+              </For>
+            </Show>
+          </Suspense>
         </div>
       </Show>
     </div>
