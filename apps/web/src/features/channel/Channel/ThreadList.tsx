@@ -119,6 +119,10 @@ const EXPLICIT_SCROLL_DOWN_TRIGGER_DISTANCE = 64;
 // re-pin window absorbs that late growth so a single action lands fully down.
 const SCROLL_TO_BOTTOM_SETTLE_MS = 1000;
 
+// Consecutive frames already resting at the bottom before the settle loop stops
+// polling. Three covers a frame landing mid-measurement between two growths.
+const SETTLED_FRAMES_BEFORE_IDLE = 3;
+
 export const DEFAULT_INITIAL_SCROLL_TARGET: ThreadListScrollTarget = {
   tag: 'bottom',
   align: 'end',
@@ -292,16 +296,15 @@ export function ThreadList(props: ThreadListProps) {
 
   const emitScrollState = (
     handle: VirtualizerHandle,
-    isScrollingDown: boolean
+    isScrollingDown: boolean,
+    distanceFromBottom = getDistanceFromBottom(handle)
   ) => {
     if (!props.onScrollStateChange) return;
-    const distanceFromTop = handle.scrollOffset;
-    const distanceFromBottom = getDistanceFromBottom(handle);
     props.onScrollStateChange({
       didInitialScroll: didInitialScroll(),
       isNearBottom: distanceFromBottom <= NEAR_BOTTOM_THRESHOLD,
       isScrollingDown,
-      distanceFromTop,
+      distanceFromTop: handle.scrollOffset,
       distanceFromBottom,
       viewportSize: handle.viewportSize,
     });
@@ -311,14 +314,27 @@ export function ThreadList(props: ThreadListProps) {
   const completeInitialScroll = (handle: VirtualizerHandle) => {
     setDidInitialScroll(true);
     emitScrollState(handle, false);
-    emitScrollSnapshot(handle);
+    emitScrollSnapshot(handle, { refreshCache: true });
   };
 
-  const emitScrollSnapshot = (handle: VirtualizerHandle) => {
-    props.onScrollSnapshotChange?.({
+  // Reading `handle.cache` copies virtua's measured-size array for every item
+  // in the channel. The snapshot is only ever read when the channel is torn
+  // down (`getMessagesStateSnapshot`), so the sizes are refreshed when
+  // scrolling settles and reused in between rather than cloned on every one of
+  // the scroll events a flick or the settle loop below produces.
+  let lastVirtualCache = props.initialScrollSnapshot?.virtualCache;
+
+  const emitScrollSnapshot = (
+    handle: VirtualizerHandle,
+    options: { refreshCache?: boolean } = {},
+    distanceFromBottom = getDistanceFromBottom(handle)
+  ) => {
+    if (!props.onScrollSnapshotChange) return;
+    if (options.refreshCache) lastVirtualCache = handle.cache;
+    props.onScrollSnapshotChange({
       scrollOffset: handle.scrollOffset,
-      virtualCache: handle.cache,
-      isNearBottom: getDistanceFromBottom(handle) <= NEAR_BOTTOM_THRESHOLD,
+      virtualCache: lastVirtualCache,
+      isNearBottom: distanceFromBottom <= NEAR_BOTTOM_THRESHOLD,
     });
   };
 
@@ -337,6 +353,8 @@ export function ThreadList(props: ThreadListProps) {
     if (!didScroll || !el) return didScroll;
 
     let rafId = 0;
+    let settleTimer = 0;
+    let settledFrames = 0;
     const start = performance.now();
     const virtualContent = Array.from(el.children).find(
       (child): child is HTMLElement =>
@@ -349,8 +367,15 @@ export function ThreadList(props: ThreadListProps) {
       : undefined;
     if (virtualContent) resizeObserver?.observe(virtualContent);
 
-    const stop = () => {
+    const stopPolling = () => {
       if (rafId) cancelAnimationFrame(rafId);
+      rafId = 0;
+    };
+
+    const stop = () => {
+      stopPolling();
+      if (settleTimer) clearTimeout(settleTimer);
+      settleTimer = 0;
       resizeObserver?.disconnect();
       el.removeEventListener('wheel', onWheel);
       el.removeEventListener('pointerdown', onPointerDown);
@@ -372,14 +397,29 @@ export function ThreadList(props: ThreadListProps) {
     cancelPinToBottom = stop;
 
     const tick = () => {
-      if (getDistanceFromBottom(handle) > 1) el.scrollTop = el.scrollHeight;
+      if (getDistanceFromBottom(handle) > 1) {
+        el.scrollTop = el.scrollHeight;
+        settledFrames = 0;
+      } else {
+        settledFrames++;
+      }
       if (performance.now() - start >= SCROLL_TO_BOTTOM_SETTLE_MS) {
         stop();
+        return;
+      }
+      // Every corrective write here emits a scroll event, and each one can move
+      // virtua's range and churn a wave of message rows. Once the viewport has
+      // held the bottom across consecutive frames there is nothing left to
+      // correct, so the polling stops early; the ResizeObserver above stays
+      // connected for the rest of the window and still catches late growth.
+      if (settledFrames >= SETTLED_FRAMES_BEFORE_IDLE) {
+        stopPolling();
         return;
       }
       rafId = requestAnimationFrame(tick);
     };
     rafId = requestAnimationFrame(tick);
+    settleTimer = window.setTimeout(stop, SCROLL_TO_BOTTOM_SETTLE_MS);
 
     return true;
   };
@@ -551,10 +591,15 @@ export function ThreadList(props: ThreadListProps) {
   }
 
   const handleScrollEnd = () => {
-    if (didInitialScroll()) return;
-
     const handle = virtualHandle();
     if (!handle) return;
+
+    if (didInitialScroll()) {
+      // Scrolling has settled: fold the now-stable item measurements into the
+      // restore snapshot, the one point where cloning them is worth it.
+      emitScrollSnapshot(handle, { refreshCache: true });
+      return;
+    }
 
     if (isScrollPositionCorrect(handle, initialScrollTarget)) {
       console.debug('ThreadList: onScrollEnd confirmed position, completing', {
@@ -650,8 +695,8 @@ export function ThreadList(props: ThreadListProps) {
         explicitScrollDownDistance >= EXPLICIT_SCROLL_DOWN_TRIGGER_DISTANCE;
     }
     previousScrollOffset = handle.scrollOffset;
-    emitScrollState(handle, nextIsScrollingDown);
-    emitScrollSnapshot(handle);
+    emitScrollState(handle, nextIsScrollingDown, distanceFromBottom);
+    emitScrollSnapshot(handle, undefined, distanceFromBottom);
 
     if (!didInitialScroll()) return;
 

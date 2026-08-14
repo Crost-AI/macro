@@ -1,0 +1,94 @@
+/** @vitest-environment jsdom */
+import { render } from '@solidjs/testing-library';
+import { createSignal } from 'solid-js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { ThreadList } from '../ThreadList';
+import { installFakeLayout } from './fake-layout';
+
+const ITEM_SIZE = 96;
+const VIEWPORT_SIZE = 600;
+
+let layout: ReturnType<typeof installFakeLayout>;
+let frames: FrameRequestCallback[];
+let previousRaf: typeof requestAnimationFrame;
+let previousCancelRaf: typeof cancelAnimationFrame;
+
+beforeEach(() => {
+  layout = installFakeLayout({
+    itemSize: ITEM_SIZE,
+    viewportSize: VIEWPORT_SIZE,
+  });
+
+  // A manually pumped frame queue: the settle loop reschedules itself every
+  // frame, so counting scheduled frames is how "is it still polling" is
+  // observed without waiting out real time.
+  frames = [];
+  previousRaf = globalThis.requestAnimationFrame;
+  previousCancelRaf = globalThis.cancelAnimationFrame;
+  globalThis.requestAnimationFrame = ((callback: FrameRequestCallback) =>
+    frames.push(callback)) as unknown as typeof requestAnimationFrame;
+  globalThis.cancelAnimationFrame = (() => {
+    // Handles are not reused in this harness; pumping simply drains the queue.
+  }) as unknown as typeof cancelAnimationFrame;
+});
+
+afterEach(() => {
+  globalThis.requestAnimationFrame = previousRaf;
+  globalThis.cancelAnimationFrame = previousCancelRaf;
+  layout.uninstall();
+});
+
+/** Run every currently queued frame callback once, returning how many ran. */
+function pumpFrame(): number {
+  const queued = frames;
+  frames = [];
+  for (const callback of queued) callback(performance.now());
+  return queued.length;
+}
+
+function renderList(count: number) {
+  const [keys] = createSignal(Array.from({ length: count }, (_, i) => `m${i}`));
+  layout.setContentSize(count * ITEM_SIZE);
+
+  const rendered = render(() => (
+    <div style={{ height: `${VIEWPORT_SIZE}px` }}>
+      <ThreadList keys={keys}>
+        {(item) => <div data-key={item.id}>{item.id}</div>}
+      </ThreadList>
+    </div>
+  ));
+  layout.flushResizes();
+  return rendered;
+}
+
+describe('ThreadList scroll-to-bottom settle loop', () => {
+  it('stops polling once the viewport rests at the bottom', () => {
+    renderList(200);
+
+    // Drain the mount-time frames, then confirm the loop winds down instead of
+    // rescheduling itself for the full settle window. Each polled frame writes
+    // scrollTop, and every write emits a scroll event that can move virtua's
+    // range and churn a wave of message rows.
+    let pumped = 0;
+    for (let i = 0; i < 30 && frames.length > 0; i++) {
+      pumpFrame();
+      pumped++;
+    }
+
+    expect(frames).toHaveLength(0);
+    expect(pumped).toBeLessThan(30);
+  });
+
+  it('stops scheduling frames once the list is unmounted', () => {
+    const { unmount } = renderList(200);
+    pumpFrame();
+
+    unmount();
+    frames = [];
+    pumpFrame();
+
+    // A settle loop that outlives the mount keeps writing scrollTop against a
+    // detached scroller for the rest of its window.
+    expect(frames).toHaveLength(0);
+  });
+});
