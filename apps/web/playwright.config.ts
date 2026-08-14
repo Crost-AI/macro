@@ -74,6 +74,13 @@ function ciPreviewWebServerCommand(): string {
   ].join(' ');
 }
 
+/**
+ * Component specs mount one component against a static fixture page. They need
+ * neither the seeded stack nor a signed-in session, so they are kept out of the
+ * authenticated projects and run without their `setup` dependency.
+ */
+const COMPONENT_SPEC = /.*\.component\.spec\.ts/;
+
 const authenticatedProjects = isLocalE2E
   ? [
       {
@@ -162,7 +169,17 @@ export default defineConfig({
     '{testDir}/{testFilePath}-snapshots/{arg}-{projectName}{ext}',
   /* Configure projects for major browsers */
   projects: [
-    ...authenticatedProjects,
+    ...authenticatedProjects.map(
+      (project: (typeof authenticatedProjects)[number]) => ({
+        ...project,
+        testIgnore: COMPONENT_SPEC,
+      })
+    ),
+    {
+      name: 'component',
+      testMatch: COMPONENT_SPEC,
+      use: { ...devices['Desktop Chrome'] },
+    },
 
     /* Test against mobile viewports. */
     // {

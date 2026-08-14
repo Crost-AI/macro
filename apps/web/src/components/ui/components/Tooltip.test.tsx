@@ -16,10 +16,16 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-// jsdom ships no PointerEvent constructor and cannot drive Kobalte's tooltip
-// far enough to render content (the unmodified component does not open here
-// either), so these assert the thing that is observable: whether Kobalte's
-// root exists. It brands its trigger with `data-closed`/`data-expanded`.
+// Scope: these cover root deferral and the DOM-identity property the swap
+// depends on, both of which are real invariants and run in CI. They do NOT
+// cover whether a tooltip visibly opens on first hover — jsdom cannot drive
+// Kobalte that far (the unmodified component does not open here either), and
+// asserting it would be theatre. That behaviour, which depends on the replayed
+// pointer enter, is covered against a real browser in
+// tests/e2e/tooltip.component.spec.ts.
+//
+// Kobalte brands its trigger with `data-closed`/`data-expanded`, which is how
+// "does the root exist" is observed below.
 const pointerEnter = (el: Element) =>
   el.dispatchEvent(new Event('pointerenter', { bubbles: true }));
 
