@@ -7,39 +7,20 @@ use crate::model::{
 };
 use crate::replica::mock::MockReplica;
 
-/// A [`DocMachine<MockReplica>`] plus feed/inspect helpers.
-pub(crate) struct Harness {
-    pub machine: DocMachine<MockReplica>,
-}
-
-impl Harness {
-    pub fn new() -> Self {
-        Self {
-            machine: DocMachine::new(),
-        }
-    }
-
-    /// Feed one input and return the effects it produced.
-    pub fn feed(&mut self, input: Input) -> Vec<Effect> {
-        let mut out = Vec::new();
-        self.machine.handle(input, &mut out);
-        out
-    }
-
-    /// A machine already attached (edit caps) and loaded from `snapshot`,
-    /// with the setup effects discarded. Returns the harness and the conn.
-    pub fn ready(snapshot: &[u8]) -> (Self, ConnId) {
-        let mut harness = Self::new();
-        let conn = ConnId(1);
-        harness.feed(Input::PeerAttached {
-            conn,
-            caps: edit_caps(),
-        });
-        harness.feed(Input::Loaded {
-            snapshot: Some(RawSnapshot::from(snapshot)),
-        });
-        (harness, conn)
-    }
+/// A [`DocMachine<MockReplica>`] already attached (edit caps) and loaded from
+/// `snapshot`, with the setup effects discarded. Returns the machine and the
+/// attached conn.
+pub(crate) fn ready(snapshot: &[u8]) -> (DocMachine<MockReplica>, ConnId) {
+    let mut machine = DocMachine::new();
+    let conn = ConnId(1);
+    machine.handle(Input::PeerAttached {
+        conn,
+        caps: edit_caps(),
+    });
+    machine.handle(Input::Loaded {
+        snapshot: Some(RawSnapshot::from(snapshot)),
+    });
+    (machine, conn)
 }
 
 pub(crate) fn edit_caps() -> Caps {

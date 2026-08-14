@@ -7,42 +7,27 @@ fn doc(id: &str) -> DocId {
     DocId(id.to_string())
 }
 
-fn feed(manager: &mut ConnManager<MockReplica>, input: ManagerInput) -> Vec<ManagerEffect> {
-    let mut out = Vec::new();
-    manager.handle(input, &mut out);
-    out
-}
-
 /// Bring one (conn, doc) to Ready, discarding setup effects.
 fn attach_ready(manager: &mut ConnManager<MockReplica>, conn: ConnId, id: &str) {
-    feed(
-        manager,
-        ManagerInput::Attach {
-            conn,
-            doc: doc(id),
-            caps: edit_caps(),
-        },
-    );
-    feed(
-        manager,
-        ManagerInput::Loaded {
-            doc: doc(id),
-            snapshot: Some(RawSnapshot::from(&b"base"[..])),
-        },
-    );
+    manager.handle(ManagerInput::Attach {
+        conn,
+        doc: doc(id),
+        caps: edit_caps(),
+    });
+    manager.handle(ManagerInput::Loaded {
+        doc: doc(id),
+        snapshot: Some(RawSnapshot::from(&b"base"[..])),
+    });
 }
 
 #[test]
 fn attach_creates_the_machine_and_lifts_load_with_the_doc_stamped() {
     let mut manager = ConnManager::<MockReplica>::new();
-    let fx = feed(
-        &mut manager,
-        ManagerInput::Attach {
-            conn: ConnId(1),
-            doc: doc("doc-a"),
-            caps: edit_caps(),
-        },
-    );
+    let fx = manager.handle(ManagerInput::Attach {
+        conn: ConnId(1),
+        doc: doc("doc-a"),
+        caps: edit_caps(),
+    });
     assert_eq!(
         fx,
         vec![ManagerEffect {
@@ -59,14 +44,11 @@ fn frames_route_to_the_right_document() {
     attach_ready(&mut manager, ConnId(1), "doc-a");
     attach_ready(&mut manager, ConnId(1), "doc-b");
 
-    let fx = feed(
-        &mut manager,
-        ManagerInput::Frame {
-            conn: ConnId(1),
-            doc: doc("doc-b"),
-            frame: ClientFrame::RequestSnapshot,
-        },
-    );
+    let fx = manager.handle(ManagerInput::Frame {
+        conn: ConnId(1),
+        doc: doc("doc-b"),
+        frame: ClientFrame::RequestSnapshot,
+    });
     assert_eq!(fx.len(), 1);
     assert_eq!(fx[0].doc, doc("doc-b"));
     assert!(matches!(
@@ -86,20 +68,14 @@ fn per_doc_detaches_reach_their_documents() {
     attach_ready(&mut manager, ConnId(1), "doc-a");
     attach_ready(&mut manager, ConnId(2), "doc-b");
 
-    let mut fx = feed(
-        &mut manager,
-        ManagerInput::Detach {
-            conn: ConnId(1),
-            doc: doc("doc-a"),
-        },
-    );
-    fx.extend(feed(
-        &mut manager,
-        ManagerInput::Detach {
-            conn: ConnId(2),
-            doc: doc("doc-b"),
-        },
-    ));
+    let mut fx = manager.handle(ManagerInput::Detach {
+        conn: ConnId(1),
+        doc: doc("doc-a"),
+    });
+    fx.extend(manager.handle(ManagerInput::Detach {
+        conn: ConnId(2),
+        doc: doc("doc-b"),
+    }));
     let last_leaves: Vec<&DocId> = fx
         .iter()
         .filter(|e| {
@@ -122,13 +98,10 @@ fn manager_scoped_timer_tokens_route_back_to_their_document() {
     attach_ready(&mut manager, ConnId(2), "doc-b");
 
     // Detach both; each doc arms an idle timer under a manager-scoped token.
-    let fx = feed(
-        &mut manager,
-        ManagerInput::Detach {
-            conn: ConnId(1),
-            doc: doc("doc-a"),
-        },
-    );
+    let fx = manager.handle(ManagerInput::Detach {
+        conn: ConnId(1),
+        doc: doc("doc-a"),
+    });
     let timer_a = fx
         .iter()
         .find_map(|e| match (&e.doc, &e.effect) {
@@ -136,13 +109,10 @@ fn manager_scoped_timer_tokens_route_back_to_their_document() {
             _ => None,
         })
         .expect("doc-a idle timer");
-    let fx = feed(
-        &mut manager,
-        ManagerInput::Detach {
-            conn: ConnId(2),
-            doc: doc("doc-b"),
-        },
-    );
+    let fx = manager.handle(ManagerInput::Detach {
+        conn: ConnId(2),
+        doc: doc("doc-b"),
+    });
     let timer_b = fx
         .iter()
         .find_map(|e| match (&e.doc, &e.effect) {
@@ -153,11 +123,11 @@ fn manager_scoped_timer_tokens_route_back_to_their_document() {
     assert_ne!(timer_a, timer_b);
 
     // Firing doc-b's token evicts only doc-b.
-    let fx = feed(&mut manager, ManagerInput::TimerFired { token: timer_b });
+    let fx = manager.handle(ManagerInput::TimerFired { token: timer_b });
     assert!(fx.is_empty()); // Evict is consumed by the manager
     assert_eq!(manager.resident_docs(), 1);
 
-    let fx = feed(&mut manager, ManagerInput::TimerFired { token: timer_a });
+    let fx = manager.handle(ManagerInput::TimerFired { token: timer_a });
     assert!(fx.is_empty());
     assert_eq!(manager.resident_docs(), 0);
 }
@@ -167,13 +137,10 @@ fn eviction_drops_stale_tokens_and_late_inputs_route_nowhere() {
     let mut manager = ConnManager::<MockReplica>::new();
     attach_ready(&mut manager, ConnId(1), "doc-a");
 
-    let fx = feed(
-        &mut manager,
-        ManagerInput::Detach {
-            conn: ConnId(1),
-            doc: doc("doc-a"),
-        },
-    );
+    let fx = manager.handle(ManagerInput::Detach {
+        conn: ConnId(1),
+        doc: doc("doc-a"),
+    });
     let idle = fx
         .iter()
         .find_map(|e| match &e.effect {
@@ -181,21 +148,23 @@ fn eviction_drops_stale_tokens_and_late_inputs_route_nowhere() {
             _ => None,
         })
         .expect("idle timer");
-    feed(&mut manager, ManagerInput::TimerFired { token: idle });
+    manager.handle(ManagerInput::TimerFired { token: idle });
     assert_eq!(manager.resident_docs(), 0);
 
     // A duplicate fire and a frame for the evicted doc are both harmless.
-    assert!(feed(&mut manager, ManagerInput::TimerFired { token: idle }).is_empty());
     assert!(
-        feed(
-            &mut manager,
-            ManagerInput::Frame {
+        manager
+            .handle(ManagerInput::TimerFired { token: idle })
+            .is_empty()
+    );
+    assert!(
+        manager
+            .handle(ManagerInput::Frame {
                 conn: ConnId(1),
                 doc: doc("doc-a"),
                 frame: ClientFrame::RequestSnapshot,
-            },
-        )
-        .is_empty()
+            })
+            .is_empty()
     );
 }
 
@@ -204,17 +173,14 @@ fn persist_completions_route_through_manager_scoped_tokens() {
     let mut manager = ConnManager::<MockReplica>::new();
     attach_ready(&mut manager, ConnId(1), "doc-a");
 
-    let fx = feed(
-        &mut manager,
-        ManagerInput::Frame {
-            conn: ConnId(1),
-            doc: doc("doc-a"),
-            frame: ClientFrame::Update {
-                updates: vec![RawUpdate::from(&b"x"[..])],
-                id: "op-1".into(),
-            },
+    let fx = manager.handle(ManagerInput::Frame {
+        conn: ConnId(1),
+        doc: doc("doc-a"),
+        frame: ClientFrame::Update {
+            updates: vec![RawUpdate::from(&b"x"[..])],
+            id: "op-1".into(),
         },
-    );
+    });
     let persist = fx
         .iter()
         .find_map(|e| match &e.effect {
@@ -223,14 +189,11 @@ fn persist_completions_route_through_manager_scoped_tokens() {
         })
         .expect("persist ops");
 
-    let fx = feed(
-        &mut manager,
-        ManagerInput::OpsPersisted {
-            doc: doc("doc-a"),
-            token: persist,
-            through_seq: 1,
-        },
-    );
+    let fx = manager.handle(ManagerInput::OpsPersisted {
+        doc: doc("doc-a"),
+        token: persist,
+        through_seq: 1,
+    });
     assert!(fx.iter().any(|e| matches!(
         &e.effect,
         Effect::Send {
@@ -240,14 +203,11 @@ fn persist_completions_route_through_manager_scoped_tokens() {
     )));
 
     // A duplicate completion is stale and ignored.
-    let fx = feed(
-        &mut manager,
-        ManagerInput::OpsPersisted {
-            doc: doc("doc-a"),
-            token: persist,
-            through_seq: 1,
-        },
-    );
+    let fx = manager.handle(ManagerInput::OpsPersisted {
+        doc: doc("doc-a"),
+        token: persist,
+        through_seq: 1,
+    });
     assert!(fx.is_empty());
 }
 
@@ -255,13 +215,10 @@ fn persist_completions_route_through_manager_scoped_tokens() {
 fn reattach_after_eviction_reloads_from_the_store() {
     let mut manager = ConnManager::<MockReplica>::new();
     attach_ready(&mut manager, ConnId(1), "doc-a");
-    let fx = feed(
-        &mut manager,
-        ManagerInput::Detach {
-            conn: ConnId(1),
-            doc: doc("doc-a"),
-        },
-    );
+    let fx = manager.handle(ManagerInput::Detach {
+        conn: ConnId(1),
+        doc: doc("doc-a"),
+    });
     let idle = fx
         .iter()
         .find_map(|e| match &e.effect {
@@ -269,17 +226,14 @@ fn reattach_after_eviction_reloads_from_the_store() {
             _ => None,
         })
         .expect("idle timer");
-    feed(&mut manager, ManagerInput::TimerFired { token: idle });
+    manager.handle(ManagerInput::TimerFired { token: idle });
     assert_eq!(manager.resident_docs(), 0);
 
-    let fx = feed(
-        &mut manager,
-        ManagerInput::Attach {
-            conn: ConnId(2),
-            doc: doc("doc-a"),
-            caps: edit_caps(),
-        },
-    );
+    let fx = manager.handle(ManagerInput::Attach {
+        conn: ConnId(2),
+        doc: doc("doc-a"),
+        caps: edit_caps(),
+    });
     assert_eq!(
         fx,
         vec![ManagerEffect {

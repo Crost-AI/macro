@@ -156,8 +156,14 @@ impl<R: Replica> DocMachine<R> {
             && self.inflight_snapshot.is_none()
     }
 
-    /// Feed one input; emitted effects are appended to `out`.
-    pub fn handle(&mut self, input: Input, out: &mut Vec<Effect>) {
+    /// Feed one input; returns the effects it produced.
+    pub fn handle(&mut self, input: Input) -> Vec<Effect> {
+        let mut out = Vec::new();
+        self.dispatch(input, &mut out);
+        out
+    }
+
+    fn dispatch(&mut self, input: Input, out: &mut Vec<Effect>) {
         match input {
             Input::PeerAttached { conn, caps } => self.on_attached(conn, caps, out),
             Input::PeerDetached { conn } => self.on_detached(conn, out),

@@ -114,7 +114,6 @@ pub struct ConnManager<R: Replica> {
     /// Manager-scoped persist token → (document, the machine's own token).
     persists: BTreeMap<PersistToken, (DocId, PersistToken)>,
     next_token: u64,
-    scratch: Vec<Effect>,
 }
 
 impl<R: Replica> Default for ConnManager<R> {
@@ -131,7 +130,6 @@ impl<R: Replica> ConnManager<R> {
             timers: BTreeMap::new(),
             persists: BTreeMap::new(),
             next_token: 0,
-            scratch: Vec::new(),
         }
     }
 
@@ -140,8 +138,14 @@ impl<R: Replica> ConnManager<R> {
         self.machines.len()
     }
 
-    /// Feed one input; emitted effects are appended to `out`.
-    pub fn handle(&mut self, input: ManagerInput, out: &mut Vec<ManagerEffect>) {
+    /// Feed one input; returns the effects it produced.
+    pub fn handle(&mut self, input: ManagerInput) -> Vec<ManagerEffect> {
+        let mut out = Vec::new();
+        self.dispatch(input, &mut out);
+        out
+    }
+
+    fn dispatch(&mut self, input: ManagerInput, out: &mut Vec<ManagerEffect>) {
         match input {
             ManagerInput::Attach { conn, doc, caps } => {
                 self.machines.entry(doc.clone()).or_default();
@@ -221,11 +225,10 @@ impl<R: Replica> ConnManager<R> {
         let Some(machine) = self.machines.get_mut(doc) else {
             return; // e.g. a frame for a document already evicted
         };
-        let mut effects = std::mem::take(&mut self.scratch);
-        machine.handle(input, &mut effects);
+        let effects = machine.handle(input);
 
         let mut evicted = false;
-        for effect in effects.drain(..) {
+        for effect in effects {
             match effect {
                 Effect::Evict => evicted = true,
                 Effect::ScheduleTimer { token, after_ms } => {
@@ -276,8 +279,6 @@ impl<R: Replica> ConnManager<R> {
                 }),
             }
         }
-        self.scratch = effects;
-
         if evicted {
             self.machines.remove(doc);
             // Drop the evicted document's outstanding token mappings so stale

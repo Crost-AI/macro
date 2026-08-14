@@ -264,8 +264,7 @@ impl Flow {
     fn step(&mut self, label: &str, input: ManagerInput) {
         println!("→ {label}");
         println!("    input:  {}", describe_input(&input));
-        self.effects.clear();
-        self.manager.handle(input, &mut self.effects);
+        self.effects = self.manager.handle(input);
         if self.effects.is_empty() {
             println!("    effects: (none)");
         }
