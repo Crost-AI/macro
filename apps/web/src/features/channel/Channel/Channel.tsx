@@ -43,10 +43,7 @@ import {
   buildMentionMarkdownString,
   markdownToPlainText,
 } from '@macro-inc/lexical-core';
-import {
-  invalidateChannelsActivity,
-  useUpdateChannelsActivityMutation,
-} from '@queries/channel/activity';
+import { useUpdateChannelsActivityMutation } from '@queries/channel/activity';
 import {
   type ChannelMessagesData,
   createMessageIndex,
@@ -67,7 +64,6 @@ import { threadRepliesQueryOptions } from '@queries/channel/thread-replies';
 import { usePostTypingUpdateMutation } from '@queries/channel/typing';
 import { queryClient } from '@queries/client';
 import { ChannelTypeEnum } from '@service-storage/client';
-import { useBeforeLeave } from '@solidjs/router';
 import {
   type Accessor,
   createEffect,
@@ -249,11 +245,7 @@ export function Channel(props: ChannelProps) {
 
   const activity = useChannelActivity(props.channelId);
 
-  const updateActivityMutation = useUpdateChannelsActivityMutation({
-    onSuccess: () => {
-      invalidateChannelsActivity();
-    },
-  });
+  const updateActivityMutation = useUpdateChannelsActivityMutation();
 
   const markAsViewed = () => {
     updateActivityMutation.mutate({
@@ -262,15 +254,16 @@ export function Channel(props: ChannelProps) {
     });
   };
 
+  // Opening stamps the channel read immediately; closing re-stamps it so
+  // messages that arrived while it was on screen count as read. `onCleanup`
+  // covers leaving by any route, and also the unmounts a route change never
+  // sees — a split closing, a channel swapped in place — so it subsumes the
+  // `useBeforeLeave` this used to also fire from.
   onMount(() => {
     markAsViewed();
   });
 
   onCleanup(() => {
-    markAsViewed();
-  });
-
-  useBeforeLeave(() => {
     markAsViewed();
   });
 
