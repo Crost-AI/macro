@@ -16,9 +16,10 @@ mod test;
 
 use crate::machine::DocMachine;
 use crate::model::{
-    Caps, ClientFrame, ConnId, DocId, Effect, Input, PersistToken, RawSnapshot, TimerToken,
+    Capabilities, ClientFrame, ConnId, DocId, Effect, Input, Lifecycle, PersistToken, TimerToken,
 };
 use crate::replica::Replica;
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 /// Everything the runtime can tell the manager.
@@ -32,7 +33,7 @@ pub enum ManagerInput {
         /// The document.
         doc: DocId,
         /// What the connection may do to it.
-        caps: Caps,
+        capabilities: Capabilities,
     },
     /// A per-document connection detached (client unsubscribe, socket death —
     /// the edge translates both into this).
@@ -61,7 +62,11 @@ pub enum ManagerInput {
         /// The document that was loading.
         doc: DocId,
         /// The stored snapshot, or `None` for a never-persisted document.
-        snapshot: Option<RawSnapshot>,
+        snapshot: Option<Vec<u8>>,
+        /// The op sequence the snapshot covers (0 when `snapshot` is `None`).
+        snapshot_seq: u64,
+        /// Already-durable ops beyond the snapshot, ascending by seq.
+        ops: Vec<(u64, Vec<u8>)>,
     },
     /// Completion of a document's [`Effect::Load`]: the store failed.
     LoadFailed {
@@ -106,6 +111,29 @@ pub struct ManagerEffect {
     pub effect: Effect,
 }
 
+/// The result of feeding one input to the manager: a document machine's
+/// [`crate::model::Outcome`], lifted to manager scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagerOutcome {
+    /// IO for the runtime to execute, in order.
+    pub actions: Vec<ManagerEffect>,
+    /// The transition, stamped with its document.
+    pub lifecycle: Option<(DocId, Lifecycle)>,
+    /// Why the manager (or the machine it routed to) did what it did.
+    pub reason: Cow<'static, str>,
+}
+
+impl ManagerOutcome {
+    /// A manager-level early-out: the input reached no machine.
+    fn quiet(reason: impl Into<Cow<'static, str>>) -> Self {
+        Self {
+            actions: Vec::new(),
+            lifecycle: None,
+            reason: reason.into(),
+        }
+    }
+}
+
 /// See the module docs.
 pub struct ConnManager<R: Replica> {
     machines: BTreeMap<DocId, DocMachine<R>>,
@@ -138,42 +166,49 @@ impl<R: Replica> ConnManager<R> {
         self.machines.len()
     }
 
-    /// Feed one input; returns the effects it produced.
-    pub fn handle(&mut self, input: ManagerInput) -> Vec<ManagerEffect> {
-        let mut out = Vec::new();
-        self.dispatch(input, &mut out);
-        out
-    }
-
-    fn dispatch(&mut self, input: ManagerInput, out: &mut Vec<ManagerEffect>) {
+    /// Feed one input; returns the actions it produced, the lifecycle
+    /// transition it observed, and why.
+    pub fn handle(&mut self, input: ManagerInput) -> ManagerOutcome {
         match input {
-            ManagerInput::Attach { conn, doc, caps } => {
+            ManagerInput::Attach {
+                conn,
+                doc,
+                capabilities,
+            } => {
                 self.machines.entry(doc.clone()).or_default();
-                self.drive(&doc, Input::PeerAttached { conn, caps }, out);
+                self.drive(&doc, Input::PeerAttached { conn, capabilities })
             }
-            ManagerInput::Detach { conn, doc } => {
-                self.drive(&doc, Input::PeerDetached { conn }, out);
-            }
+            ManagerInput::Detach { conn, doc } => self.drive(&doc, Input::PeerDetached { conn }),
             ManagerInput::Frame { conn, doc, frame } => {
-                self.drive(&doc, Input::Frame { conn, frame }, out);
+                self.drive(&doc, Input::Frame { conn, frame })
             }
             ManagerInput::TimerFired { token } => {
                 let Some((doc, machine_token)) = self.timers.remove(&token) else {
-                    return; // stale: the machine was evicted meanwhile
+                    // Stale: the machine was evicted meanwhile.
+                    return ManagerOutcome::quiet("stale manager timer; machine evicted");
                 };
                 self.drive(
                     &doc,
                     Input::TimerFired {
                         token: machine_token,
                     },
-                    out,
-                );
+                )
             }
-            ManagerInput::Loaded { doc, snapshot } => {
-                self.drive(&doc, Input::Loaded { snapshot }, out);
-            }
+            ManagerInput::Loaded {
+                doc,
+                snapshot,
+                snapshot_seq,
+                ops,
+            } => self.drive(
+                &doc,
+                Input::Loaded {
+                    snapshot,
+                    snapshot_seq,
+                    ops,
+                },
+            ),
             ManagerInput::LoadFailed { doc, error } => {
-                self.drive(&doc, Input::LoadFailed { error }, out);
+                self.drive(&doc, Input::LoadFailed { error })
             }
             ManagerInput::OpsPersisted {
                 doc,
@@ -181,7 +216,7 @@ impl<R: Replica> ConnManager<R> {
                 through_seq,
             } => {
                 let Some((_, machine_token)) = self.persists.remove(&token) else {
-                    return;
+                    return ManagerOutcome::quiet("stale manager persist token; machine evicted");
                 };
                 self.drive(
                     &doc,
@@ -189,46 +224,45 @@ impl<R: Replica> ConnManager<R> {
                         token: machine_token,
                         through_seq,
                     },
-                    out,
-                );
+                )
             }
             ManagerInput::SnapshotPersisted { doc, token } => {
                 let Some((_, machine_token)) = self.persists.remove(&token) else {
-                    return;
+                    return ManagerOutcome::quiet("stale manager persist token; machine evicted");
                 };
                 self.drive(
                     &doc,
                     Input::SnapshotPersisted {
                         token: machine_token,
                     },
-                    out,
-                );
+                )
             }
             ManagerInput::PersistFailed { doc, token } => {
                 let Some((_, machine_token)) = self.persists.remove(&token) else {
-                    return;
+                    return ManagerOutcome::quiet("stale manager persist token; machine evicted");
                 };
                 self.drive(
                     &doc,
                     Input::PersistFailed {
                         token: machine_token,
                     },
-                    out,
-                );
+                )
             }
         }
     }
 
     /// Run one machine, then lift its effects: stamp the document, rewrite
     /// tokens to manager scope, and consume `Evict`.
-    fn drive(&mut self, doc: &DocId, input: Input, out: &mut Vec<ManagerEffect>) {
+    fn drive(&mut self, doc: &DocId, input: Input) -> ManagerOutcome {
         let Some(machine) = self.machines.get_mut(doc) else {
-            return; // e.g. a frame for a document already evicted
+            // e.g. a frame for a document already evicted
+            return ManagerOutcome::quiet("input for non-resident document; dropped");
         };
-        let effects = machine.handle(input);
+        let outcome = machine.handle(input);
 
+        let mut out = Vec::new();
         let mut evicted = false;
-        for effect in effects {
+        for effect in outcome.actions {
             match effect {
                 Effect::Evict => evicted = true,
                 Effect::ScheduleTimer { token, after_ms } => {
@@ -285,6 +319,11 @@ impl<R: Replica> ConnManager<R> {
             // completions and timer fires route nowhere.
             self.timers.retain(|_, (d, _)| d != doc);
             self.persists.retain(|_, (d, _)| d != doc);
+        }
+        ManagerOutcome {
+            actions: out,
+            lifecycle: outcome.lifecycle.map(|event| (doc.clone(), event)),
+            reason: outcome.reason,
         }
     }
 

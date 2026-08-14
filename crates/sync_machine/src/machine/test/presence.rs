@@ -1,25 +1,25 @@
 use crate::machine::DocMachine;
-use crate::model::{
-    Caps, ClientFrame, ConnId, Effect, Input, RawPresence, RawSnapshot, ServerFrame,
-};
+use crate::model::{Capabilities, ClientFrame, ConnId, Effect, Input, ServerFrame};
 use crate::replica::mock::MockReplica;
 use macro_user_id::user_id::MacroUserIdStr;
 
 const C1: ConnId = ConnId(1);
 const C2: ConnId = ConnId(2);
 
-/// A machine with C1 attached (edit caps) and loaded from `b"base"`.
+/// A machine with C1 attached (edit capabilities) and loaded from `b"base"`.
 fn ready_machine() -> DocMachine<MockReplica> {
     let mut machine = DocMachine::new();
     machine.handle(Input::PeerAttached {
         conn: C1,
-        caps: Caps {
+        capabilities: Capabilities {
             can_edit: true,
             user_id: Some(MacroUserIdStr::try_from("macro|user-1@test.com".to_string()).unwrap()),
         },
     });
     machine.handle(Input::Loaded {
-        snapshot: Some(RawSnapshot::from(&b"base"[..])),
+        snapshot: Some(b"base".to_vec()),
+        snapshot_seq: 0,
+        ops: Vec::new(),
     });
     machine
 }
@@ -27,45 +27,50 @@ fn ready_machine() -> DocMachine<MockReplica> {
 #[test]
 fn presence_rebroadcasts_and_feeds_initial_sync() {
     let mut machine = ready_machine();
-    let actions = machine.handle(Input::Frame {
-        conn: C1,
-        frame: ClientFrame::Presence {
-            payload: RawPresence::from(&b"cursor@3"[..]),
-        },
-    });
+    let actions = machine
+        .handle(Input::Frame {
+            conn: C1,
+            frame: ClientFrame::Presence {
+                payload: b"cursor@3".to_vec(),
+            },
+        })
+        .actions;
     assert_eq!(
         actions,
         vec![Effect::Broadcast {
             except: C1,
             frame: ServerFrame::Presence {
-                payload: RawPresence::from(&b"cursor@3"[..])
+                payload: b"cursor@3".to_vec()
             }
         }]
     );
 
-    // A later attach sees the stored payload in its initial sync.
-    let actions = machine.handle(Input::PeerAttached {
-        conn: C2,
-        caps: Caps {
-            can_edit: false,
-            user_id: None,
-        },
-    });
+    // A later attach sees the merged presence in its initial sync (the mock
+    // encodes its store as presence[...]).
+    let actions = machine
+        .handle(Input::PeerAttached {
+            conn: C2,
+            capabilities: Capabilities {
+                can_edit: false,
+                user_id: None,
+            },
+        })
+        .actions;
     assert!(matches!(
         &actions[0],
         Effect::Send {
             frame: ServerFrame::InitialSync { presence, .. },
             ..
-        } if presence == &vec![RawPresence::from(&b"cursor@3"[..])]
+        } if presence == &b"presence[cursor@3]".to_vec()
     ));
 }
 
 #[test]
-fn detach_broadcasts_presence_left_for_registered_peers() {
+fn detach_broadcasts_a_presence_removal_delta_for_registered_peers() {
     let mut machine = ready_machine();
     machine.handle(Input::PeerAttached {
         conn: C2,
-        caps: Caps {
+        capabilities: Capabilities {
             can_edit: false,
             user_id: None,
         },
@@ -75,18 +80,20 @@ fn detach_broadcasts_presence_left_for_registered_peers() {
         frame: ClientFrame::RegisterPeer { peer_id: 7 },
     });
 
-    let actions = machine.handle(Input::PeerDetached { conn: C1 });
+    let outcome = machine.handle(Input::PeerDetached { conn: C1 });
+    let actions = &outcome.actions;
     assert!(actions.iter().any(|action| matches!(
         action,
         Effect::Broadcast {
             except: ConnId(1),
-            frame: ServerFrame::PresenceLeft { peer_ids }
-        } if peer_ids == &vec![7]
+            frame: ServerFrame::Presence { payload }
+        } if payload == &b"left[7]".to_vec()
     )));
     // C2 is still attached: no LastLeave, no idle timer.
+    assert_eq!(outcome.lifecycle, None);
     assert!(
         !actions
             .iter()
-            .any(|action| matches!(action, Effect::Lifecycle { .. }))
+            .any(|action| matches!(action, Effect::ScheduleTimer { .. }))
     );
 }

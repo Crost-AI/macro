@@ -351,10 +351,14 @@ class VirtualSyncSocket implements SyncSocket {
   }
 
   private sendFrame(message: IFromPeer): boolean {
+    // `FromPeer.encode` returns a subarray of bebop's shared singleton write
+    // buffer, and encoding the envelope writes the outer frame over those very
+    // bytes. Copy before nesting or the payload ships as garbage.
+    const payload = new Uint8Array(FromPeer.encode(message));
     return this.transport.socket().send(
       ToRouter.fromRouterFrame({
         docId: this.documentId,
-        payload: FromPeer.encode(message),
+        payload,
       })
     );
   }

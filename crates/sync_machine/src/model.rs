@@ -5,6 +5,7 @@
 //! a mechanical decode/encode with no translation logic.
 
 use macro_user_id::user_id::MacroUserIdStr;
+use std::borrow::Cow;
 
 /// A connection attached to a document. Opaque to the machine; the runtime
 /// interns its transport-level identity (e.g. gateway id + conn id) to one of
@@ -27,7 +28,7 @@ impl DocId {
 /// the machine ever sees the connection. The machine holds no tokens and no
 /// access levels — only the answers it needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Caps {
+pub struct Capabilities {
     /// May this connection submit document updates?
     pub can_edit: bool,
     /// The authenticated user, when known (anonymous share links have none).
@@ -46,51 +47,6 @@ pub enum CloseReason {
     LoadFailed,
 }
 
-/// An opaque, replica-encoded full-document snapshot (in production: a raw
-/// Loro snapshot export). The machine never looks inside.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RawSnapshot(pub Vec<u8>);
-
-/// An opaque, replica-encoded update (in production: a raw Loro update).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RawUpdate(pub Vec<u8>);
-
-/// An opaque position marker for [`ClientFrame::RequestSince`] (in
-/// production: a Loro version vector). Echoed back verbatim — clients
-/// correlate on exact bytes, and re-encoding is not byte-stable.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RawCursor(pub Vec<u8>);
-
-/// An opaque presence/awareness payload (in production: a Loro ephemeral
-/// store delta).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RawPresence(pub Vec<u8>);
-
-macro_rules! byte_newtype {
-    ($name:ident) => {
-        impl $name {
-            /// Borrow the raw bytes.
-            pub fn as_slice(&self) -> &[u8] {
-                &self.0
-            }
-        }
-        impl From<Vec<u8>> for $name {
-            fn from(bytes: Vec<u8>) -> Self {
-                Self(bytes)
-            }
-        }
-        impl From<&[u8]> for $name {
-            fn from(bytes: &[u8]) -> Self {
-                Self(bytes.to_vec())
-            }
-        }
-    };
-}
-byte_newtype!(RawSnapshot);
-byte_newtype!(RawUpdate);
-byte_newtype!(RawCursor);
-byte_newtype!(RawPresence);
-
 /// Identifies one scheduled timer. Meaning is machine-internal; the runtime
 /// just echoes it back in [`Input::TimerFired`] when the delay elapses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -108,20 +64,20 @@ pub enum ClientFrame {
     /// is durably stored.
     Update {
         /// The opaque update payloads, applied in order.
-        updates: Vec<RawUpdate>,
+        updates: Vec<Vec<u8>>,
         /// The client's correlation id for the ack.
         id: String,
     },
     /// An ephemeral presence/awareness payload.
     Presence {
         /// The opaque presence payload.
-        payload: RawPresence,
+        payload: Vec<u8>,
     },
     /// Request every update the caller is missing, given their cursor (an
     /// opaque version vector).
     RequestSince {
         /// The caller's cursor, echoed back verbatim in the reply.
-        cursor: RawCursor,
+        cursor: Vec<u8>,
     },
     /// Request a full snapshot.
     RequestSnapshot,
@@ -136,37 +92,28 @@ pub enum ClientFrame {
 /// union).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServerFrame {
-    /// The first message after attach: full document state plus current
-    /// presence payloads.
+    /// The first message after attach: full document state plus the current
+    /// presence encoding (in production: `EphemeralStore::encode_all`).
     InitialSync {
         /// A full snapshot of the document.
-        snapshot: RawSnapshot,
-        /// Every attached connection's latest presence payload.
-        // TODO(pass 2): replace with a real ephemeral-store encoding (loro
-        // `EphemeralStore::encode_all`) behind a `Presence` trait.
-        presence: Vec<RawPresence>,
+        snapshot: Vec<u8>,
+        /// The replica's combined presence state.
+        presence: Vec<u8>,
     },
     /// One CRDT update from another peer.
     Update {
         /// The opaque update payload.
-        update: RawUpdate,
+        update: Vec<u8>,
     },
     /// A presence payload from another peer.
     Presence {
         /// The opaque presence payload.
-        payload: RawPresence,
-    },
-    /// Presence removal for peers whose connection went away.
-    // TODO(pass 2): fold into the real presence encoding; the wire protocol
-    // expresses removal as an ephemeral-store delta, not a distinct frame.
-    PresenceLeft {
-        /// The peer ids that left.
-        peer_ids: Vec<u64>,
+        payload: Vec<u8>,
     },
     /// A full snapshot, answering [`ClientFrame::RequestSnapshot`].
     Snapshot {
         /// The snapshot payload.
-        snapshot: RawSnapshot,
+        snapshot: Vec<u8>,
     },
     /// Durable-storage acknowledgement of [`ClientFrame::Update`].
     Ack {
@@ -177,10 +124,10 @@ pub enum ServerFrame {
     /// [`ClientFrame::RequestSince`].
     Since {
         /// The combined update payload.
-        update: RawUpdate,
+        update: Vec<u8>,
         /// The caller's cursor bytes, echoed verbatim (clients correlate by
         /// exact match; re-encoding is not byte-stable).
-        cursor: RawCursor,
+        cursor: Vec<u8>,
     },
 }
 
@@ -213,7 +160,7 @@ pub enum Input {
         /// The attaching connection.
         conn: ConnId,
         /// What it may do.
-        caps: Caps,
+        capabilities: Capabilities,
     },
     /// A connection detached (unsubscribe, disconnect, or edge death).
     PeerDetached {
@@ -232,11 +179,16 @@ pub enum Input {
         /// The token from the corresponding [`Effect::ScheduleTimer`].
         token: TimerToken,
     },
-    /// Completion of [`Effect::Load`]: the stored snapshot, or `None` when the
-    /// document has never been persisted.
+    /// Completion of [`Effect::Load`]: everything the store has for this
+    /// document.
     Loaded {
         /// The snapshot bytes, if any exist.
-        snapshot: Option<RawSnapshot>,
+        snapshot: Option<Vec<u8>>,
+        /// The op sequence the snapshot covers (0 when `snapshot` is `None`).
+        snapshot_seq: u64,
+        /// Already-durable ops beyond the snapshot, ascending by seq; the
+        /// machine replays them and resumes sequence numbering after them.
+        ops: Vec<(u64, Vec<u8>)>,
     },
     /// Completion of [`Effect::Load`]: the store failed.
     LoadFailed {
@@ -307,7 +259,7 @@ pub enum Effect {
         /// Echoed back in the completion.
         token: PersistToken,
         /// `(seq, payload)` pairs, contiguous and ascending.
-        ops: Vec<(u64, RawUpdate)>,
+        ops: Vec<(u64, Vec<u8>)>,
         /// The highest seq in `ops`.
         through_seq: u64,
     },
@@ -320,7 +272,7 @@ pub enum Effect {
         /// Echoed back in the completion.
         token: PersistToken,
         /// The exported snapshot.
-        snapshot: RawSnapshot,
+        snapshot: Vec<u8>,
         /// Every op with `seq <= through_seq` is contained in the snapshot.
         through_seq: u64,
     },
@@ -336,12 +288,49 @@ pub enum Effect {
         /// The authenticated user it belongs to.
         user_id: MacroUserIdStr<'static>,
     },
-    /// Announce a session transition to the rest of the product.
-    Lifecycle {
-        /// The transition.
-        event: Lifecycle,
-    },
     /// The machine is finished: no peers, nothing dirty. The owner should
     /// drop it.
     Evict,
+}
+
+/// The result of feeding one input to a machine: the IO the runtime must
+/// perform, at most one session-lifecycle notification, and a human-readable
+/// reason for tracing (most valuable on the paths that deliberately do
+/// nothing — stale completions, dropped frames).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Outcome {
+    /// IO for the runtime to execute, in order.
+    pub actions: Vec<Effect>,
+    /// A session transition observed during this input, if any.
+    pub lifecycle: Option<Lifecycle>,
+    /// Why the machine did what it did.
+    pub reason: Cow<'static, str>,
+}
+
+impl Outcome {
+    /// A transition that asks the runtime for nothing: the reason is the whole
+    /// story.
+    pub fn quiet(reason: impl Into<Cow<'static, str>>) -> Self {
+        Self {
+            actions: Vec::new(),
+            lifecycle: None,
+            reason: reason.into(),
+        }
+    }
+
+    /// A transition with IO for the runtime to execute, in order.
+    pub fn act(reason: impl Into<Cow<'static, str>>, actions: Vec<Effect>) -> Self {
+        Self {
+            actions,
+            lifecycle: None,
+            reason: reason.into(),
+        }
+    }
+
+    /// Attach the session transition observed during this input. At most one
+    /// is possible per input, so this overwrites rather than accumulates.
+    pub fn with_lifecycle(mut self, event: Lifecycle) -> Self {
+        self.lifecycle = Some(event);
+        self
+    }
 }

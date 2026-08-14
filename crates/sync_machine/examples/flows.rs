@@ -1,14 +1,14 @@
 //! Narrated end-to-end flows through the [`ConnManager`] on the mock replica.
 //!
 //! Run with `cargo run -p sync_machine --example flows`. Each step prints the
-//! input fed to the manager and the effects it emitted — the exact
-//! conversation the pass-2 runtime will have with storage, timers, and the
-//! gateway sink, with every byte faked and every "await" a printed line.
+//! input fed to the manager, the machine's own one-line reason for what it
+//! did, and the effects it emitted — the exact conversation the pass-2 runtime
+//! will have with storage, timers, and the gateway sink, with every byte faked
+//! and every "await" a printed line.
 
-use sync_machine::manager::{ConnManager, ManagerEffect, ManagerInput};
+use sync_machine::manager::{ConnManager, ManagerEffect, ManagerInput, ManagerOutcome};
 use sync_machine::model::{
-    Caps, ClientFrame, ConnId, DocId, Effect, PersistToken, RawCursor, RawPresence, RawSnapshot,
-    RawUpdate, ServerFrame, TimerToken,
+    Capabilities, ClientFrame, ConnId, DocId, Effect, PersistToken, ServerFrame, TimerToken,
 };
 use sync_machine::replica::mock::MockReplica;
 
@@ -32,7 +32,7 @@ fn two_users_edit_a_document() {
         ManagerInput::Attach {
             conn: alice,
             doc: doc.clone(),
-            caps: edit_caps("alice"),
+            capabilities: edit_caps("alice"),
         },
     );
     flow.step(
@@ -40,14 +40,16 @@ fn two_users_edit_a_document() {
         ManagerInput::Attach {
             conn: bob,
             doc: doc.clone(),
-            caps: edit_caps("bob"),
+            capabilities: edit_caps("bob"),
         },
     );
     flow.step(
         "the store answers: both waiting peers get their initial sync",
         ManagerInput::Loaded {
             doc: doc.clone(),
-            snapshot: Some(RawSnapshot::from(&b"stored-snapshot"[..])),
+            snapshot: Some(b"stored-snapshot".to_vec()),
+            snapshot_seq: 0,
+            ops: Vec::new(),
         },
     );
     flow.step(
@@ -64,7 +66,7 @@ fn two_users_edit_a_document() {
             conn: alice,
             doc: doc.clone(),
             frame: ClientFrame::Update {
-                updates: vec![RawUpdate::from(&b"insert 'hello'"[..])],
+                updates: vec![b"insert 'hello'".to_vec()],
                 id: "op-1".into(),
             },
         },
@@ -85,7 +87,7 @@ fn two_users_edit_a_document() {
             conn: alice,
             doc: doc.clone(),
             frame: ClientFrame::Presence {
-                payload: RawPresence::from(&b"alice@line3"[..]),
+                payload: b"alice@line3".to_vec(),
             },
         },
     );
@@ -139,14 +141,19 @@ fn reconnect_and_catch_up() {
         ManagerInput::Attach {
             conn: carol,
             doc: doc.clone(),
-            caps: edit_caps("carol"),
+            capabilities: edit_caps("carol"),
         },
     );
     flow.step(
         "the document loads (it had state from her earlier session)",
+        // The snapshot covered ops through seq 4; two more ops were durable
+        // but not yet compacted — the machine replays them and resumes
+        // numbering at 6.
         ManagerInput::Loaded {
             doc: doc.clone(),
-            snapshot: Some(RawSnapshot::from(&b"earlier-state"[..])),
+            snapshot: Some(b"earlier-state".to_vec()),
+            snapshot_seq: 4,
+            ops: vec![(5, b"tail-op-5".to_vec()), (6, b"tail-op-6".to_vec())],
         },
     );
     flow.step(
@@ -156,7 +163,7 @@ fn reconnect_and_catch_up() {
             conn: carol,
             doc: doc.clone(),
             frame: ClientFrame::RequestSince {
-                cursor: RawCursor::from(&b"carol-vv"[..]),
+                cursor: b"carol-vv".to_vec(),
             },
         },
     );
@@ -175,14 +182,16 @@ fn store_outage_and_recovery() {
         ManagerInput::Attach {
             conn: dave,
             doc: doc.clone(),
-            caps: edit_caps("dave"),
+            capabilities: edit_caps("dave"),
         },
     );
     flow.step(
         "loaded",
         ManagerInput::Loaded {
             doc: doc.clone(),
-            snapshot: Some(RawSnapshot::from(&b"base"[..])),
+            snapshot: Some(b"base".to_vec()),
+            snapshot_seq: 0,
+            ops: Vec::new(),
         },
     );
     flow.step(
@@ -191,7 +200,7 @@ fn store_outage_and_recovery() {
             conn: dave,
             doc: doc.clone(),
             frame: ClientFrame::Update {
-                updates: vec![RawUpdate::from(&b"edit"[..])],
+                updates: vec![b"edit".to_vec()],
                 id: "op-9".into(),
             },
         },
@@ -233,7 +242,7 @@ fn document_that_never_existed() {
         ManagerInput::Attach {
             conn: erin,
             doc: doc.clone(),
-            caps: edit_caps("erin"),
+            capabilities: edit_caps("erin"),
         },
     );
     flow.step(
@@ -242,6 +251,8 @@ fn document_that_never_existed() {
         ManagerInput::Loaded {
             doc: doc.clone(),
             snapshot: None,
+            snapshot_seq: 0,
+            ops: Vec::new(),
         },
     );
 }
@@ -264,7 +275,16 @@ impl Flow {
     fn step(&mut self, label: &str, input: ManagerInput) {
         println!("→ {label}");
         println!("    input:  {}", describe_input(&input));
-        self.effects = self.manager.handle(input);
+        let ManagerOutcome {
+            actions,
+            lifecycle,
+            reason,
+        } = self.manager.handle(input);
+        println!("    reason: {reason}");
+        if let Some((doc, event)) = lifecycle {
+            println!("    lifecycle: [{}] {event:?}", doc.as_str());
+        }
+        self.effects = actions;
         if self.effects.is_empty() {
             println!("    effects: (none)");
         }
@@ -312,9 +332,9 @@ impl Flow {
     }
 }
 
-fn edit_caps(user: &str) -> Caps {
+fn edit_caps(user: &str) -> Capabilities {
     let raw = format!("macro|{user}@macro.com");
-    Caps {
+    Capabilities {
         can_edit: true,
         user_id: Some(
             macro_user_id::user_id::MacroUserIdStr::try_from(raw).expect("valid example user id"),
@@ -330,15 +350,20 @@ fn banner(title: &str) {
 
 fn describe_input(input: &ManagerInput) -> String {
     match input {
-        ManagerInput::Attach { conn, doc, caps } => format!(
+        ManagerInput::Attach {
+            conn,
+            doc,
+            capabilities,
+        } => format!(
             "Attach(conn {}, doc {}, user {:?}, can_edit {})",
             conn.0,
             doc.as_str(),
-            caps.user_id
+            capabilities
+                .user_id
                 .as_ref()
                 .map(|u| u.to_string())
                 .unwrap_or_else(|| "-".into()),
-            caps.can_edit
+            capabilities.can_edit
         ),
         ManagerInput::Detach { conn, doc } => {
             format!("Detach(conn {}, doc {})", conn.0, doc.as_str())
@@ -347,8 +372,12 @@ fn describe_input(input: &ManagerInput) -> String {
             format!("Frame(conn {}, {})", conn.0, describe_client_frame(frame))
         }
         ManagerInput::TimerFired { token } => format!("TimerFired(#{})", token.0),
-        ManagerInput::Loaded { snapshot, .. } => match snapshot {
-            Some(bytes) => format!("Loaded({}B snapshot)", bytes.as_slice().len()),
+        ManagerInput::Loaded { snapshot, ops, .. } => match snapshot {
+            Some(bytes) => format!(
+                "Loaded({}B snapshot + {} tail op(s))",
+                bytes.as_slice().len(),
+                ops.len()
+            ),
             None => "Loaded(nothing stored)".into(),
         },
         ManagerInput::LoadFailed { error, .. } => format!("LoadFailed({error})"),
@@ -413,7 +442,6 @@ fn describe_effect(effect: &Effect) -> String {
         Effect::RecordPeerMapping { peer_id, user_id } => {
             format!("RecordPeerMapping(peer {peer_id} → {user_id})")
         }
-        Effect::Lifecycle { event } => format!("Lifecycle({event:?})"),
         Effect::Evict => "Evict — drop this machine".into(),
     }
 }
@@ -421,13 +449,12 @@ fn describe_effect(effect: &Effect) -> String {
 fn describe_server_frame(frame: &ServerFrame) -> String {
     match frame {
         ServerFrame::InitialSync { snapshot, presence } => format!(
-            "InitialSync({}B snapshot, {} presence payload(s))",
+            "InitialSync({}B snapshot, {}B presence)",
             snapshot.as_slice().len(),
-            presence.len()
+            presence.as_slice().len()
         ),
         ServerFrame::Update { .. } => "Update".into(),
         ServerFrame::Presence { .. } => "Presence".into(),
-        ServerFrame::PresenceLeft { peer_ids } => format!("PresenceLeft({peer_ids:?})"),
         ServerFrame::Snapshot { snapshot } => {
             format!("Snapshot({}B)", snapshot.as_slice().len())
         }

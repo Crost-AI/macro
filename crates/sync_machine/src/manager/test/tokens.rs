@@ -1,5 +1,5 @@
 use crate::manager::{ConnManager, ManagerInput};
-use crate::model::{Caps, ClientFrame, ConnId, DocId, Effect, RawSnapshot, RawUpdate, ServerFrame};
+use crate::model::{Capabilities, ClientFrame, ConnId, DocId, Effect, ServerFrame};
 use crate::replica::mock::MockReplica;
 
 /// Bring one (conn, doc) to Ready, discarding setup effects.
@@ -7,14 +7,16 @@ fn attach_ready(manager: &mut ConnManager<MockReplica>, conn: ConnId, id: &str) 
     manager.handle(ManagerInput::Attach {
         conn,
         doc: DocId(id.to_string()),
-        caps: Caps {
+        capabilities: Capabilities {
             can_edit: true,
             user_id: None,
         },
     });
     manager.handle(ManagerInput::Loaded {
         doc: DocId(id.to_string()),
-        snapshot: Some(RawSnapshot::from(&b"base"[..])),
+        snapshot: Some(b"base".to_vec()),
+        snapshot_seq: 0,
+        ops: Vec::new(),
     });
 }
 
@@ -25,10 +27,12 @@ fn manager_scoped_timer_tokens_route_back_to_their_document() {
     attach_ready(&mut manager, ConnId(2), "doc-b");
 
     // Detach both; each doc arms an idle timer under a manager-scoped token.
-    let actions = manager.handle(ManagerInput::Detach {
-        conn: ConnId(1),
-        doc: DocId("doc-a".to_string()),
-    });
+    let actions = manager
+        .handle(ManagerInput::Detach {
+            conn: ConnId(1),
+            doc: DocId("doc-a".to_string()),
+        })
+        .actions;
     let timer_a = actions
         .iter()
         .find_map(|action| match (&action.doc, &action.effect) {
@@ -36,10 +40,12 @@ fn manager_scoped_timer_tokens_route_back_to_their_document() {
             _ => None,
         })
         .expect("doc-a idle timer");
-    let actions = manager.handle(ManagerInput::Detach {
-        conn: ConnId(2),
-        doc: DocId("doc-b".to_string()),
-    });
+    let actions = manager
+        .handle(ManagerInput::Detach {
+            conn: ConnId(2),
+            doc: DocId("doc-b".to_string()),
+        })
+        .actions;
     let timer_b = actions
         .iter()
         .find_map(|action| match (&action.doc, &action.effect) {
@@ -51,11 +57,15 @@ fn manager_scoped_timer_tokens_route_back_to_their_document() {
 
     // Firing doc-b's token evicts only doc-b (Evict is consumed by the
     // manager, so the effect list is empty).
-    let actions = manager.handle(ManagerInput::TimerFired { token: timer_b });
+    let actions = manager
+        .handle(ManagerInput::TimerFired { token: timer_b })
+        .actions;
     assert!(actions.is_empty());
     assert_eq!(manager.resident_docs(), 1);
 
-    let actions = manager.handle(ManagerInput::TimerFired { token: timer_a });
+    let actions = manager
+        .handle(ManagerInput::TimerFired { token: timer_a })
+        .actions;
     assert!(actions.is_empty());
     assert_eq!(manager.resident_docs(), 0);
 }
@@ -65,14 +75,16 @@ fn persist_completions_route_through_manager_scoped_tokens() {
     let mut manager = ConnManager::<MockReplica>::new();
     attach_ready(&mut manager, ConnId(1), "doc-a");
 
-    let actions = manager.handle(ManagerInput::Frame {
-        conn: ConnId(1),
-        doc: DocId("doc-a".to_string()),
-        frame: ClientFrame::Update {
-            updates: vec![RawUpdate::from(&b"x"[..])],
-            id: "op-1".into(),
-        },
-    });
+    let actions = manager
+        .handle(ManagerInput::Frame {
+            conn: ConnId(1),
+            doc: DocId("doc-a".to_string()),
+            frame: ClientFrame::Update {
+                updates: vec![b"x".to_vec()],
+                id: "op-1".into(),
+            },
+        })
+        .actions;
     let persist = actions
         .iter()
         .find_map(|action| match &action.effect {
@@ -81,11 +93,13 @@ fn persist_completions_route_through_manager_scoped_tokens() {
         })
         .expect("persist ops");
 
-    let actions = manager.handle(ManagerInput::OpsPersisted {
-        doc: DocId("doc-a".to_string()),
-        token: persist,
-        through_seq: 1,
-    });
+    let actions = manager
+        .handle(ManagerInput::OpsPersisted {
+            doc: DocId("doc-a".to_string()),
+            token: persist,
+            through_seq: 1,
+        })
+        .actions;
     assert!(actions.iter().any(|action| matches!(
         &action.effect,
         Effect::Send {
@@ -95,10 +109,11 @@ fn persist_completions_route_through_manager_scoped_tokens() {
     )));
 
     // A duplicate completion is stale and ignored.
-    let actions = manager.handle(ManagerInput::OpsPersisted {
+    let outcome = manager.handle(ManagerInput::OpsPersisted {
         doc: DocId("doc-a".to_string()),
         token: persist,
         through_seq: 1,
     });
-    assert!(actions.is_empty());
+    assert!(outcome.actions.is_empty());
+    assert!(outcome.reason.contains("stale"));
 }
