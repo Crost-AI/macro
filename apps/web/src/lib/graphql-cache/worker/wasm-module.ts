@@ -22,6 +22,11 @@ import type {
   WriteResult,
 } from '../protocol';
 
+/** Stable, payload-free marker latched on reset-required WASM errors. */
+export interface CacheStorageResetRequiredError extends Error {
+  readonly cacheStorageResetRequired: true;
+}
+
 export interface CacheEngine {
   boundIdentity(): Promise<string | null>;
   readQuery(
@@ -99,7 +104,9 @@ export interface CacheEngine {
   deleteKeys(keys: string[]): Promise<string[]>;
   teardownOperation(opId: string): Promise<void>;
   clear(): Promise<void>;
-  /** Close the IndexedDB connection; call before destroyCache. */
+  /** Reset/recreate OPFS; concurrent calls wait for the fresh engine. */
+  physicalReset(): Promise<void>;
+  /** Gracefully close Turso/OPFS and release the owner lock. */
   close(): Promise<void>;
 }
 
