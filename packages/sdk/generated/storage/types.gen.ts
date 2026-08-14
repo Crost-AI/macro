@@ -1209,6 +1209,7 @@ export type CalendarEvent = {
      * projections stored before calendars were attributed.
      */
     calendarId?: string | null;
+    conferenceProvider?: null | ConferenceProvider;
     /**
      * Direct join URL when known.
      */
@@ -1253,6 +1254,12 @@ export type CalendarEvent = {
      * Raw RFC 5545 recurrence properties (`RRULE`, `RDATE`, `EXDATE`).
      */
     recurrenceLines: Array<string>;
+    /**
+     * Per-user reminder configuration. Skipped when it is the provider
+     * default so projections stored before reminders were modeled still
+     * compare equal.
+     */
+    reminders?: EventReminders;
     /**
      * Provider/iCalendar sequence number.
      */
@@ -2424,6 +2431,22 @@ export type CommentThread = {
     comments: Array<Comment>;
     thread: Thread;
 };
+
+/**
+ * The conferencing system backing an event's join URL.
+ *
+ * Macro generates only Google Meet conferences, so this distinguishes one it
+ * created from a third party's — Zoom and friends arriving as `addOn`
+ * conference data, or a legacy classic Hangout. Clients use it to label the
+ * conference and to tell whether the Meet toggle reflects a Macro-managed
+ * conference.
+ *
+ * It does not gate mutation. An explicit request replaces or detaches any
+ * conference, third-party included, exactly as deleting the event would;
+ * what protects a conference is that omitting the field leaves it untouched,
+ * so an unrelated edit never disturbs it.
+ */
+export type ConferenceProvider = 'google_meet' | 'other';
 
 /**
  * Query parameters for the copy document endpoint.
@@ -4421,6 +4444,38 @@ export type ErrorResponse = {
 };
 
 /**
+ * One reminder: how it alerts and how many minutes before the event start
+ * (before midnight in the calendar's zone for all-day events) it fires.
+ */
+export type EventReminderOverride = {
+    /**
+     * Provider method, stored verbatim; only `popup` fires Macro
+     * notifications.
+     */
+    method: string;
+    /**
+     * Minutes before the event start.
+     */
+    minutes: number;
+};
+
+/**
+ * Per-user reminder configuration for an event, mirroring Google's model:
+ * either the calendar's default reminders apply, or the explicit overrides
+ * replace them entirely.
+ */
+export type EventReminders = {
+    /**
+     * Explicit reminders replacing the defaults when `use_default` is off.
+     */
+    overrides?: Array<EventReminderOverride>;
+    /**
+     * Whether the calendar's default reminders apply.
+     */
+    useDefault: boolean;
+};
+
+/**
  * Canonical event status.
  */
 export type EventStatus = 'confirmed' | 'tentative' | 'cancelled';
@@ -5350,6 +5405,11 @@ export type LeaveCallResponse = {
      */
     callEnded: boolean;
 };
+
+/**
+ * Defines who can access an item through its share link.
+ */
+export type LinkShare = 'PUBLIC' | 'TEAM';
 
 /**
  * Webhooks visible to the caller across their personal and team workspaces.
@@ -6465,15 +6525,12 @@ export type SharePermissionV2 = {
      * The share permission id
      */
     id: string;
-    /**
-     * If the item is publicly accessible
-     */
-    isPublic: boolean;
+    linkShare?: null | LinkShare;
+    linkShareAccessLevel?: null | AccessLevel;
     /**
      * The owner of the item
      */
     owner: string;
-    publicAccessLevel?: null | AccessLevel;
 };
 
 /**
@@ -6566,37 +6623,45 @@ export type SoupAttachment = {
 
 /**
  * Timed or all-day calendar event span.
+ *
+ * Fields are camelCased per variant rather than via `rename_all_fields`,
+ * which utoipa ignores — the generated OpenAPI schema would otherwise
+ * claim snake_case fields the wire never carries.
  */
 export type SoupCalendarEventTime = {
     /**
      * Exclusive end.
      */
-    ends_at: string;
+    endsAt: string;
     kind: 'timed';
     /**
      * Inclusive start.
      */
-    starts_at: string;
+    startsAt: string;
     /**
      * Original IANA time zone.
      */
-    time_zone?: string | null;
+    timeZone?: string | null;
 } | {
     /**
      * Exclusive end date.
      */
-    end_date: string;
+    endDate: string;
     kind: 'allDay';
     /**
      * Inclusive start date.
      */
-    start_date: string;
+    startDate: string;
 };
 
 /**
  * A canonical calendar event entity in Soup.
  */
 export type SoupCalendarEventSoupPropertiesField = {
+    /**
+     * Which conferencing system backs `conference_url`.
+     */
+    conferenceProvider?: string | null;
     /**
      * Direct conference join URL.
      */
@@ -7897,11 +7962,8 @@ export type UpdateSharePermissionRequestV2 = {
      * Any channel share permissions to be created/updated/removed
      */
     channelSharePermissions?: Array<UpdateChannelSharePermission> | null;
-    /**
-     * If the item is publicly accessible
-     */
-    isPublic?: boolean | null;
-    publicAccessLevel?: null | AccessLevel;
+    linkShare?: null | LinkShare;
+    linkShareAccessLevel?: null | AccessLevel;
 };
 
 /**

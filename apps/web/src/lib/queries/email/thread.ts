@@ -2,6 +2,7 @@ import { useAnalytics } from '@app/lib/analytics/analytics-context';
 import { useFeatureFlag } from '@app/lib/analytics/posthog';
 import { toast } from '@core/component/Toast/Toast';
 import {
+  ENABLE_GRAPHQL_SOUP,
   ENABLE_GRAPHQL_SOUP_FLAG,
   ENABLE_GRAPHQL_SOUP_OVERRIDE,
 } from '@core/constant/featureFlags';
@@ -20,6 +21,15 @@ import type {
   UpsertScheduledResponse,
 } from '@service-email/generated/schemas';
 import {
+  EmailThreadPageDocument,
+  type EmailThreadPageQuery,
+  type EmailThreadPageQueryVariables,
+} from '@service-storage/graphql/generated/graphql';
+import {
+  getGraphqlSoupClient,
+  graphqlCacheEnabled,
+} from '@service-storage/graphql-soup';
+import {
   type InfiniteData,
   useInfiniteQuery,
   useMutation,
@@ -32,6 +42,7 @@ import { optimisticUpdateSoupEntity, refetchSoupEntity } from '../soup/cache';
 import { invalidateAllSoup } from '../soup/normalized-cache';
 import { type UndoHandle, useUndoableMutation } from '../undo';
 import { type MutationCallbacks, withCallbacks } from '../utils';
+import { mapGraphqlEmailThreadPage } from './graphql/mapper';
 import { createGraphqlEmailThreadQuery } from './graphql/thread';
 import { emailKeys } from './keys';
 
@@ -79,30 +90,67 @@ function flattenThreadPages(
 }
 
 /**
- * Imperatively fetch a thread (for use outside of components).
- * Returns cached data if fresh, otherwise fetches from server.
- *
- * TODO: Most of the time we have the updated_at timestamp of an email before we fetch it.
- * Would be nice to accept that as a parameter and only fetch if it's stale.
+ * Imperatively fetch a thread through GraphQL and merge it into the normalized
+ * cache. Network failures fall back to a complete cached first page.
  */
 export async function fetchAndCacheThread(
   threadId: string
 ): ReturnType<typeof emailClient.getThread> {
-  let data: InfiniteData<Thread, number> | undefined;
+  if (!ENABLE_GRAPHQL_SOUP()) {
+    const result = await catchToResult(() =>
+      queryClient.fetchInfiniteQuery(threadQueryOptions(threadId))
+    );
+    if (result.isErr()) return err(result.error as any);
 
-  const result = await catchToResult(
-    async () =>
-      await queryClient.fetchInfiniteQuery(threadQueryOptions(threadId))
-  );
-
-  if (result.isErr()) {
-    return err(result.error as any);
+    const thread = flattenThreadPages(result.value);
+    if (!thread) {
+      return err([{ code: 'NOT_FOUND', message: 'Email thread not found' }]);
+    }
+    return ok({ thread });
   }
 
-  data = result.value;
+  const result = await catchToResult(async () => {
+    const client = getGraphqlSoupClient();
+    const variables: EmailThreadPageQueryVariables = {
+      threadId,
+      offset: 0,
+      limit: DEFAULT_THREAD_MESSAGES_LIMIT,
+    };
+    let queryResult = await client
+      .query<EmailThreadPageQuery, EmailThreadPageQueryVariables>(
+        EmailThreadPageDocument,
+        variables,
+        { requestPolicy: 'cache-and-network' }
+      )
+      .toPromise();
 
-  const thread = flattenThreadPages(data);
-  return ok({ thread: thread! });
+    if (queryResult.error?.networkError && graphqlCacheEnabled()) {
+      const cached = await client
+        .query<EmailThreadPageQuery, EmailThreadPageQueryVariables>(
+          EmailThreadPageDocument,
+          variables,
+          { requestPolicy: 'cache-only' }
+        )
+        .toPromise();
+      if (cached.data) queryResult = cached;
+    }
+
+    if (queryResult.error) {
+      throw mapGraphqlThreadError(queryResult.error);
+    }
+
+    const thread = queryResult.data?.user.emailThread;
+    if (!thread) {
+      throw new ThrownResultError([
+        { code: 'NOT_FOUND', message: 'Email thread not found' },
+      ]);
+    }
+
+    return mapGraphqlEmailThreadPage(thread);
+  });
+
+  if (result.isErr()) return err(result.error as any);
+  return ok({ thread: result.value });
 }
 
 /**

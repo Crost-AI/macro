@@ -600,6 +600,7 @@ export type CalendarEvent = {
      * projections stored before calendars were attributed.
      */
     calendarId?: string | null;
+    conferenceProvider?: null | ConferenceProvider;
     /**
      * Direct join URL when known.
      */
@@ -644,6 +645,12 @@ export type CalendarEvent = {
      * Raw RFC 5545 recurrence properties (`RRULE`, `RDATE`, `EXDATE`).
      */
     recurrenceLines: Array<string>;
+    /**
+     * Per-user reminder configuration. Skipped when it is the provider
+     * default so projections stored before reminders were modeled still
+     * compare equal.
+     */
+    reminders?: EventReminders;
     /**
      * Provider/iCalendar sequence number.
      */
@@ -706,6 +713,28 @@ export type CancelBackfillParams = {
     job_id: string;
 };
 
+/**
+ * A requested change to an event's conferencing. Omitting the field leaves
+ * the existing conference untouched; only these values change it.
+ */
+export type ConferenceChange = 'google_meet' | 'none';
+
+/**
+ * The conferencing system backing an event's join URL.
+ *
+ * Macro generates only Google Meet conferences, so this distinguishes one it
+ * created from a third party's — Zoom and friends arriving as `addOn`
+ * conference data, or a legacy classic Hangout. Clients use it to label the
+ * conference and to tell whether the Meet toggle reflects a Macro-managed
+ * conference.
+ *
+ * It does not gate mutation. An explicit request replaces or detaches any
+ * conference, third-party included, exactly as deleting the event would;
+ * what protects a conference is that omitting the field leaves it untouched,
+ * so an unrelated edit never disturbs it.
+ */
+export type ConferenceProvider = 'google_meet' | 'other';
+
 export type Contact = {
     email_address?: string | null;
     id: string;
@@ -745,6 +774,7 @@ export type CreateCalendarEventRequest = {
      * inbox default.
      */
     calendarId?: string | null;
+    conference?: null | ConferenceChange;
     /**
      * Optional event body.
      */
@@ -762,6 +792,7 @@ export type CreateCalendarEventRequest = {
      * Raw RFC 5545 recurrence properties (`RRULE`, `RDATE`, `EXDATE`).
      */
     recurrenceLines?: Array<string>;
+    reminders?: null | EventReminders;
     /**
      * Timed or all-day shape.
      */
@@ -828,6 +859,38 @@ export type ErrorResponse = {
      * Message to explain failure
      */
     message: string;
+};
+
+/**
+ * One reminder: how it alerts and how many minutes before the event start
+ * (before midnight in the calendar's zone for all-day events) it fires.
+ */
+export type EventReminderOverride = {
+    /**
+     * Provider method, stored verbatim; only `popup` fires Macro
+     * notifications.
+     */
+    method: string;
+    /**
+     * Minutes before the event start.
+     */
+    minutes: number;
+};
+
+/**
+ * Per-user reminder configuration for an event, mirroring Google's model:
+ * either the calendar's default reminders apply, or the explicit overrides
+ * replace them entirely.
+ */
+export type EventReminders = {
+    /**
+     * Explicit reminders replacing the defaults when `use_default` is off.
+     */
+    overrides?: Array<EventReminderOverride>;
+    /**
+     * Whether the calendar's default reminders apply.
+     */
+    useDefault: boolean;
 };
 
 /**
@@ -1347,6 +1410,7 @@ export type UpdateCalendarEventRequest = {
      * Replacement attendee list.
      */
     attendees?: Array<CalendarAttendeeInputBody> | null;
+    conference?: null | ConferenceChange;
     /**
      * Replacement description; an empty string clears it.
      */
@@ -1359,6 +1423,7 @@ export type UpdateCalendarEventRequest = {
      * Replacement recurrence properties; an empty list clears them.
      */
     recurrenceLines?: Array<string> | null;
+    reminders?: null | EventReminders;
     time?: null | EventTime;
     /**
      * Replacement title; an empty string clears it.
@@ -1465,6 +1530,10 @@ export type VisibleCalendar = {
      * Provider color.
      */
     color?: string | null;
+    /**
+     * Default reminders applied to events that keep `useDefault`.
+     */
+    defaultReminders: Array<EventReminderOverride>;
     /**
      * Connected inbox address, for grouping in multi-inbox pickers.
      */
@@ -1727,7 +1796,10 @@ export type GetAttachmentData = {
 export type GetAttachmentErrors = {
     400: ErrorResponse;
     401: ErrorResponse;
+    403: ErrorResponse;
     404: ErrorResponse;
+    409: ErrorResponse;
+    429: ErrorResponse;
     500: ErrorResponse;
 };
 
@@ -1903,6 +1975,9 @@ export type ListBlockedSendersData = {
 export type ListBlockedSendersErrors = {
     401: ErrorResponse;
     403: ErrorResponse;
+    404: ErrorResponse;
+    409: ErrorResponse;
+    429: ErrorResponse;
     500: ErrorResponse;
 };
 
@@ -2268,6 +2343,7 @@ export type InitUserErrors = {
     400: InitErrorCodeResponse;
     401: ErrorResponse;
     409: SharedInboxConflictResponse;
+    429: ErrorResponse;
     500: ErrorResponse;
 };
 
@@ -2309,7 +2385,10 @@ export type CreateLabelData = {
 export type CreateLabelErrors = {
     400: ErrorResponse;
     401: ErrorResponse;
+    403: ErrorResponse;
+    404: ErrorResponse;
     409: ErrorResponse;
+    429: ErrorResponse;
     500: ErrorResponse;
 };
 

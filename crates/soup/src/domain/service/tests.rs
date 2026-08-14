@@ -1096,7 +1096,7 @@ async fn it_should_not_query_frecency() {
                 && assert_matches!(
                     a,
                     SimpleSortRequest {
-                        limit: 20,
+                        limit: 1,
                         user_id,
                         cursor: SimpleSortQuery::NoFilter(Query::Sort(SimpleSortMethod::ViewedUpdated, ())),
                     } => {
@@ -1151,7 +1151,7 @@ async fn it_should_not_query_frecency() {
 
     dbg!(&res);
 
-    assert_eq!(res.items.len(), 10)
+    assert_eq!(res.items.len(), 1)
 }
 
 #[tokio::test]
@@ -2011,7 +2011,7 @@ async fn cursor_should_return_simple_sort() {
                 && assert_matches!(
                     a,
                     SimpleSortRequest {
-                        limit: 20,
+                        limit: 1,
                         user_id,
                         cursor: SimpleSortQuery::NoFilter(Query::Sort(SimpleSortMethod::ViewedUpdated, ())),
                     } => {
@@ -2062,8 +2062,8 @@ async fn cursor_should_return_simple_sort() {
     let simple_cursor = res.into_simple().unwrap();
     let cursor_decoded: CursorWithValAndFilter<String, SimpleSortMethod, EntityFilters> =
         simple_cursor.next_cursor.unwrap().decode_json().unwrap();
-    assert_matches!(cursor_decoded, CursorWithValAndFilter { id, limit: 20, val: CursorVal { sort_type: SimpleSortMethod::ViewedUpdated, last_val }, filter: _ } => {
-        let expected_uuid_str = Uuid::from_u128(19).to_string();  // "my-document-19" -> 19
+    assert_matches!(cursor_decoded, CursorWithValAndFilter { id, limit: 1, val: CursorVal { sort_type: SimpleSortMethod::ViewedUpdated, last_val }, filter: _ } => {
+        let expected_uuid_str = Uuid::from_u128(0).to_string();  // "my-document-0" -> 0
         assert_eq!(id, expected_uuid_str);
         let date: DateTime<Utc> = Default::default();
         assert_eq!(last_val, date);
@@ -2347,7 +2347,7 @@ async fn it_should_preserve_is_completed_for_mixed_items() {
             ),
             link_ids: vec![Uuid::new_v4()],
             soup_type: SoupType::UnExpanded,
-            limit: 0,
+            limit: 3,
             cursor: SoupQuery::new_sort_simple(
                 SimpleSortMethod::ViewedUpdated,
                 EntityFilters::default(),
@@ -2371,10 +2371,10 @@ async fn it_should_preserve_is_completed_in_by_ids_queries() {
     let mut frecency = MockFrecencyQueryService::new();
     frecency
         .expect_get_frecency_page()
-        .withf(|params| assert_matches!(params, FrecencyPageRequest { limit: 20, .. } => true))
+        .withf(|params| assert_matches!(params, FrecencyPageRequest { limit: 3, .. } => true))
         .times(1)
         .returning(|params| {
-            // Return 20 items to match the limit and avoid fallback
+            // Return 3 items to match the requested limit and avoid fallback
             let iter = (1..=params.limit).map(|v| {
                 AggregateFrecency::new_mock(
                     EntityType::Document
@@ -2443,8 +2443,8 @@ async fn it_should_preserve_is_completed_in_by_ids_queries() {
     .into_frecency()
     .unwrap();
 
-    // Should have 20 items, verify is_completed values are preserved
-    assert_eq!(res.items.len(), 20);
+    // Should have 3 items, verify is_completed values are preserved
+    assert_eq!(res.items.len(), 3);
     let is_completed_values: Vec<Option<bool>> = res.items.iter().map(get_is_completed).collect();
     // Verify that all three is_completed values (true, false, None) are present
     assert!(
