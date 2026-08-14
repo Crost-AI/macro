@@ -69,6 +69,15 @@ struct Peer {
     presence: Option<RawPresence>,
 }
 
+/// One applied-but-not-yet-compacted op.
+#[derive(Debug, Clone)]
+struct OpEntry {
+    seq: u64,
+    update: RawUpdate,
+    /// Who authored it — excluded from the post-durability broadcast.
+    author: ConnId,
+}
+
 /// An update batch acked once `persisted_seq` reaches `through_seq`.
 #[derive(Debug, Clone)]
 struct PendingAck {
@@ -91,9 +100,9 @@ pub struct DocMachine<R: Replica> {
     /// snapshot_seq` is the machine's only definition of "dirty".
     snapshot_seq: u64,
 
-    /// Ops not yet covered by a durable snapshot, retained for retry after a
-    /// failed [`Effect::PersistOps`]. Trimmed when a snapshot commits.
-    op_tail: VecDeque<(u64, RawUpdate)>,
+    /// Ops not yet covered by a durable snapshot, retained for persist retry
+    /// and for the post-durability broadcast. Trimmed when a snapshot commits.
+    op_tail: VecDeque<OpEntry>,
     pending_acks: VecDeque<PendingAck>,
 
     /// At most one op-persist in flight; further ops wait in `op_tail` and go
@@ -343,7 +352,11 @@ impl<R: Replica> DocMachine<R> {
                     // seq is already in the replica, so a snapshot taken at
                     // any later watermark necessarily contains it.
                     self.seq += 1;
-                    self.op_tail.push_back((self.seq, update.clone()));
+                    self.op_tail.push_back(OpEntry {
+                        seq: self.seq,
+                        update: update.clone(),
+                        author: conn,
+                    });
                     if let Some(peer_id) = author_peer_id {
                         blame.extend(
                             result
@@ -374,15 +387,10 @@ impl<R: Replica> DocMachine<R> {
             if !blame.is_empty() {
                 out.push(Effect::RecordBlame { events: blame });
             }
-            // Broadcast immediately rather than after durability: peers
-            // converge faster, and a crash-before-persist is healed by the
-            // sender re-pushing its unacked batch.
-            for update in applied {
-                out.push(Effect::Broadcast {
-                    except: conn,
-                    frame: ServerFrame::Update { update },
-                });
-            }
+            // Deliberately NO broadcast here. The order is apply → persist →
+            // ack → broadcast: peers must never see an op that a crash could
+            // still erase from the log. Broadcasts are released alongside the
+            // acks in `on_ops_persisted`.
             if self.persist_timer.is_none() {
                 let token = self.schedule(TimerKind::PersistDebounce, PERSIST_DEBOUNCE_MS, out);
                 self.persist_timer = Some(token);
@@ -467,9 +475,11 @@ impl<R: Replica> DocMachine<R> {
             return; // stale completion
         }
         self.inflight_ops = None;
+        let previous = self.persisted_seq;
         self.persisted_seq = self.persisted_seq.max(through_seq);
 
-        // Release every ack the new watermark covers, in order.
+        // Release every ack the new watermark covers, in order. Acks before
+        // broadcasts, matching the service today.
         while let Some(ack) = self.pending_acks.front() {
             if ack.through_seq > self.persisted_seq {
                 break;
@@ -481,6 +491,18 @@ impl<R: Replica> DocMachine<R> {
                 conn: ack.conn,
                 frame: ServerFrame::Ack { id: ack.id },
             });
+        }
+
+        // Broadcast the newly durable ops to everyone but their authors.
+        for entry in &self.op_tail {
+            if entry.seq > previous && entry.seq <= self.persisted_seq {
+                out.push(Effect::Broadcast {
+                    except: entry.author,
+                    frame: ServerFrame::Update {
+                        update: entry.update.clone(),
+                    },
+                });
+            }
         }
 
         // More ops arrived while this request was in flight.
@@ -500,7 +522,7 @@ impl<R: Replica> DocMachine<R> {
         while self
             .op_tail
             .front()
-            .is_some_and(|(seq, _)| *seq <= self.snapshot_seq)
+            .is_some_and(|entry| entry.seq <= self.snapshot_seq)
         {
             self.op_tail.pop_front();
         }
@@ -578,8 +600,8 @@ impl<R: Replica> DocMachine<R> {
         let ops: Vec<(u64, RawUpdate)> = self
             .op_tail
             .iter()
-            .filter(|(seq, _)| *seq > self.persisted_seq)
-            .cloned()
+            .filter(|entry| entry.seq > self.persisted_seq)
+            .map(|entry| (entry.seq, entry.update.clone()))
             .collect();
         if ops.is_empty() {
             return;

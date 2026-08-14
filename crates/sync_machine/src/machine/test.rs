@@ -173,7 +173,7 @@ fn attach_when_ready_gets_immediate_initial_sync() {
 // ── updates, persistence, acks (rows 8–12) ───────────────────────────────
 
 #[test]
-fn update_persists_broadcasts_blames_and_schedules_compaction() {
+fn update_order_is_apply_persist_ack_broadcast() {
     let (mut h, c1) = Harness::ready(b"base");
     h.feed(Input::Frame {
         conn: c1,
@@ -190,16 +190,43 @@ fn update_persists_broadcasts_blames_and_schedules_compaction() {
         e,
         Effect::RecordBlame { events } if events.len() == 1 && events[0].peer_id == 7
     )));
-    assert!(fx.iter().any(|e| matches!(
-        e,
-        Effect::Broadcast {
-            except: ConnId(1),
-            frame: ServerFrame::Update { .. }
-        }
-    )));
     scheduled_timer(&fx); // the compaction debounce
-    // No ack yet — nothing is durable.
+    // Nothing is durable yet: no ack AND no broadcast — peers must never see
+    // an op a crash could still erase from the log.
     assert!(acks(&fx).is_empty());
+    assert!(!fx.iter().any(|e| matches!(e, Effect::Broadcast { .. })));
+
+    // Durability releases the ack first, then the broadcast, in that order.
+    let token = persist_ops_token(&fx);
+    let fx = h.feed(Input::OpsPersisted {
+        token,
+        through_seq: 1,
+    });
+    let ack_at = fx
+        .iter()
+        .position(|e| {
+            matches!(
+                e,
+                Effect::Send {
+                    frame: ServerFrame::Ack { .. },
+                    ..
+                }
+            )
+        })
+        .expect("ack after durability");
+    let broadcast_at = fx
+        .iter()
+        .position(|e| {
+            matches!(
+                e,
+                Effect::Broadcast {
+                    except: ConnId(1),
+                    frame: ServerFrame::Update { .. }
+                }
+            )
+        })
+        .expect("broadcast after durability");
+    assert!(ack_at < broadcast_at);
 }
 
 #[test]

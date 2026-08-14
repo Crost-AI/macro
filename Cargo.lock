@@ -14664,6 +14664,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sync_machine_2"
+version = "0.1.0"
+dependencies = [
+ "sync_machine",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
 name = "sync_router"
 version = "0.1.0"
 dependencies = [
