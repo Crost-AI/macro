@@ -117,6 +117,7 @@ let lastAdapter: FakePageAdapter | undefined;
 let configureAdapter: (adapter: FakePageAdapter) => void;
 let sharedWorkerConstructor: ReturnType<typeof vi.fn>;
 let dedicatedWorkerConstructor: ReturnType<typeof vi.fn>;
+let indexedDbDelete: ReturnType<typeof vi.fn>;
 
 function stubSupportedBrowser(): void {
   sharedWorkerConstructor = vi.fn();
@@ -124,6 +125,12 @@ function stubSupportedBrowser(): void {
   vi.stubGlobal('SharedWorker', sharedWorkerConstructor);
   vi.stubGlobal('Worker', dedicatedWorkerConstructor);
   vi.stubGlobal('MessageChannel', vi.fn());
+  indexedDbDelete = vi.fn(() => ({
+    onblocked: null,
+    onerror: null,
+    onsuccess: null,
+  }));
+  vi.stubGlobal('indexedDB', { deleteDatabase: indexedDbDelete });
   vi.stubGlobal('navigator', {
     locks: {
       request: vi.fn(
@@ -178,6 +185,7 @@ describe('createWorkerCacheHost', () => {
     );
     expect(adapterFactory).not.toHaveBeenCalled();
     expect(dedicatedWorkerConstructor).not.toHaveBeenCalled();
+    expect(indexedDbDelete).not.toHaveBeenCalled();
     expect(host.disabled).toBe(true);
     await expect(host.readQuery({ query: '{ x }' })).resolves.toEqual({
       kind: 'miss',
@@ -223,24 +231,30 @@ describe('createWorkerCacheHost', () => {
     expect(onInitializationError).toHaveBeenCalledOnce();
   });
 
-  it('constructs the coordinator adapter lazily on first RPC', async () => {
-    const host = createWorkerCacheHost({ scope: 'scope-1' });
+  it('constructs the coordinator adapter and starts cutover cleanup lazily on first RPC', async () => {
+    const host = createWorkerCacheHost({ scope: 'lazy-scope' });
     host.onOpsAffected(() => undefined);
 
     expect(adapterFactory).not.toHaveBeenCalled();
     expect(sharedWorkerConstructor).not.toHaveBeenCalled();
     expect(dedicatedWorkerConstructor).not.toHaveBeenCalled();
+    expect(indexedDbDelete).not.toHaveBeenCalled();
 
     const read = host.readQuery({ query: '{ x }' });
     expect(adapterFactory).toHaveBeenCalledOnce();
+    expect(indexedDbDelete).toHaveBeenCalledOnce();
+    expect(indexedDbDelete).toHaveBeenCalledWith('graphql-cache:lazy-scope');
     expect(adapterFactory).toHaveBeenCalledWith(
-      expect.objectContaining({ scope: 'scope-1' })
+      expect.objectContaining({ scope: 'lazy-scope' })
     );
     await expect(read).resolves.toEqual({ kind: 'miss' });
+    await host.clear();
     expect(requireAdapter().requests.map((request) => request.kind)).toEqual([
       'init',
       'read',
+      'clear',
     ]);
+    expect(indexedDbDelete).toHaveBeenCalledOnce();
     host.dispose();
   });
 

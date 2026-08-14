@@ -1,9 +1,9 @@
 //! Storage abstraction: the cold tier behind the in-memory hot tier.
 //!
-//! Implementations: in-memory (tests, Phase 1), IndexedDB via the `idb`
-//! crate (browser, Phase 2), SQLite (Tauri native, Phase 2). Futures are
-//! [`MaybeSend`]: `Send` on native targets (so hosts can drive the engine
-//! from a multi-threaded runtime), unbounded on wasm — wasm futures aren't
+//! Implementations: in-memory (tests), Turso over OPFS (browser), and SQLite
+//! (Tauri native). Futures are [`MaybeSend`]: `Send` on native targets (so
+//! hosts can drive the engine from a multi-threaded runtime), unbounded on
+//! wasm — wasm futures aren't
 //! `Send`.
 
 use crate::queue::{

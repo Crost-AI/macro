@@ -123,6 +123,40 @@ test('production CacheHost performs fresh init and active reread after owner los
   expect(browserErrors).toEqual([]);
 });
 
+test('direct cutover lazily deletes only the former normalized-cache IDB', async ({
+  page,
+}) => {
+  const browserErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') browserErrors.push(message.text());
+  });
+  page.on('pageerror', (error) => browserErrors.push(error.message));
+
+  await page.goto('/cutover.html');
+  const result = page.locator('#result');
+  await expect(result).toHaveAttribute('data-status', 'passed', {
+    timeout: 60_000,
+  });
+  const report = JSON.parse((await result.textContent()) ?? '') as {
+    passed: boolean;
+    noEagerDeletion: boolean;
+    deletionRequestedOnFirstUse: boolean;
+    blockedDeletionDidNotBlockHost: boolean;
+    legacyDeletionCompletedLater: boolean;
+    unrelatedIdbPreserved: boolean;
+  };
+
+  expect(report).toEqual({
+    passed: true,
+    noEagerDeletion: true,
+    deletionRequestedOnFirstUse: true,
+    blockedDeletionDidNotBlockHost: true,
+    legacyDeletionCompletedLater: true,
+    unrelatedIdbPreserved: true,
+  });
+  expect(browserErrors).toEqual([]);
+});
+
 test('production cache-wasm Turso engine preserves graceful data and atomically recovers abrupt loss', async ({
   context,
   page,

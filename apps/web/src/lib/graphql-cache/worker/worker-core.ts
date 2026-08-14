@@ -1,6 +1,6 @@
 /**
- * SharedWorker core: owns the browser's single wasm engine, serves the RPC
- * protocol to page ports, and fans out invalidations.
+ * Dedicated engine-worker core: owns the elected browser WASM engine, serves
+ * coordinator-routed RPCs, and fans out invalidations.
  */
 
 import { match } from 'ts-pattern';
@@ -412,7 +412,7 @@ export class CacheWorkerCore {
 
   private async init(scope: string, hotCapacity?: number): Promise<void> {
     if (this.initPromise) {
-      // Subsequent tabs connecting to the SharedWorker re-init idempotently.
+      // Subsequent page clients routed to this elected engine re-init idempotently.
       await this.initPromise;
       if (this.scope !== scope) {
         throw new Error(
@@ -465,7 +465,7 @@ export class CacheWorkerCore {
     this.drainWaiters.clear();
   }
 
-  /** Notifies every page connected to this shared engine. */
+  /** Notifies every page routed to this elected engine. */
   private fanOut(result: WriteResult, cacheChanged: boolean): void {
     if (result.affectedOps.length > 0) {
       this.push({

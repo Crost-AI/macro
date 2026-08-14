@@ -9,9 +9,10 @@
  *   different user than the one bound to the cache wipes and rebinds it
  *   (silent restart). See the design doc and cache-core `identity_witness`.
  *
- * The scope is stable for the browser profile; identity changes normally
- * rotate cache contents. Scope replacement is serialized across tabs so a
- * stale transport failure cannot overwrite a newer logout rotation.
+ * The scope is stable for the browser profile and maps to one Turso/OPFS
+ * database identity. Identity changes reset that database's contents. Scope
+ * replacement is serialized across tabs so a stale transport failure cannot
+ * overwrite a newer logout rotation.
  */
 
 const SCOPE_STORAGE_KEY = 'graphql-cache:scope';

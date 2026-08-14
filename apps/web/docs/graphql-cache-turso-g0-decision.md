@@ -152,5 +152,7 @@ production code:
 4. WP-11 reports the one-module artifact and resource measurements.
 5. WP-12 passes supported-browser failure/recovery E2E before exposure.
 
-The existing IndexedDB browser backend remains active until the direct cutover
-package is verified; no dual-backend runtime or fallback path is introduced.
+WP-10's non-root direct cutover removes the IndexedDB browser backend and
+legacy worker. The integration owner still removes the root workspace member,
+lockfile entry, and generated-workflow references. No dual-backend runtime or
+fallback path is introduced.

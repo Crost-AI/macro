@@ -1,6 +1,6 @@
 # Browser normalized cache: IndexedDB to Turso migration plan
 
-Status: **Gate G0 approved; production implementation is in progress from WP-05**
+Status: **WP-10 non-root cutover complete; root/workflow integration remains with WP-00**
 
 Scope: browser normalized GraphQL cache only. The Tauri native
 `cache-sqlite` host stays unchanged. The `idb` use in collaboration storage and
@@ -156,7 +156,7 @@ rejected rather than replayed speculatively.
 
 ## 3. Current architecture and replacement boundary
 
-Current browser path:
+Pre-cutover browser path (removed by WP-10):
 
 ```text
 page / urql
@@ -167,7 +167,7 @@ page / urql
   -> IndexedDB (`cache-idb`)
 ```
 
-Target browser path:
+Current browser path:
 
 ```text
 page / urql
@@ -481,8 +481,10 @@ Cutover steps:
 
 1. remove `cache-idb` from the browser cache build;
 2. switch `cache-wasm` to `Engine<TursoStorage>`;
-3. delete the old normalized-cache IndexedDB database on a best-effort basis,
-   or leave it for browser eviction if an old tab still holds it open;
+3. after the Turso browser host's first actual lazy start, fire-and-forget one
+   raw `indexedDB.deleteDatabase("graphql-cache:<scope>")` attempt per scope and
+   page session. Never enumerate or open IDB. Success, error, and blocked all
+   settle safely; a blocked request may complete later after an old tab closes;
 4. do not read, copy, import, reconcile, or wait for any IDB records, mutation
    queue, or optimistic layer;
 5. do not run IDB and Turso browser cache hosts side by side in the new code;
@@ -758,6 +760,9 @@ WP-05 through WP-12 are authorized in dependency order.
 
 ### WP-10 — direct IDB removal and repository integration
 
+**Status:** non-root cutover complete. WP-00 still owns removal of the root
+workspace member/lockfile entry and regeneration of workflow outputs.
+
 **Owner paths**
 
 - remove `crates/client/cache-idb/**`;
@@ -917,8 +922,9 @@ recorded by WP-12):
 10. Change identity and confirm a complete local reset.
 11. Exercise logout, incompatible namespace, corruption, quota denial, private
     mode, and storage eviction.
-12. Upgrade from the IDB build and confirm Turso starts empty without reading
-    IDB state.
+12. Upgrade from the IDB build and confirm Turso starts empty without opening
+    or reading IDB state; only the exact former `graphql-cache:<scope>` database
+    is deleted, and blocked deletion does not delay cache APIs.
 13. Verify no browser cache worker/WASM is created on Tauri or iOS native paths.
 14. Inspect the page and worker environment to confirm `crossOriginIsolated`
     is not required and no `SharedArrayBuffer` is created.

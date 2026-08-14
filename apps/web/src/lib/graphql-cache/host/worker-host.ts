@@ -4,6 +4,7 @@
  * a storage-free no-op host.
  */
 
+import { deleteLegacyNormalizedCacheIdb } from '../legacy-idb-cleanup';
 import {
   ADMITTED_ENQUEUE_UNCERTAIN_ERROR_CODE,
   type CachedQueryInstanceWire,
@@ -163,6 +164,7 @@ export function createWorkerCacheHost(options: WorkerHostOptions): CacheHost {
   let adapterDisposalStarted = false;
   let disposalMode: 'graceful' | 'abrupt' | undefined;
   let pagehideRegistered = false;
+  let legacyIdbDeletionStarted = false;
 
   const onMessage = (event: MessageEvent<WorkerMessage>) => {
     const msg = event.data;
@@ -297,6 +299,13 @@ export function createWorkerCacheHost(options: WorkerHostOptions): CacheHost {
     adapter = created;
     registerPagehide();
     return created;
+  }
+
+  function startLegacyIdbDeletion(): void {
+    if (legacyIdbDeletionStarted) return;
+    legacyIdbDeletionStarted = true;
+    // Cutover cleanup must never delay cache startup or any cache RPC.
+    void deleteLegacyNormalizedCacheIdb(options.scope);
   }
 
   function rejectPending(error: Error, transportUncertain = false): void {
@@ -507,6 +516,9 @@ export function createWorkerCacheHost(options: WorkerHostOptions): CacheHost {
       pending.set(id, entry);
       try {
         getAdapter().postMessage({ ...msg, id } as CacheRequest);
+        // The first accepted coordinator send is the browser Turso host's
+        // actual lazy start. Only then begin fire-and-forget legacy cleanup.
+        startLegacyIdbDeletion();
         if (pending.has(id)) entry.admitted = true;
       } catch (error) {
         if (pending.delete(id) && entry.timer !== undefined) {

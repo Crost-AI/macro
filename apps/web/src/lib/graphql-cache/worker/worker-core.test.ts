@@ -315,8 +315,8 @@ describe('CacheWorkerCore', () => {
       'read:client:group-soup',
       'read:client:child',
     ]);
-    // Two read RPCs for the same active operation require one wasm call, so
-    // the full denormalization and its IndexedDB get_batch work run once.
+    // Two read RPCs for the same active operation require one WASM call, so
+    // the full denormalization and its storage batch read run once.
     expect(
       readQuery.mock.calls.filter(([opId]) => opId === 'client:group-soup')
     ).toHaveLength(1);

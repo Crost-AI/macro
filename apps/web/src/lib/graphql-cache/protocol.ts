@@ -306,18 +306,6 @@ export type CacheResponse =
     };
 
 /**
- * Legacy fire-and-forget notice understood by the pre-coordinator worker.
- * The coordinator page adapter uses its typed lifecycle envelopes instead.
- */
-export type CacheNotice = { kind: 'disconnect' };
-
-export function isCacheNotice(
-  msg: CacheRequest | CacheNotice
-): msg is CacheNotice {
-  return msg.kind === 'disconnect';
-}
-
-/**
  * Pushed (not request/response) messages from worker to its client(s):
  * operations whose underlying records changed. The host filters by its own
  * clientId prefix and re-executes.
