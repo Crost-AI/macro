@@ -122,6 +122,7 @@ async fn main() -> Result<()> {
     };
 
     tokio::spawn(poll_messages(context.clone()));
+    tokio::spawn(service::fanout::poll_outbound(context.clone()));
     tokio::spawn(service::fanout::heartbeat_loop(
         context.redis_connection.clone(),
         fanout_gateway_id,
