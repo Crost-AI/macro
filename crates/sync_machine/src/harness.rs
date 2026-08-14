@@ -45,15 +45,19 @@ impl Harness {
 pub(crate) fn edit_caps() -> Caps {
     Caps {
         can_edit: true,
-        user_id: Some("user-1".to_string()),
+        user_id: Some(user_id("macro|user-1@test.com")),
     }
 }
 
 pub(crate) fn view_caps() -> Caps {
     Caps {
         can_edit: false,
-        user_id: Some("viewer".to_string()),
+        user_id: Some(user_id("macro|viewer@test.com")),
     }
+}
+
+pub(crate) fn user_id(raw: &str) -> macro_user_id::user_id::MacroUserIdStr<'static> {
+    macro_user_id::user_id::MacroUserIdStr::try_from(raw.to_string()).expect("valid test user id")
 }
 
 pub(crate) fn update(payload: &[u8], id: &str) -> ClientFrame {

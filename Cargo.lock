@@ -14659,6 +14659,7 @@ dependencies = [
 name = "sync_machine"
 version = "0.1.0"
 dependencies = [
+ "macro_user_id",
  "thiserror 2.0.18",
  "workspace-hack",
 ]

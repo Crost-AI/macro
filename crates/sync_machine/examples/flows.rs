@@ -314,9 +314,12 @@ impl Flow {
 }
 
 fn edit_caps(user: &str) -> Caps {
+    let raw = format!("macro|{user}@macro.com");
     Caps {
         can_edit: true,
-        user_id: Some(user.to_string()),
+        user_id: Some(
+            macro_user_id::user_id::MacroUserIdStr::try_from(raw).expect("valid example user id"),
+        ),
     }
 }
 
@@ -329,10 +332,13 @@ fn banner(title: &str) {
 fn describe_input(input: &ManagerInput) -> String {
     match input {
         ManagerInput::Attach { conn, doc, caps } => format!(
-            "Subscribe(conn {}, doc {}, user {:?}, can_edit {})",
+            "Attach(conn {}, doc {}, user {:?}, can_edit {})",
             conn.0,
             doc.as_str(),
-            caps.user_id.as_deref().unwrap_or("-"),
+            caps.user_id
+                .as_ref()
+                .map(|u| u.to_string())
+                .unwrap_or_else(|| "-".into()),
             caps.can_edit
         ),
         ManagerInput::Detach { conn, doc } => {

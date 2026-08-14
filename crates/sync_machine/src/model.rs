@@ -4,6 +4,8 @@
 //! `FromPeer`/`FromRemote` bebop unions one-to-one, so the runtime adapter is
 //! a mechanical decode/encode with no translation logic.
 
+use macro_user_id::user_id::MacroUserIdStr;
+
 /// A connection attached to a document. Opaque to the machine; the runtime
 /// interns its transport-level identity (e.g. gateway id + conn id) to one of
 /// these.
@@ -30,7 +32,7 @@ pub struct Caps {
     pub can_edit: bool,
     /// The authenticated user, when known (anonymous share links have none).
     /// Used only for peer-id attribution.
-    pub user_id: Option<String>,
+    pub user_id: Option<MacroUserIdStr<'static>>,
 }
 
 /// Why the machine asked the runtime to close a connection.
@@ -332,7 +334,7 @@ pub enum Effect {
         /// The CRDT peer id.
         peer_id: u64,
         /// The authenticated user it belongs to.
-        user_id: String,
+        user_id: MacroUserIdStr<'static>,
     },
     /// Announce a session transition to the rest of the product.
     Lifecycle {

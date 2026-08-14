@@ -1,6 +1,6 @@
 use crate::harness::{
     Harness, acks, edit_caps, persist_ops_token, persist_snapshot_token, scheduled_timer, update,
-    view_caps,
+    user_id, view_caps,
 };
 use crate::model::{
     ClientFrame, CloseReason, ConnId, Effect, Input, Lifecycle, RawPresence, RawSnapshot,
@@ -405,7 +405,7 @@ fn register_peer_records_the_user_mapping_once() {
         fx,
         vec![Effect::RecordPeerMapping {
             peer_id: 42,
-            user_id: "user-1".into()
+            user_id: user_id("macro|user-1@test.com"),
         }]
     );
     // Duplicate registration is a no-op.
