@@ -81,6 +81,14 @@ function ciPreviewWebServerCommand(): string {
  */
 const COMPONENT_SPEC = /.*\.component\.spec\.ts/;
 
+/**
+ * Component specs get their own Vite on a dedicated port, never reusing an
+ * existing server. Sharing the app's port silently reuses whatever dev server
+ * happens to be running — commonly one from a different worktree, which does
+ * not serve these fixtures and fails every assertion with "element not found".
+ */
+const COMPONENT_PORT = '5599';
+
 const authenticatedProjects = isLocalE2E
   ? [
       {
@@ -178,7 +186,10 @@ export default defineConfig({
     {
       name: 'component',
       testMatch: COMPONENT_SPEC,
-      use: { ...devices['Desktop Chrome'] },
+      use: {
+        ...devices['Desktop Chrome'],
+        baseURL: `http://localhost:${COMPONENT_PORT}`,
+      },
     },
 
     /* Test against mobile viewports. */
@@ -213,14 +224,22 @@ export default defineConfig({
   // },
 
   /* Run your local dev server before starting the tests */
-  webServer: {
-    command: isLocalE2E
-      ? localE2EWebServerCommand()
-      : process.env.CI
-        ? ciPreviewWebServerCommand()
-        : 'bun run dev',
-    url: `http://localhost:${localE2EPort}/app`,
-    reuseExistingServer: !process.env.CI && !isLocalE2E,
-    timeout: isLocalE2E ? 60_000 : 15000,
-  },
+  webServer: [
+    {
+      command: isLocalE2E
+        ? localE2EWebServerCommand()
+        : process.env.CI
+          ? ciPreviewWebServerCommand()
+          : 'bun run dev',
+      url: `http://localhost:${localE2EPort}/app`,
+      reuseExistingServer: !process.env.CI && !isLocalE2E,
+      timeout: isLocalE2E ? 60_000 : 15000,
+    },
+    {
+      command: `bunx vite --config vite.config.ts --port ${COMPONENT_PORT} --strictPort`,
+      url: `http://localhost:${COMPONENT_PORT}/tests/e2e/fixtures/tooltip-harness/index.html`,
+      reuseExistingServer: false,
+      timeout: 30_000,
+    },
+  ],
 });
