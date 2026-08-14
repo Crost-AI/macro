@@ -14660,13 +14660,10 @@ name = "sync_router"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "axum",
  "bebop",
  "connection_gateway_models",
  "futures",
- "macro_config",
  "macro_entrypoint",
- "macro_env",
  "macro_env_var",
  "mockall",
  "opentelemetry",
