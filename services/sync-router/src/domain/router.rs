@@ -103,8 +103,8 @@ impl<Sink: EdgeSink, Downstreams: DownstreamFactory> Router<Sink, Downstreams> {
     #[tracing::instrument(skip_all, fields(conn = %conn.conn, gateway = %conn.gateway))]
     async fn handle_client(&mut self, conn: ConnectionId, frame: ClientEnvelope) {
         match frame {
-            ClientEnvelope::Subscribe { doc, token } => {
-                let doc = DocId(doc);
+            ClientEnvelope::RouterSubscribe { doc_id, token } => {
+                let doc = DocId(doc_id);
                 let key = (conn.clone(), doc.clone());
                 if self.routes.contains_key(&key) {
                     // Idempotent: the downstream is already up (or dialing).
@@ -135,13 +135,15 @@ impl<Sink: EdgeSink, Downstreams: DownstreamFactory> Router<Sink, Downstreams> {
                 self.routes.insert(key, Route { epoch, sender });
                 self.by_conn.entry(conn).or_default().insert(doc);
             }
-            ClientEnvelope::Unsubscribe { doc } => {
+            ClientEnvelope::RouterUnsubscribe { doc_id } => {
                 // Dropping the sender closes the downstream quietly (the pump
                 // distinguishes our hangup from an upstream death).
-                self.forget(&conn, &DocId(doc));
+                self.forget(&conn, &DocId(doc_id));
             }
-            ClientEnvelope::Frame { doc, payload } => {
-                let doc = DocId(doc);
+            // decode_client rejects Unknown before we get here.
+            ClientEnvelope::Unknown => {}
+            ClientEnvelope::RouterFrame { doc_id, payload } => {
+                let doc = DocId(doc_id);
                 let Some(sender) = self.routes.get(&(conn.clone(), doc.clone())) else {
                     warn!(
                         doc = doc.as_str(),

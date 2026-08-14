@@ -1,39 +1,19 @@
 //! Encode/decode helpers for the multiplex envelope.
 //!
 //! The wire types are the bebop `ToRouter` / `FromRouter` unions from the
-//! sync-service schema; this module owns the borrow-to-owned boundary so the
-//! rest of the router never touches lifetimes or `bebop::Record` directly.
+//! sync-service schema. Decoding returns the generated *owned* variant
+//! (`owned::ToRouter`) so the rest of the router never touches wire
+//! lifetimes; encoding uses the borrowed variants for zero-copy serialize.
 
 #[cfg(test)]
 mod test;
 
 use bebop::{Record, SliceWrapper, SubRecord};
-use sync_service_bebop_schema::{FromRouter, ToRouter};
+use sync_service_bebop_schema::{FromRouter, owned};
 
-/// A decoded client envelope, owned.
-#[derive(Debug, PartialEq, Eq)]
-pub enum ClientEnvelope {
-    /// Start syncing a document; `token` is the document-permission JWT,
-    /// passed through to the downstream unverified.
-    Subscribe {
-        /// The document id.
-        doc: String,
-        /// The document-permission token.
-        token: String,
-    },
-    /// Stop syncing a document.
-    Unsubscribe {
-        /// The document id.
-        doc: String,
-    },
-    /// One inner sync frame (a serialized `FromPeer`), untouched.
-    Frame {
-        /// The document id.
-        doc: String,
-        /// The inner payload.
-        payload: Vec<u8>,
-    },
-}
+/// A decoded client envelope: the generated owned `ToRouter`, with the
+/// `Unknown` discriminator already rejected.
+pub type ClientEnvelope = owned::ToRouter;
 
 /// Errors from decoding a client envelope.
 #[derive(Debug, thiserror::Error)]
@@ -48,22 +28,12 @@ pub enum EnvelopeError {
 
 /// Decode a client's binary frame.
 pub fn decode_client(bytes: &[u8]) -> Result<ClientEnvelope, EnvelopeError> {
-    let envelope =
-        ToRouter::deserialize(bytes).map_err(|error| EnvelopeError::Decode(error.to_string()))?;
-    Ok(match envelope {
-        ToRouter::RouterSubscribe { doc_id, token } => ClientEnvelope::Subscribe {
-            doc: doc_id.to_string(),
-            token: token.to_string(),
-        },
-        ToRouter::RouterUnsubscribe { doc_id } => ClientEnvelope::Unsubscribe {
-            doc: doc_id.to_string(),
-        },
-        ToRouter::RouterFrame { doc_id, payload } => ClientEnvelope::Frame {
-            doc: doc_id.to_string(),
-            payload: payload.to_vec(),
-        },
-        ToRouter::Unknown => return Err(EnvelopeError::Unknown),
-    })
+    let envelope = owned::ToRouter::deserialize(bytes)
+        .map_err(|error| EnvelopeError::Decode(error.to_string()))?;
+    if matches!(envelope, owned::ToRouter::Unknown) {
+        return Err(EnvelopeError::Unknown);
+    }
+    Ok(envelope)
 }
 
 fn encode(frame: &FromRouter<'_>) -> Vec<u8> {

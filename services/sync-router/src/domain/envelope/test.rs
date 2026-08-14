@@ -1,4 +1,5 @@
 use super::*;
+use sync_service_bebop_schema::ToRouter;
 
 #[test]
 fn subscribe_round_trips() {
@@ -11,8 +12,8 @@ fn subscribe_round_trips() {
     .unwrap();
     assert_eq!(
         decode_client(&buffer).unwrap(),
-        ClientEnvelope::Subscribe {
-            doc: "doc-1".into(),
+        ClientEnvelope::RouterSubscribe {
+            doc_id: "doc-1".into(),
             token: "tok".into()
         },
     );
@@ -29,8 +30,8 @@ fn frame_round_trips() {
     .unwrap();
     assert_eq!(
         decode_client(&buffer).unwrap(),
-        ClientEnvelope::Frame {
-            doc: "doc-2".into(),
+        ClientEnvelope::RouterFrame {
+            doc_id: "doc-2".into(),
             payload: vec![1, 2, 3]
         },
     );

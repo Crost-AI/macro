@@ -14,7 +14,7 @@ macro_env_var = { path = "../../crates/macro_env_var" }
 opentelemetry = { workspace = true }
 postcard = { workspace = true }
 redis = { workspace = true, features = ["aio", "tokio-comp", "tokio-rustls-comp"] }
-sync_service_bebop_schema = { path = "../sync-service/bebop-schema" }
+sync_service_bebop_schema = { path = "../sync-service/bebop-schema", features = ["bebop-owned-all"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-tungstenite = { workspace = true }
