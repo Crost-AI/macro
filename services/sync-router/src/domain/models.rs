@@ -59,5 +59,9 @@ pub enum Event {
         conn: ConnectionId,
         /// The document it was for.
         doc: DocId,
+        /// Which incarnation of the route died. A stale close (e.g. a slow
+        /// dial failing after the client already re-subscribed) must not tear
+        /// down the replacement route.
+        epoch: u64,
     },
 }

@@ -19,10 +19,23 @@ use tracing::{debug, warn};
 pub struct Router<Sink: EdgeSink, Downstreams: DownstreamFactory> {
     sink: Arc<Sink>,
     downstreams: Downstreams,
-    routes: HashMap<(ConnectionId, DocId), mpsc::Sender<Vec<u8>>>,
+    routes: HashMap<(ConnectionId, DocId), Route>,
     /// Which documents each connection has open, for disconnect teardown.
     by_conn: HashMap<ConnectionId, HashSet<DocId>>,
+    /// Monotonic route-incarnation counter; see [`Event::DownstreamClosed`].
+    next_epoch: u64,
 }
+
+/// One live (or dialing) downstream route.
+struct Route {
+    epoch: u64,
+    sender: mpsc::Sender<Vec<u8>>,
+}
+
+/// Documents one connection may hold open at once. The downstream token is
+/// only validated after the dial, so this bounds how much outbound work an
+/// authenticated-but-unauthorized client can trigger.
+const MAX_DOCS_PER_CONN: usize = 64;
 
 impl<Sink: EdgeSink, Downstreams: DownstreamFactory> Router<Sink, Downstreams> {
     /// Create a router over the given sink and downstream factory.
@@ -32,6 +45,7 @@ impl<Sink: EdgeSink, Downstreams: DownstreamFactory> Router<Sink, Downstreams> {
             downstreams,
             routes: HashMap::new(),
             by_conn: HashMap::new(),
+            next_epoch: 0,
         }
     }
 
@@ -71,14 +85,16 @@ impl<Sink: EdgeSink, Downstreams: DownstreamFactory> Router<Sink, Downstreams> {
                     self.drop_conn(&conn);
                 }
             }
-            Event::DownstreamClosed { conn, doc } => {
-                // The pump already told the client; just forget the route.
-                self.routes.remove(&(conn.clone(), doc.clone()));
-                if let Some(docs) = self.by_conn.get_mut(&conn) {
-                    docs.remove(&doc);
-                    if docs.is_empty() {
-                        self.by_conn.remove(&conn);
-                    }
+            Event::DownstreamClosed { conn, doc, epoch } => {
+                // The pump already told the client; forget the route — but
+                // only if it is still the incarnation that died. A stale
+                // close must not tear down a replacement route.
+                let is_current = self
+                    .routes
+                    .get(&(conn.clone(), doc.clone()))
+                    .is_some_and(|route| route.epoch == epoch);
+                if is_current {
+                    self.forget(&conn, &doc);
                 }
             }
         }
@@ -97,19 +113,32 @@ impl<Sink: EdgeSink, Downstreams: DownstreamFactory> Router<Sink, Downstreams> {
                         .await;
                     return;
                 }
+                if self
+                    .by_conn
+                    .get(&conn)
+                    .is_some_and(|docs| docs.len() >= MAX_DOCS_PER_CONN)
+                {
+                    warn!(doc = doc.as_str(), "per-connection document cap reached");
+                    self.deliver(
+                        &conn,
+                        envelope::subscribe_failed(doc.as_str(), "too many open documents"),
+                    )
+                    .await;
+                    return;
+                }
                 debug!(doc = doc.as_str(), "opening downstream");
-                let sender = self.downstreams.open(conn.clone(), doc.clone(), token);
-                self.routes.insert(key, sender);
+                self.next_epoch += 1;
+                let epoch = self.next_epoch;
+                let sender = self
+                    .downstreams
+                    .open(conn.clone(), doc.clone(), token, epoch);
+                self.routes.insert(key, Route { epoch, sender });
                 self.by_conn.entry(conn).or_default().insert(doc);
             }
             ClientEnvelope::Unsubscribe { doc } => {
-                let doc = DocId(doc);
                 // Dropping the sender closes the downstream quietly (the pump
                 // distinguishes our hangup from an upstream death).
-                self.routes.remove(&(conn.clone(), doc.clone()));
-                if let Some(docs) = self.by_conn.get_mut(&conn) {
-                    docs.remove(&doc);
-                }
+                self.forget(&conn, &DocId(doc));
             }
             ClientEnvelope::Frame { doc, payload } => {
                 let doc = DocId(doc);
@@ -124,7 +153,7 @@ impl<Sink: EdgeSink, Downstreams: DownstreamFactory> Router<Sink, Downstreams> {
                 // up; drop the frame — the sync protocol self-heals via
                 // catch-up requests. A closed channel means the downstream
                 // died; DownstreamClosed will clean the route up.
-                if let Err(error) = sender.try_send(payload) {
+                if let Err(error) = sender.sender.try_send(payload) {
                     warn!(doc = doc.as_str(), error = %error, "dropping frame for downstream");
                 }
             }
@@ -138,6 +167,17 @@ impl<Sink: EdgeSink, Downstreams: DownstreamFactory> Router<Sink, Downstreams> {
         debug!(conn = %conn.conn, count = docs.len(), "dropping connection's downstreams");
         for doc in docs {
             self.routes.remove(&(conn.clone(), doc));
+        }
+    }
+
+    /// Remove one route and its `by_conn` entry (and the set itself once empty).
+    fn forget(&mut self, conn: &ConnectionId, doc: &DocId) {
+        self.routes.remove(&(conn.clone(), doc.clone()));
+        if let Some(docs) = self.by_conn.get_mut(conn) {
+            docs.remove(doc);
+            if docs.is_empty() {
+                self.by_conn.remove(conn);
+            }
         }
     }
 

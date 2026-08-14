@@ -2,6 +2,9 @@
 //! [`EdgeEvent`]s. All Redis-isms (heartbeats, gateway liveness, text-frame
 //! filtering) are absorbed here; the router core never sees them.
 
+#[cfg(test)]
+mod test;
+
 use crate::domain::models::{ConnectionId, EdgeEvent, Event};
 use anyhow::{Context, Result};
 use connection_gateway_models::fanout::{

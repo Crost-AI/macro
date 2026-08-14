@@ -42,11 +42,16 @@ async fn main() -> Result<()> {
 
     tracing::info!("sync-router started");
 
-    // The subscriber is the process's spine: resubscribe forever on failure.
+    // The subscriber is the process's spine: resubscribe forever on Redis
+    // failure. An Ok return means the router task itself is gone, which is
+    // unrecoverable — exit non-zero and let the supervisor restart us.
     loop {
-        if let Err(error) = redis_edge::run(&redis_client, events_tx.clone()).await {
-            tracing::error!(error = ?error, "fanout subscriber failed; reconnecting");
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        match redis_edge::run(&redis_client, events_tx.clone()).await {
+            Ok(()) => anyhow::bail!("router task shut down"),
+            Err(error) => {
+                tracing::error!(error = ?error, "fanout subscriber failed; reconnecting");
+            }
         }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
 }

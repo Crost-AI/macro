@@ -6,13 +6,10 @@ version = "0.1.0"
 
 [dependencies]
 anyhow = { workspace = true }
-axum = { workspace = true }
 bebop = { workspace = true }
 connection_gateway_models = { path = "../../crates/connection_gateway_models" }
 futures = { workspace = true }
-macro_config = { path = "../../crates/macro_config" }
 macro_entrypoint = { path = "../../crates/macro_entrypoint" }
-macro_env = { path = "../../crates/macro_env" }
 macro_env_var = { path = "../../crates/macro_env_var" }
 opentelemetry = { workspace = true }
 postcard = { workspace = true }

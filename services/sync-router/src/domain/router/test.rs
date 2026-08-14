@@ -49,11 +49,13 @@ fn recording_factory(
     let opened = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let record = std::sync::Arc::clone(&opened);
     let mut factory = MockDownstreamFactory::new();
-    factory.expect_open().returning(move |_conn, doc, _token| {
-        let (tx, rx) = mpsc::channel(capacity);
-        record.lock().unwrap().push((doc, rx));
-        tx
-    });
+    factory
+        .expect_open()
+        .returning(move |_conn, doc, _token, _epoch| {
+            let (tx, rx) = mpsc::channel(capacity);
+            record.lock().unwrap().push((doc, rx));
+            tx
+        });
     (factory, opened)
 }
 
@@ -172,6 +174,7 @@ async fn downstream_closed_forgets_the_route_so_resubscribe_reopens() {
         .handle(Event::DownstreamClosed {
             conn: c.clone(),
             doc: DocId("doc-a".into()),
+            epoch: 1,
         })
         .await;
     router.handle(subscribe(&c, "doc-a")).await;

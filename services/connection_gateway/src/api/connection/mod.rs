@@ -116,8 +116,6 @@ async fn handle_websocket_connection(
         }
     }
 
-    crate::service::fanout::disconnected(&connection_context).await;
-
     ctx.connection_manager
         .remove_connection(&connection_id.clone())
         .await
@@ -131,6 +129,10 @@ async fn handle_websocket_connection(
             );
         })
         .ok();
+
+    // After remove_connection, so consumers never see "gone" while the
+    // gateway can still route to the socket.
+    crate::service::fanout::disconnected(&connection_context).await;
     drop(last_online_guard);
 }
 

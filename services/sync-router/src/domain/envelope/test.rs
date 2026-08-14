@@ -37,6 +37,13 @@ fn frame_round_trips() {
 }
 
 #[test]
+fn unknown_discriminator_is_the_unknown_error() {
+    // bebop union wire shape: u32 LE body length, then discriminator, then body.
+    let bytes = [1u8, 0, 0, 0, 99];
+    assert!(matches!(decode_client(&bytes), Err(EnvelopeError::Unknown)));
+}
+
+#[test]
 fn garbage_is_a_decode_error() {
     assert!(matches!(
         decode_client(&[0xde, 0xad]),

@@ -11,6 +11,10 @@
 //!
 //! Delivery is fire-and-forget. Consumers detect a dead gateway instance by
 //! its [`FromGateway::Heartbeat`] going quiet, not by any delivery guarantee.
+//! In particular, a crashed gateway never publishes its connections'
+//! [`FromGateway::Disconnected`] — consumers must treat heartbeat silence as
+//! the disconnect of everything that instance held, and must tolerate
+//! duplicate or missing lifecycle messages generally.
 
 #[cfg(test)]
 mod test;

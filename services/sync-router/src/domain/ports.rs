@@ -32,6 +32,14 @@ pub trait EdgeSink: Send + Sync + 'static {
 #[cfg_attr(test, mockall::automock)]
 pub trait DownstreamFactory: Send + Sync + 'static {
     /// Open the downstream, returning where to send the client's inner
-    /// (already-serialized `FromPeer`) frames.
-    fn open(&self, conn: ConnectionId, doc: DocId, token: String) -> mpsc::Sender<Vec<u8>>;
+    /// (already-serialized `FromPeer`) frames. `epoch` identifies this route
+    /// incarnation and must be echoed in the resulting
+    /// [`crate::domain::models::Event::DownstreamClosed`].
+    fn open(
+        &self,
+        conn: ConnectionId,
+        doc: DocId,
+        token: String,
+        epoch: u64,
+    ) -> mpsc::Sender<Vec<u8>>;
 }

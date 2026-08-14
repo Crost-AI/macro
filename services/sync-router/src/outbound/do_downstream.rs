@@ -46,7 +46,13 @@ impl<Sink: EdgeSink> DoDownstreamFactory<Sink> {
 
 impl<Sink: EdgeSink> DownstreamFactory for DoDownstreamFactory<Sink> {
     #[tracing::instrument(skip(self, token), fields(document.id = doc.as_str()))]
-    fn open(&self, conn: ConnectionId, doc: DocId, token: String) -> mpsc::Sender<Vec<u8>> {
+    fn open(
+        &self,
+        conn: ConnectionId,
+        doc: DocId,
+        token: String,
+        epoch: u64,
+    ) -> mpsc::Sender<Vec<u8>> {
         let (sender, receiver) = mpsc::channel(DOWNSTREAM_BUFFER);
 
         let ws_base = self
@@ -65,6 +71,7 @@ impl<Sink: EdgeSink> DownstreamFactory for DoDownstreamFactory<Sink> {
             url,
             conn,
             doc,
+            epoch,
             receiver,
             Arc::clone(&self.sink),
             self.events.clone(),
@@ -80,6 +87,7 @@ async fn pump<Sink: EdgeSink>(
     url: String,
     conn: ConnectionId,
     doc: DocId,
+    epoch: u64,
     mut from_client: mpsc::Receiver<Vec<u8>>,
     sink: Arc<Sink>,
     events: mpsc::Sender<Event>,
@@ -102,9 +110,9 @@ async fn pump<Sink: EdgeSink>(
         Ok((upstream, _response)) => upstream,
         Err(error) => {
             warn!(error = ?error, "downstream dial failed");
-            deliver(envelope::subscribe_failed(doc.as_str(), &error.to_string())).await;
+            deliver(envelope::subscribe_failed(doc.as_str(), "dial failed")).await;
             events
-                .send(Event::DownstreamClosed { conn, doc })
+                .send(Event::DownstreamClosed { conn, doc, epoch })
                 .await
                 .ok();
             return;
@@ -119,13 +127,15 @@ async fn pump<Sink: EdgeSink>(
 
     // `None` = the router dropped our sender (unsubscribe / client
     // disconnect): close quietly. `Some(reason)` = the upstream went away:
-    // tell the client so it can re-subscribe.
-    let closed_reason: Option<String> = loop {
+    // tell the client (a coarse reason only — raw errors can leak internals)
+    // so it can re-subscribe.
+    let closed_reason: Option<&str> = loop {
         tokio::select! {
             frame = from_client.recv() => match frame {
                 Some(bytes) => {
                     if let Err(error) = write.send(Message::Binary(bytes.into())).await {
-                        break Some(format!("upstream write failed: {error}"));
+                        warn!(error = ?error, "upstream write failed");
+                        break Some("upstream write failed");
                     }
                 }
                 None => break None,
@@ -136,13 +146,17 @@ async fn pump<Sink: EdgeSink>(
                 }
                 // The DO's "pong" heartbeat replies (and any other text).
                 Some(Ok(Message::Text(_))) => {}
-                Some(Ok(Message::Close(_))) | None => break Some("upstream closed".to_string()),
+                Some(Ok(Message::Close(_))) | None => break Some("upstream closed"),
                 Some(Ok(_)) => {}
-                Some(Err(error)) => break Some(format!("upstream error: {error}")),
+                Some(Err(error)) => {
+                    warn!(error = ?error, "upstream read failed");
+                    break Some("upstream error");
+                }
             },
             _ = ping.tick() => {
                 if let Err(error) = write.send(Message::Text("ping".into())).await {
-                    break Some(format!("upstream ping failed: {error}"));
+                    warn!(error = ?error, "upstream ping failed");
+                    break Some("upstream ping failed");
                 }
             }
         }
@@ -151,9 +165,9 @@ async fn pump<Sink: EdgeSink>(
     match closed_reason {
         Some(reason) => {
             debug!(reason, "downstream closed");
-            deliver(envelope::doc_closed(doc.as_str(), &reason)).await;
+            deliver(envelope::doc_closed(doc.as_str(), reason)).await;
             events
-                .send(Event::DownstreamClosed { conn, doc })
+                .send(Event::DownstreamClosed { conn, doc, epoch })
                 .await
                 .ok();
         }
