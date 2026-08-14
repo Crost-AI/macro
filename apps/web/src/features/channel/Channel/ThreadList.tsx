@@ -330,7 +330,12 @@ export function ThreadList(props: ThreadListProps) {
     distanceFromBottom = getDistanceFromBottom(handle)
   ) => {
     if (!props.onScrollSnapshotChange) return;
-    if (options.refreshCache) lastVirtualCache = handle.cache;
+    // Seed on the first emit as well: teardown can happen before scrolling ever
+    // settles (open a channel, switch straight back out), and a snapshot with
+    // no sizes makes the next open re-measure every row.
+    if (options.refreshCache || lastVirtualCache === undefined) {
+      lastVirtualCache = handle.cache;
+    }
     props.onScrollSnapshotChange({
       scrollOffset: handle.scrollOffset,
       virtualCache: lastVirtualCache,

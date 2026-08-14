@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 import { render } from '@solidjs/testing-library';
 import { createSignal } from 'solid-js';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ThreadList } from '../ThreadList';
 import { installFakeLayout } from './fake-layout';
 
@@ -90,5 +90,39 @@ describe('ThreadList scroll-to-bottom settle loop', () => {
     // A settle loop that outlives the mount keeps writing scrollTop against a
     // detached scroller for the rest of its window.
     expect(frames).toHaveLength(0);
+  });
+
+  it('does not touch the scroller after unmount when the settle window ends', () => {
+    // Ending the polling early moved the close of the settle window onto a
+    // timeout. If that timeout outlives the mount it fires `stop()` against a
+    // detached scroller a second after every channel switch. Asserting on the
+    // effect rather than on a global timer count, since virtua keeps timers of
+    // its own here.
+    vi.useFakeTimers();
+    try {
+      const { unmount, container } = renderList(200);
+      for (let i = 0; i < 10 && frames.length > 0; i++) pumpFrame();
+
+      const scroller = container.querySelector(
+        '[data-channel-scroll]'
+      ) as HTMLElement;
+      unmount();
+
+      let touchedAfterUnmount = false;
+      Object.defineProperty(scroller, 'scrollTop', {
+        get: () => 0,
+        set: () => {
+          touchedAfterUnmount = true;
+        },
+        configurable: true,
+      });
+
+      vi.advanceTimersByTime(5_000);
+      for (let i = 0; i < 10 && frames.length > 0; i++) pumpFrame();
+
+      expect(touchedAfterUnmount).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

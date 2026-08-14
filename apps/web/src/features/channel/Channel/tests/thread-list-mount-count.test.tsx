@@ -25,11 +25,19 @@ const keysOf = (count: number, prefix = 'm') =>
   Array.from({ length: count }, (_, i) => `${prefix}${i}`);
 
 /**
- * Counts how many times each key's row factory runs. A virtualized list must
- * build a row once per key while that key stays in range; building it again
- * for a key that never left the range is a message mounted more times than
- * the viewport needs, and every one of those carries the row's full subtree
- * (hover cards, tooltips, reaction popovers) with it.
+ * Counts how many times each key's row factory runs.
+ *
+ * These characterise the virtualizer contract the channel performance work
+ * rests on: a row is built once per key while that key stays in range, and
+ * building it again for a key that never left is a message mounted more times
+ * than the viewport needs — expensive, because each row carries a full subtree
+ * of hover cards, tooltips and reaction popovers.
+ *
+ * They pass with or without the settle-loop change and are not a guard for it.
+ * What they protect is the premise: if `keys()` ever stops handing virtua
+ * stable, unique, value-comparable ids — objects instead of strings, or
+ * duplicates from overlapping pages — `<For>` silently rebuilds every row on
+ * each update and no amount of scroll tuning recovers it.
  */
 function renderCountedList(initialKeys: string[]) {
   const [keys, setKeys] = createSignal(initialKeys);
