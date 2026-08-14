@@ -589,11 +589,6 @@
       "crates/client/cache-core",
       "crates/maybe_send"
     ],
-    "cache-idb": [
-      "crates/client/cache-core",
-      "crates/client/cache-idb",
-      "crates/maybe_send"
-    ],
     "cache-sqlite": [
       "crates/client/cache-core",
       "crates/client/cache-sqlite",

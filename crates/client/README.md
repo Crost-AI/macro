@@ -21,8 +21,7 @@ Tauri's Linux desktop stack needs its WebKitGTK/DBus system libraries).
 
 ## Tests
 
-After the integration owner removes the obsolete root `cache-idb` member and
-lockfile entry, run from the repository root:
+Run from the repository root:
 
 ```sh
 cargo test -p cache-core -p cache-sqlite -p cache-turso -p turso-opfs
