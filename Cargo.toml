@@ -53,6 +53,7 @@ members = [
   "crates/search_service",
   "crates/skills",
   "crates/soup_realtime",
+  "crates/sync_machine",
   "crates/system_skills",
   "crates/task_dedup",
   "crates/unfurl",
