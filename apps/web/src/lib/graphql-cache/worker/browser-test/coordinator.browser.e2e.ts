@@ -67,6 +67,62 @@ test('three pages fence graceful, abrupt, stale, and worker-only ownership', asy
   expect(browserErrors).toEqual([]);
 });
 
+test('production CacheHost performs fresh init and active reread after owner loss', async ({
+  context,
+  page,
+}) => {
+  const browserErrors: string[] = [];
+  const watch = (candidate: typeof page): void => {
+    candidate.on('console', (message) => {
+      if (message.type() === 'error') browserErrors.push(message.text());
+    });
+    candidate.on('pageerror', (error) => browserErrors.push(error.message));
+  };
+  watch(page);
+  context.on('page', watch);
+
+  await page.goto('/host.html');
+  const result = page.locator('#result');
+  await expect(result).toHaveAttribute('data-status', 'passed', {
+    timeout: 60_000,
+  });
+  const report = JSON.parse((await result.textContent()) ?? '') as {
+    passed: boolean;
+    noEagerConstructor: boolean;
+    requestOrder: Array<[number, number, string]>;
+    oldEpochRejectedBeforeReplacement: boolean;
+    oldRequestReplayCount: number;
+    replacementActiveKeys: number[][];
+    replacementReadCompleted: boolean;
+    gracefulDrained: boolean;
+    terminatedEpochs: number[];
+    sharedPortClosed: boolean;
+    initializationErrors: string[];
+  };
+
+  expect(report).toEqual({
+    passed: true,
+    noEagerConstructor: true,
+    requestOrder: [
+      [1, 1, 'init'],
+      [1, 2, 'read'],
+      [1, 3, 'read'],
+      [1, 4, 'read'],
+      [2, 5, 'init'],
+      [2, 6, 'read'],
+    ],
+    oldEpochRejectedBeforeReplacement: true,
+    oldRequestReplayCount: 1,
+    replacementActiveKeys: [[7, 9]],
+    replacementReadCompleted: true,
+    gracefulDrained: true,
+    terminatedEpochs: [1, 2],
+    sharedPortClosed: true,
+    initializationErrors: [],
+  });
+  expect(browserErrors).toEqual([]);
+});
+
 test('production cache-wasm Turso engine preserves graceful data and atomically recovers abrupt loss', async ({
   context,
   page,

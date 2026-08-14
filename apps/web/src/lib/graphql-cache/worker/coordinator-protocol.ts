@@ -1,8 +1,9 @@
-import type {
-  CachePush,
-  CacheRequest,
-  CacheResponse,
-  WorkerMessage,
+import {
+  type CachePush,
+  type CacheRequest,
+  type CacheResponse,
+  isCacheResponseErrorCode,
+  type WorkerMessage,
 } from '../protocol';
 
 /** Version of the topology envelope around the unchanged cache RPC. */
@@ -469,8 +470,9 @@ export function isCacheResponse(value: unknown): value is CacheResponse {
   }
   return (
     value.ok === false &&
-    hasOnlyKeys(value, ['id', 'ok', 'error']) &&
-    isString(value.error)
+    hasOnlyKeys(value, ['id', 'ok', 'error', 'errorCode']) &&
+    isString(value.error) &&
+    (value.errorCode === undefined || isCacheResponseErrorCode(value.errorCode))
   );
 }
 
@@ -812,6 +814,7 @@ export function validateEngineToCoordinatorEnvelope(
         isPositiveInteger(value.ownerEpoch) &&
         isPositiveInteger(value.routeId) &&
         isCacheResponse(value.response) &&
+        (value.response.ok || value.response.errorCode === undefined) &&
         value.response.id === value.routeId
       ) {
         return pass(value as EngineToCoordinatorEnvelope);

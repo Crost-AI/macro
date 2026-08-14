@@ -26,11 +26,13 @@
  * - Without one: forwarded normally; successful responses are normalized
  *   through the standard write path so dependent cached queries update.
  *
- * Cache failures are never fatal: any host error degrades to the network.
+ * Cache failures normally degrade to the network. An admitted optimistic
+ * enqueue with an unfenced transport outcome emits an error instead, because
+ * forwarding could duplicate a side effect already durable in the old scope.
  */
 
 import {
-  type CombinedError,
+  CombinedError,
   type Exchange,
   makeOperation,
   type Operation,
@@ -58,10 +60,12 @@ import {
   tap,
 } from 'wonka';
 import type { CacheHost } from '../host/types';
-import type {
-  ClaimedMutation,
-  EnqueueOptimisticMutationResult,
-  QueryRevalidationWire,
+import {
+  type ClaimedMutation,
+  type EnqueueOptimisticMutationResult,
+  isAdmittedEnqueueUncertainError,
+  isOwnerEpochLostError,
+  type QueryRevalidationWire,
 } from '../protocol';
 import {
   compileEntityResolvers,
@@ -82,6 +86,9 @@ import {
 const QUEUE_ATTEMPT_CONTEXT_KEY = 'normalizedCacheQueueAttempt';
 /** Marks dependency-pushed reads as latency-sensitive worker work. */
 const AFFECTED_READ_CONTEXT_KEY = 'normalizedCacheAffectedRead';
+/** Prevents a post-network dependency refresh from forwarding the API again. */
+const REPLACEMENT_REGISTRATION_ONLY_CONTEXT_KEY =
+  'normalizedCacheReplacementRegistrationOnly';
 const QUEUE_REQUEST_TIMEOUT_MS = 60_000;
 const QUEUE_LEASE_MS = 5 * 60_000;
 const EMPTY_QUEUE_POLL_MS = 30_000;
@@ -269,6 +276,17 @@ function operationCacheEffects(data: unknown): CacheEffect[] {
   );
 }
 
+function uncertainEnqueueResult(op: Operation, error: Error): OperationResult {
+  return {
+    operation: op,
+    data: undefined,
+    error: new CombinedError({ networkError: error }),
+    extensions: undefined,
+    stale: false,
+    hasNext: false,
+  };
+}
+
 function queuedMutationResult(
   op: Operation,
   transactionId: string
@@ -289,7 +307,7 @@ function queuedMutationResult(
 export interface NormalizedCacheExchangeOptions {
   /** Schema-typed singular entity relations derived from field arguments. */
   entityResolvers?: EntityResolverConfig;
-  /** Called when a cache read/write fails (diagnostics; flow already degraded to network). */
+  /** Called when cache work fails; the operation may degrade or emit uncertainty. */
   onCacheError?: (error: unknown, op: Operation) => void;
   /**
    * Extracts the session identity (e.g. viewer id, `data.user.id`) from a
@@ -322,20 +340,170 @@ export function normalizedCacheExchange(
      * later optimistic entity writes can affect the active operation.
      */
     const dependencyRefreshOps = new Set<number>();
+    const networkBoundQueries = new Map<number, number>();
+    const replacementFallbackKeys = new Set<number>();
+    const deferredAffectedKeys = new Set<number>();
+    const completedReplacementFallbackKeys = new Set<number>();
+    const networkRegistrationSatisfiedKeys = new Set<number>();
+    type RetainedReplacementFallback = {
+      version: number;
+      writeArgs: Parameters<CacheHost['writeQuery']>[0];
+      readyPending: boolean;
+      recovering: boolean;
+      invalidated: boolean;
+      recoveryPromise?: Promise<void>;
+    };
+    const retainedReplacementFallbacks = new Map<
+      number,
+      RetainedReplacementFallback
+    >();
+    const networkResultVersions = new Map<number, number>();
+    const queryResultTurns = new Map<number, Promise<void>>();
+
+    const acquireQueryResultTurn = async (key: number): Promise<() => void> => {
+      const previous = queryResultTurns.get(key) ?? Promise.resolve();
+      let release!: () => void;
+      const current = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      queryResultTurns.set(key, current);
+      await previous;
+      return () => {
+        release();
+        if (queryResultTurns.get(key) === current) {
+          queryResultTurns.delete(key);
+        }
+      };
+    };
+
+    const invalidateOlderRetainedFallback = async (
+      key: number,
+      version: number
+    ): Promise<void> => {
+      while (true) {
+        const retained = retainedReplacementFallbacks.get(key);
+        if (!retained || retained.version >= version) return;
+        retained.invalidated = true;
+        retained.readyPending = false;
+        if (retained.recoveryPromise) {
+          // Keep the exact in-flight candidate addressable until its cache
+          // attempt settles; the newer result must write strictly after it.
+          await retained.recoveryPromise;
+        }
+        if (retainedReplacementFallbacks.get(key) === retained) {
+          retainedReplacementFallbacks.delete(key);
+        }
+      }
+    };
+
+    const reexecuteAffected = (key: number, registrationOnly = false): void => {
+      const op = activeOps.get(key);
+      if (!op) return;
+      client.reexecuteOperation(
+        makeOperation(op.kind, op, {
+          ...op.context,
+          requestPolicy:
+            op.context.requestPolicy === 'cache-only'
+              ? 'cache-only'
+              : 'cache-first',
+          [AFFECTED_READ_CONTEXT_KEY]: true,
+          // activeOps observes every reissued operation. Explicitly clear the
+          // one-shot marker so a later ordinary invalidation can reach the API.
+          [REPLACEMENT_REGISTRATION_ONLY_CONTEXT_KEY]: registrationOnly,
+        })
+      );
+    };
+
+    const recoverRetainedReplacementFallback = (key: number): void => {
+      const retained = retainedReplacementFallbacks.get(key);
+      if (!retained || retained.invalidated || !activeOps.has(key)) return;
+      retained.readyPending = true;
+      if (retained.recovering || (networkBoundQueries.get(key) ?? 0) > 0) {
+        return;
+      }
+      retained.recovering = true;
+      const recovery = (async () => {
+        while (
+          retainedReplacementFallbacks.get(key) === retained &&
+          !retained.invalidated &&
+          retained.readyPending
+        ) {
+          retained.readyPending = false;
+          try {
+            await host.writeQuery(retained.writeArgs);
+            if (
+              retainedReplacementFallbacks.get(key) !== retained ||
+              retained.invalidated ||
+              !activeOps.has(key)
+            ) {
+              return;
+            }
+            // Register the complete normalized dependency set directly. This
+            // cannot enqueue another API request or replay the old cache RPC.
+            await host.readQuery({
+              opKey: retained.writeArgs.opKey,
+              query: retained.writeArgs.query,
+              operationName: retained.writeArgs.operationName,
+              variables: retained.writeArgs.variables,
+              entityResolvers: retained.writeArgs.entityResolvers,
+            });
+            if (
+              retainedReplacementFallbacks.get(key) !== retained ||
+              retained.invalidated
+            ) {
+              return;
+            }
+            retainedReplacementFallbacks.delete(key);
+            dependencyRefreshOps.delete(key);
+            replacementFallbackKeys.delete(key);
+            deferredAffectedKeys.delete(key);
+            completedReplacementFallbackKeys.delete(key);
+            networkRegistrationSatisfiedKeys.delete(key);
+            return;
+          } catch (error) {
+            if (
+              retainedReplacementFallbacks.get(key) !== retained ||
+              retained.invalidated
+            ) {
+              return;
+            }
+            const active = activeOps.get(key);
+            if (active) options.onCacheError?.(error, active);
+            // Preserve the successful payload for a later replacement-ready
+            // notification. A notification received during this attempt sets
+            // readyPending and safely drives exactly one subsequent attempt.
+          }
+        }
+      })().catch(() => undefined);
+      retained.recoveryPromise = recovery;
+      void recovery.then(() => {
+        if (retained.recoveryPromise === recovery) {
+          retained.recoveryPromise = undefined;
+        }
+        if (retainedReplacementFallbacks.get(key) !== retained) return;
+        retained.recovering = false;
+        if (retained.invalidated) {
+          retainedReplacementFallbacks.delete(key);
+        } else if (retained.readyPending) {
+          recoverRetainedReplacementFallback(key);
+        }
+      });
+    };
 
     const unsubscribePush = host.onOpsAffected((opKeys) => {
       for (const key of opKeys) {
-        const op = activeOps.get(key);
-        if (!op) continue;
-        // Re-read from cache; do not stampede the network (graphcache does
-        // the same downgrade on dependency-driven re-execution).
-        client.reexecuteOperation(
-          makeOperation(op.kind, op, {
-            ...op.context,
-            requestPolicy: 'cache-first',
-            [AFFECTED_READ_CONTEXT_KEY]: true,
-          })
-        );
+        if (!activeOps.has(key)) continue;
+        if ((networkBoundQueries.get(key) ?? 0) > 0) {
+          deferredAffectedKeys.add(key);
+          continue;
+        }
+        const registrationOnly = completedReplacementFallbackKeys.delete(key);
+        replacementFallbackKeys.delete(key);
+        if (retainedReplacementFallbacks.has(key)) {
+          recoverRetainedReplacementFallback(key);
+          continue;
+        }
+        reexecuteAffected(key, registrationOnly);
       }
     });
 
@@ -345,6 +513,44 @@ export function normalizedCacheExchange(
       // Async cache reads re-inject network-bound operations here.
       const { source: forwardQueue$, next: enqueueForward } =
         makeSubject<Operation>();
+
+      const enqueueQueryForward = (op: Operation): void => {
+        networkBoundQueries.set(
+          op.key,
+          (networkBoundQueries.get(op.key) ?? 0) + 1
+        );
+        enqueueForward(op);
+      };
+
+      const finishNetworkQuery = (
+        key: number,
+        replacementRegistrationSatisfied: boolean
+      ): void => {
+        const remaining = (networkBoundQueries.get(key) ?? 1) - 1;
+        if (remaining > 0) {
+          networkBoundQueries.set(key, remaining);
+          return;
+        }
+        networkBoundQueries.delete(key);
+        const deferred = deferredAffectedKeys.delete(key);
+        const replacementFallback = replacementFallbackKeys.delete(key);
+        if (deferred) {
+          completedReplacementFallbackKeys.delete(key);
+          if (!replacementRegistrationSatisfied) {
+            if (retainedReplacementFallbacks.has(key)) {
+              recoverRetainedReplacementFallback(key);
+            } else {
+              reexecuteAffected(key, true);
+            }
+          }
+        } else if (replacementFallback) {
+          // A fast fallback completed before replacement initialization. The
+          // later affected notification must register cache dependencies but
+          // must not issue the API request a second time.
+          completedReplacementFallbackKeys.add(key);
+        }
+      };
+
       const queueOwner = `exchange:${host.clientId}`;
       const liveQueuedOps = new Map<
         string,
@@ -511,7 +717,7 @@ export function normalizedCacheExchange(
         const policy = op.context.requestPolicy;
         if (policy === 'network-only') {
           dependencyRefreshOps.add(op.key);
-          enqueueForward(op);
+          enqueueQueryForward(op);
           return undefined;
         }
         try {
@@ -528,7 +734,7 @@ export function normalizedCacheExchange(
           });
           if (read.kind === 'hit') {
             const stale = policy === 'cache-and-network';
-            if (stale) enqueueForward(op);
+            if (stale) enqueueQueryForward(op);
             return cacheResult(op, read.data, stale);
           }
           if (policy === 'cache-only') {
@@ -537,13 +743,19 @@ export function normalizedCacheExchange(
           dependencyRefreshOps.add(op.key);
         } catch (error) {
           options.onCacheError?.(error, op);
+          if (isOwnerEpochLostError(error)) {
+            replacementFallbackKeys.add(op.key);
+          }
           // `cache-only` must never touch the network, even when the cache
           // itself fails — degrade to an empty result instead.
           if (policy === 'cache-only') {
             return cacheResult(op, undefined, false);
           }
         }
-        enqueueForward(op);
+        if (op.context[REPLACEMENT_REGISTRATION_ONLY_CONTEXT_KEY] === true) {
+          return undefined;
+        }
+        enqueueQueryForward(op);
         return undefined;
       }
 
@@ -583,15 +795,19 @@ export function normalizedCacheExchange(
         try {
           enqueue = await host.enqueueOptimisticMutation(args, claim);
         } catch (error) {
+          options.onCacheError?.(error, op);
+          if (isAdmittedEnqueueUncertainError(error)) {
+            // The old-scope queue may already contain the side effect. It is
+            // unsafe to forward or retry without a coordinator fence.
+            return uncertainEnqueueResult(op, error);
+          }
           // A cached bin/page may disappear between inspect and enqueue. Do
           // not expose a partial relation move: retain entity optimism and
           // the post-success revalidation descriptors instead.
           if (args.linkPatches.length === 0) {
-            options.onCacheError?.(error, op);
             enqueueForward(op);
             return undefined;
           }
-          options.onCacheError?.(error, op);
           try {
             enqueue = await host.enqueueOptimisticMutation(
               {
@@ -610,6 +826,9 @@ export function normalizedCacheExchange(
             );
           } catch (fallbackError) {
             options.onCacheError?.(fallbackError, op);
+            if (isAdmittedEnqueueUncertainError(fallbackError)) {
+              return uncertainEnqueueResult(op, fallbackError);
+            }
             enqueueForward(op);
             return undefined;
           }
@@ -692,28 +911,74 @@ export function normalizedCacheExchange(
               subscriptionEffectChains.delete(op.key);
             }
           }
-        } else if (op.kind === 'query' && result.data != null) {
+        } else if (op.kind === 'query') {
+          const releaseTurn = await acquireQueryResultTurn(op.key);
           try {
-            const args = {
-              opKey: op.key,
-              query: queryText(op),
-              operationName: operationName(op),
-              variables: op.variables as Record<string, unknown> | undefined,
-              entityResolvers,
-            };
-            await host.writeQuery({
-              ...args,
-              data: result.data,
-              identity: options.extractIdentity?.(result.data),
-            });
-            if (dependencyRefreshOps.delete(op.key) && activeOps.has(op.key)) {
-              // A miss only records dependencies reached before the missing
-              // record. Re-read the now-populated query to register its full
-              // entity graph for push-driven optimistic updates.
-              await host.readQuery(args);
+            const resultVersion = (networkResultVersions.get(op.key) ?? 0) + 1;
+            networkResultVersions.set(op.key, resultVersion);
+            // Every newer result supersedes an older retained payload, even an
+            // error or intermediate streamed result with no cache write.
+            await invalidateOlderRetainedFallback(op.key, resultVersion);
+            if (result.data != null) {
+              const readArgs = {
+                opKey: op.key,
+                query: queryText(op),
+                operationName: operationName(op),
+                variables: op.variables as Record<string, unknown> | undefined,
+                entityResolvers,
+              };
+              const writeArgs = {
+                ...readArgs,
+                data: result.data,
+                identity: options.extractIdentity?.(result.data),
+              };
+              const retained: RetainedReplacementFallback | undefined =
+                result.error === undefined &&
+                result.hasNext !== true &&
+                activeOps.has(op.key) &&
+                replacementFallbackKeys.has(op.key)
+                  ? {
+                      version: resultVersion,
+                      writeArgs,
+                      readyPending: false,
+                      recovering: false,
+                      invalidated: false,
+                    }
+                  : undefined;
+              if (retained) {
+                // Install before the first write: replacement-ready pushes can
+                // arrive synchronously while the cache attempt is settling.
+                retainedReplacementFallbacks.set(op.key, retained);
+              }
+              try {
+                await host.writeQuery(writeArgs);
+                if (
+                  activeOps.has(op.key) &&
+                  (dependencyRefreshOps.has(op.key) ||
+                    deferredAffectedKeys.has(op.key))
+                ) {
+                  // A miss or replacement fallback needs one successful read
+                  // on the current generation after network write-through.
+                  await host.readQuery(readArgs);
+                  dependencyRefreshOps.delete(op.key);
+                  networkRegistrationSatisfiedKeys.add(op.key);
+                }
+                if (retainedReplacementFallbacks.get(op.key) === retained) {
+                  retainedReplacementFallbacks.delete(op.key);
+                }
+              } catch (error) {
+                options.onCacheError?.(error, op);
+              }
             }
-          } catch (error) {
-            options.onCacheError?.(error, op);
+            if (result.hasNext !== true) {
+              dependencyRefreshOps.delete(op.key);
+              const registrationSatisfied =
+                networkRegistrationSatisfiedKeys.delete(op.key);
+              finishNetworkQuery(op.key, registrationSatisfied);
+            }
+          } finally {
+            if (!activeOps.has(op.key)) networkResultVersions.delete(op.key);
+            releaseTurn();
           }
         } else if (op.kind === 'mutation') {
           const attempt = queueAttemptOf(op);
@@ -852,6 +1117,13 @@ export function normalizedCacheExchange(
           if (op.kind === 'teardown') {
             activeOps.delete(op.key);
             dependencyRefreshOps.delete(op.key);
+            networkBoundQueries.delete(op.key);
+            replacementFallbackKeys.delete(op.key);
+            deferredAffectedKeys.delete(op.key);
+            completedReplacementFallbackKeys.delete(op.key);
+            networkRegistrationSatisfiedKeys.delete(op.key);
+            retainedReplacementFallbacks.delete(op.key);
+            networkResultVersions.delete(op.key);
             host.teardown(op.key).catch(() => undefined);
           }
         })

@@ -529,6 +529,72 @@ describe('CoordinatorRouter', () => {
     });
   });
 
+  it('fences an engine-originated topology error code instead of forwarding it', async () => {
+    const router = new CoordinatorRouter({
+      verifyTabLockHeld: async () => true,
+      watchTabLock: () => () => {},
+    });
+    const tabA = new FakePort();
+    const tabB = new FakePort();
+    await register(router, tabA, 'tab-a');
+    await register(router, tabB, 'tab-b');
+    const engine = new FakePort();
+    await attach(router, tabA, 'tab-a', 1, engine);
+    ready(engine, 'tab-a', 1, 'opened-existing');
+    await router.handleTabMessage(tabB as CoordinatorMessagePort, {
+      ...version,
+      kind: 'cache-request',
+      tabId: 'tab-b',
+      request: { id: 8, kind: 'clear' },
+    });
+    const route = messagesOfKind(engine, 'engine-request')[0] as unknown as {
+      routeId: number;
+    };
+
+    // Enter through the router's direct engine port. Its strict envelope
+    // validation must fence the owner; this is not merely a runtime unit path.
+    engine.receive({
+      ...version,
+      kind: 'engine-response',
+      ownerEpoch: 1,
+      routeId: route.routeId,
+      response: {
+        id: route.routeId,
+        ok: false,
+        error: 'forged topology loss',
+        errorCode: 'owner-epoch-lost',
+      },
+    });
+    await Promise.resolve();
+
+    expect(messagesOfKind(tabB, 'cache-message')).toContainEqual(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          id: 8,
+          ok: false,
+          error: expect.stringContaining('invalid engine envelope'),
+          errorCode: 'owner-epoch-lost',
+        }),
+      })
+    );
+    expect(messagesOfKind(tabB, 'cache-message')).not.toContainEqual(
+      expect.objectContaining({
+        message: expect.objectContaining({ error: 'forged topology loss' }),
+      })
+    );
+    expect(messagesOfKind(tabA, 'terminate-engine')).toContainEqual(
+      expect.objectContaining({
+        ownerEpoch: 1,
+        reason: expect.stringContaining('invalid engine envelope'),
+      })
+    );
+    expect(router.snapshot()?.state).toMatchObject({
+      kind: 'activating',
+      ownerEpoch: 2,
+      databaseAction: 'wipe-before-open',
+    });
+  });
+
   it('fails instead of clearing watchdogs for unexpected current engine-drained', async () => {
     const router = new CoordinatorRouter({
       verifyTabLockHeld: async () => true,

@@ -1,4 +1,10 @@
-import type { CachePush, CacheRequest, CacheResponse } from '../protocol';
+import {
+  type CachePush,
+  type CacheRequest,
+  type CacheResponse,
+  type CacheResponseErrorCode,
+  OWNER_EPOCH_LOST_ERROR_CODE,
+} from '../protocol';
 import type {
   DatabaseAction,
   DatabaseActionProof,
@@ -68,6 +74,7 @@ export type CoordinatorAction =
       tabId: string;
       requestId: number;
       error: string;
+      errorCode?: CacheResponseErrorCode;
     }
   | { kind: 'drain-owner'; tabId: string; ownerEpoch: OwnerEpoch }
   | { kind: 'close-engine-route'; tabId: string; ownerEpoch: OwnerEpoch }
@@ -372,7 +379,8 @@ export class CoordinatorCore {
 
     const actions = this.rejectEpochRequests(
       ownerEpoch,
-      `owner epoch ${ownerEpoch} was lost: ${reason}`
+      `owner epoch ${ownerEpoch} was lost: ${reason}`,
+      OWNER_EPOCH_LOST_ERROR_CODE
     );
     actions.push(
       { kind: 'close-engine-route', tabId, ownerEpoch },
@@ -391,13 +399,16 @@ export class CoordinatorCore {
 
   private rejectEpochRequests(
     ownerEpoch: OwnerEpoch,
-    error: string
+    error: string,
+    errorCode?: CacheResponseErrorCode
   ): CoordinatorAction[] {
     const actions: CoordinatorAction[] = [];
     for (const [routeId, request] of this.inFlight) {
       if (request.ownerEpoch !== ownerEpoch) continue;
       this.inFlight.delete(routeId);
-      actions.push(this.reject(request.tabId, request.request.id, error));
+      actions.push(
+        this.reject(request.tabId, request.request.id, error, errorCode)
+      );
     }
     return actions;
   }
@@ -480,9 +491,16 @@ export class CoordinatorCore {
   private reject(
     tabId: string,
     requestId: number,
-    error: string
+    error: string,
+    errorCode?: CacheResponseErrorCode
   ): Extract<CoordinatorAction, { kind: 'reject-request' }> {
-    return { kind: 'reject-request', tabId, requestId, error };
+    return {
+      kind: 'reject-request',
+      tabId,
+      requestId,
+      error,
+      ...(errorCode === undefined ? {} : { errorCode }),
+    };
   }
 
   private dropStale(

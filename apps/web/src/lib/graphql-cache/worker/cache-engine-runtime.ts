@@ -140,6 +140,10 @@ async function activate(
   const enginePort = {
     postMessage(message: unknown): void {
       if (isCacheResponse(message)) {
+        if (!message.ok && message.errorCode !== undefined) {
+          fatal('CacheWorkerCore emitted a coordinator-only cache error code');
+          return;
+        }
         post(
           withVersion<EngineToCoordinatorEnvelope>({
             kind: 'engine-response',

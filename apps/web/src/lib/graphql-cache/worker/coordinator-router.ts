@@ -575,6 +575,9 @@ export class CoordinatorRouter {
             id: action.requestId,
             ok: false,
             error: action.error,
+            ...(action.errorCode === undefined
+              ? {}
+              : { errorCode: action.errorCode }),
           });
           break;
         case 'drain-owner': {

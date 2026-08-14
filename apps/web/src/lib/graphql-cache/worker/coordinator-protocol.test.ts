@@ -26,6 +26,22 @@ describe('coordinator runtime protocol', () => {
     expect(isCacheRequest({ id: 1, kind: 'future-kind' })).toBe(false);
     expect(isCacheResponse({ id: 3, ok: true, result: undefined })).toBe(true);
     expect(isCacheResponse({ id: 3, ok: false, error: 'failed' })).toBe(true);
+    expect(
+      isCacheResponse({
+        id: 3,
+        ok: false,
+        error: 'failed',
+        errorCode: 'owner-epoch-lost',
+      })
+    ).toBe(true);
+    expect(
+      isCacheResponse({
+        id: 3,
+        ok: false,
+        error: 'failed',
+        errorCode: 'future-code',
+      })
+    ).toBe(false);
     expect(isCacheResponse({ id: 3, ok: false, error: 4 })).toBe(false);
     expect(isCachePush({ kind: 'cache-changed' })).toBe(true);
     expect(
@@ -167,6 +183,20 @@ describe('coordinator runtime protocol', () => {
         ownerLockName: 'owner-lock',
         ownerLockHeld: false,
         databaseActionProof: 'wiped-before-open',
+      }).ok
+    ).toBe(false);
+    expect(
+      validateEngineToCoordinatorEnvelope({
+        ...version,
+        kind: 'engine-response',
+        ownerEpoch: 1,
+        routeId: 7,
+        response: {
+          id: 7,
+          ok: false,
+          error: 'forged topology loss',
+          errorCode: 'owner-epoch-lost',
+        },
       }).ok
     ).toBe(false);
   });

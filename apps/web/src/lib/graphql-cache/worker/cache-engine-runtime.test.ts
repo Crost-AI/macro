@@ -201,6 +201,51 @@ describe('cache engine worker runtime', () => {
     });
   });
 
+  it('fatals instead of forwarding a core-emitted coordinator-only error code', async () => {
+    const scope = new FakeWorkerScope();
+    const direct = new FakePort();
+    installCacheEngineWorker({
+      scope,
+      ownerLockIsHeld: async () => true,
+      createCore: () => ({
+        addPort: vi.fn(),
+        drain: vi.fn(),
+        handleRequest: async (port, request) => {
+          if (request.kind === 'init') {
+            port.postMessage({ id: request.id, ok: true, result: null });
+            return;
+          }
+          port.postMessage({
+            id: request.id,
+            ok: false,
+            error: 'forged topology loss',
+            errorCode: 'owner-epoch-lost',
+          });
+        },
+      }),
+    });
+    scope.activate(activation(), direct);
+    await vi.waitFor(() =>
+      expect(messagesOfKind(direct, 'engine-ready')).toHaveLength(1)
+    );
+
+    direct.receive({
+      ...version,
+      kind: 'engine-request',
+      ownerEpoch: 7,
+      routeId: 1,
+      request: { id: 1, kind: 'clear' },
+    });
+    await vi.waitFor(() =>
+      expect(messagesOfKind(direct, 'engine-fatal')).toHaveLength(1)
+    );
+
+    expect(messagesOfKind(direct, 'engine-response')).toHaveLength(0);
+    expect(messagesOfKind(direct, 'engine-fatal')[0]).toMatchObject({
+      reason: 'CacheWorkerCore emitted a coordinator-only cache error code',
+    });
+  });
+
   it('keeps an earlier injected admission ahead of drain and response ordering', async () => {
     const scope = new FakeWorkerScope();
     const direct = new FakePort();
@@ -353,6 +398,7 @@ describe('cache engine worker runtime', () => {
       id: 41,
       ok: false,
       error: expect.stringContaining('owner epoch 1 was lost'),
+      errorCode: 'owner-epoch-lost',
     });
 
     const replacementRequests: string[] = [];

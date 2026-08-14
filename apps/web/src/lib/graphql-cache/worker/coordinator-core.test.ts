@@ -177,6 +177,7 @@ describe('CoordinatorCore', () => {
       tabId: 'tab-b',
       requestId: 9,
       error: 'owner epoch 1 was lost: worker failed',
+      errorCode: 'owner-epoch-lost',
     });
     expect(core.state).toEqual({
       kind: 'resetting-after-loss',

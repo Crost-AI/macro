@@ -15,6 +15,6 @@ export async function clearRegisteredCaches(): Promise<void> {
     [...hosts].map((host) => host.clear())
   );
   if (results.some((result) => result.status === 'rejected')) {
-    rotateCacheScope();
+    await rotateCacheScope();
   }
 }
