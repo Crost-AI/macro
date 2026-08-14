@@ -1,5 +1,9 @@
 import { LIST_VIEW_DOCS_URL } from '@app/constants/docs-links';
-import { isListViewID, type ListView } from '@app/constants/list-views';
+import {
+  isListViewID,
+  LIST_VIEWS,
+  type ListView,
+} from '@app/constants/list-views';
 import { SoupChatInput } from '@app/features/chat/SoupChatInput';
 import {
   makeMarkDoneAction,
@@ -206,7 +210,9 @@ const MobileTabLoadingBar = () => (
 );
 
 const SOUP_LIST_STATE_ENTRY_KEY = 'soup.listState';
-const DEFAULT_PREVIEW_VIEWS = new Set(['inbox', 'channels']);
+// Every soup view opens in preview mode by default. Calendar is not a soup
+// view (it isn't a preview-eligible LIST_VIEWS id), so it stays excluded.
+const DEFAULT_PREVIEW_VIEWS = new Set<string>(LIST_VIEWS);
 const CONDENSED_NARROW_LIST_VIEWS: ReadonlySet<ListView> = new Set([
   'channels',
 ]);

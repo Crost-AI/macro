@@ -172,7 +172,7 @@ export function TaskListEntity(props: TaskListEntityProps) {
             entityId={props.entity.id}
             config={props.entityRowConfig}
           >
-            <NarrowLayout {...layoutProps()} />
+            <NarrowLayout {...layoutProps()} tall />
           </MaybeEntityRow>
         </Match>
       </Switch>

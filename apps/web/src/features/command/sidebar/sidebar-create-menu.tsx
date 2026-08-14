@@ -12,13 +12,15 @@ import { TOKENS } from '@core/hotkey/tokens';
 import { activateClosestDOMScope } from '@core/hotkey/utils';
 import CreateIcon from '@icon/square-pen-create.svg';
 import PlusIcon from '@phosphor/plus.svg';
-import { Button, Dropdown, Hotkey, NavRow } from '@ui';
+import { Button, cn, Dropdown, Hotkey, NavRow } from '@ui';
 import { createMemo, createSignal, For, onCleanup, Show } from 'solid-js';
 import { Dynamic } from 'solid-js/web';
 
 export const SidebarCreateMenu = (props: {
   isSlim: () => boolean;
   variant?: 'row' | 'icon';
+  /** Extra classes merged onto the icon-variant trigger (e.g. sizing). */
+  triggerClass?: string;
   onMenuOpenChange?: (open: boolean) => void;
 }) => {
   const analytics = useAnalytics();
@@ -122,7 +124,10 @@ export const SidebarCreateMenu = (props: {
           variant="base"
           size="icon-sm"
           depth={1}
-          class="size-[26px] rounded-full bg-surface shadow-md shadow-drop-shadow [&_svg]:size-4!"
+          class={cn(
+            'size-[26px] rounded-full bg-surface shadow-md shadow-drop-shadow [&_svg]:size-4!',
+            props.triggerClass
+          )}
           label="Create"
           hotkey={TOKENS.global.createCommand}
           onMouseDown={(e: MouseEvent) => {

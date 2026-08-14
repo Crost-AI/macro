@@ -29,14 +29,15 @@ import { ReminderComposerModal } from '@app/features/reminders/ReminderComposerM
 import { useOnboardingV4Flag } from '@app/features/setup/flow/useOnboardingV4Flag';
 import { GlobalShareModal } from '@app/features/sharing/global-share-modal/GlobalShareModal';
 import { IosShareSheet } from '@app/features/sharing/ios-share-sheet/IosShareSheet';
+import { InviteModal } from '@app/features/team-invitations/invite-modal';
 import { ShowFeatureFlag } from '@app/lib/analytics/posthog';
 import { mountGlobalFocusListener } from '@app/signal/focus';
 import { AutomationComposer } from '@block-automation/component';
 import { useCallContextOptional } from '@channel/Call/CallContext';
 import { InCallPanel } from '@channel/Call/InCallPanel';
 import { CreateChannelModal } from '@channel/CreateChannelModal';
+import { IconRailSidebar } from '@components/app/app-sidebar/icon-rail';
 import {
-  AppSidebar,
   GoToHotkeys,
   type SidebarState,
 } from '@components/app/app-sidebar/sidebar';
@@ -353,12 +354,10 @@ function LayoutInner(props: RouteSectionProps) {
   const sidebarCollapsed = createMemo(
     () => isSidebarVisible() && sidebarState() === 'slim'
   );
+  // The icon rail has no room for the in-call panel the expanded sidebar used
+  // to host, so the floating call widgets show whenever a call is active.
   const activeCallWidgetVisible = createMemo(
-    () =>
-      isSidebarVisible() &&
-      sidebarState() === 'slim' &&
-      !!callCtx?.isInCall() &&
-      !callCtx?.isCallPage()
+    () => isSidebarVisible() && !!callCtx?.isInCall() && !callCtx?.isCallPage()
   );
   let sidebarOverlayCloseTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -457,6 +456,9 @@ function LayoutInner(props: RouteSectionProps) {
           <CreateChannelModal />
           <CreateCompanyModal />
           <CreateContactModal />
+          {/* Was hosted by the old expanded sidebar; the icon rail doesn't
+              mount it, but the Send Invites hotkey still opens it. */}
+          <InviteModal />
           {/* Reactive, unlike the imperative ENABLE_REMINDERS() gate on the
               action: this decides whether the composer is mounted at all, so it
               has to pick up a late PostHog answer. */}
@@ -491,7 +493,7 @@ function LayoutInner(props: RouteSectionProps) {
             sortables with the same drag-drop context as the entity drags. */}
         <ItemDndProvider>
           <Show when={isSidebarVisible()}>
-            <AppSidebar
+            <IconRailSidebar
               sidebarState={sidebarState()}
               overlayOpen={sidebarOverlayOpen()}
               onOverlayOpenChange={setSidebarOverlayOpenGuarded}
@@ -525,11 +527,7 @@ function LayoutInner(props: RouteSectionProps) {
         </ItemDndProvider>
       </div>
       <CollapsedSidebarIncomingCallWidget
-        visible={
-          isSidebarVisible() &&
-          sidebarState() === 'slim' &&
-          incomingCallWidgetVisible()
-        }
+        visible={isSidebarVisible() && incomingCallWidgetVisible()}
         activeCallWidgetVisible={activeCallWidgetVisible()}
       />
       <CollapsedSidebarCallWidget visible={activeCallWidgetVisible()} />

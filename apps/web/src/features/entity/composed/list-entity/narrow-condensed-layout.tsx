@@ -11,10 +11,10 @@ import type { LayoutProps } from './shared';
 export function NarrowCondensedLayout(props: LayoutProps) {
   return (
     <Entity.Layout
-      class="w-full gap-x-2 items-center pr-2 grid text-sm"
+      class="w-full gap-x-2 items-center pr-2 grid text-[13px]"
       style={{
         'grid-template-columns': 'auto 1fr',
-        'grid-template-rows': '36px',
+        'grid-template-rows': '32px',
         'grid-template-areas': '"indicator title"',
       }}
     >

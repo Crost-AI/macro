@@ -210,8 +210,8 @@ export function ListEntity(props: ListEntityProps) {
       class={cn(
         'soup-list-entity rounded-lg @container/entity w-[calc(100%-0.5rem)] mr-1 relative group/narrow flex flex-col py-0.5',
         {
-          'min-h-10 mx-1': !isMobile() && !usesCondensedNarrowLayout(),
-          'min-h-9 mx-1': !isMobile() && usesCondensedNarrowLayout(),
+          'min-h-10 mx-1': !isMobile() && isWide(),
+          'min-h-8 mx-1': !isMobile() && !isWide(),
           'bg-accent/8': props.checked,
           'bg-accent/16': props.checked && props.highlighted,
           'bg-hover': props.highlighted && !props.checked && !isTouchDevice(),

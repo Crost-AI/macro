@@ -305,7 +305,7 @@ const isMarkdownDocumentsParams = (
  * Holding shift opens it in a new split. Use in-app back/forward to return to
  * prior entries.
  */
-function navigateToSidebarView(args: {
+export function navigateToSidebarView(args: {
   viewId: SidebarItem['id'];
   params?: SidebarItem['params'];
   shiftKey: boolean;

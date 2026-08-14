@@ -17,17 +17,28 @@ import { ChannelJoinButton } from './channel';
 import { EmailInboxChip } from './email';
 import type { LayoutProps } from './shared';
 
-export function NarrowLayout(props: LayoutProps) {
+export function NarrowLayout(
+  props: LayoutProps & {
+    /** Original 44px row with the pre-compaction typography (tasks view). */
+    tall?: boolean;
+  }
+) {
   return (
     <Entity.Layout
-      class="w-full gap-x-2 items-center text-sm px-2 grid"
+      class={cn(
+        'w-full gap-x-2 items-center px-2 grid',
+        props.tall ? 'text-sm' : 'text-[13px]'
+      )}
       style={{
         'grid-template-columns': 'auto 1fr max-content',
-        'grid-template-rows': '44px',
+        'grid-template-rows': props.tall ? '44px' : '32px',
         'grid-template-areas': '"indicator title timestamp"',
       }}
     >
-      <Entity.Slot placement="indicator" class="relative self-start pt-3">
+      <Entity.Slot
+        placement="indicator"
+        class={cn('relative self-start', props.tall ? 'pt-3' : 'pt-2')}
+      >
         <Show when={!props.hideCheckbox}>
           <div
             class={cn('w-0 opacity-0 overflow-hidden', {
@@ -44,7 +55,10 @@ export function NarrowLayout(props: LayoutProps) {
 
       <Entity.Slot
         placement="title"
-        class="ph-no-capture flex items-center gap-2 truncate font-semibold"
+        class={cn(
+          'ph-no-capture flex items-center gap-2 truncate',
+          props.tall ? 'font-semibold' : 'font-medium'
+        )}
       >
         <Show when={props.unread}>
           <UnreadIndicator active />

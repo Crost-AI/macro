@@ -16,6 +16,7 @@ import {
   useGlobalNotificationSource,
 } from '@components/app/GlobalAppState';
 import { useSplitLayout } from '@components/app/split-layout/layout';
+import { useSplitPanel } from '@components/app/split-layout/layoutUtils';
 import {
   ContextMenuContent,
   MenuGroup,
@@ -77,12 +78,23 @@ function unreadCountLabel(count: number): string {
  */
 function useOpenChannel() {
   const layout = useSplitLayout();
+  // Present when the widget is mounted inside a split (the Widgets view)
+  // rather than the app sidebar. Passing it as the notification's source
+  // routes opens into the panel's preview Viewer instead of dissolving the
+  // pair; layout.openWithSplit picks the same handle up from context.
+  const panel = useSplitPanel();
   return (channel: RecentChannel, newSplit: boolean) => {
     const manager = globalSplitManager();
     if (!manager) return;
     const notification = channel.unread[0];
     if (notification) {
-      openNotification(notification, manager, newSplit);
+      openNotification(
+        notification,
+        manager,
+        newSplit,
+        undefined,
+        panel?.handle
+      );
       return;
     }
     layout.openWithSplit(
