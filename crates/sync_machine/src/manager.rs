@@ -1,11 +1,15 @@
-//! Owns many [`DocMachine`]s and routes connection-scoped events to them.
+//! Owns many [`DocMachine`]s and routes document-scoped events to them.
 //!
 //! The manager is the second (outer) pure machine: the runtime speaks only
 //! [`ManagerInput`]/[`ManagerEffect`], never to a document directly. Its jobs
-//! are routing (`Frame` → the right machine), fan-out (`Disconnected` →
-//! `PeerDetached` in every subscribed machine), token namespacing (machine
-//! timer/persist tokens are per-document; the runtime sees globally unique
-//! ones), and consuming [`Effect::Evict`] by dropping the machine.
+//! are routing, token namespacing (machine timer/persist tokens are
+//! per-document; the runtime sees globally unique ones), and consuming
+//! [`Effect::Evict`] by dropping the machine.
+//!
+//! A [`ConnId`] is attached to exactly ONE document: the edge (sync-router)
+//! mints a fresh id per (client connection, document) route, so multiplexing,
+//! disconnect fan-out, and resubscribe-race identity all live in one place —
+//! the router's routing table — instead of being duplicated here.
 
 #[cfg(test)]
 mod test;
@@ -15,31 +19,28 @@ use crate::model::{
     Caps, ClientFrame, ConnId, DocId, Effect, Input, PersistToken, RawSnapshot, TimerToken,
 };
 use crate::replica::Replica;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 /// Everything the runtime can tell the manager.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ManagerInput {
-    /// A connection wants a document (capabilities already resolved).
-    Subscribe {
-        /// The subscribing connection.
+    /// A per-document connection attached (capabilities already resolved).
+    /// The machine for `doc` is created on first attach.
+    Attach {
+        /// The attaching connection (one document only, by construction).
         conn: ConnId,
         /// The document.
         doc: DocId,
         /// What the connection may do to it.
         caps: Caps,
     },
-    /// A connection is done with a document.
-    Unsubscribe {
-        /// The unsubscribing connection.
+    /// A per-document connection detached (client unsubscribe, socket death —
+    /// the edge translates both into this).
+    Detach {
+        /// The detaching connection.
         conn: ConnId,
         /// The document.
         doc: DocId,
-    },
-    /// A connection is gone entirely; detach it from every document.
-    Disconnected {
-        /// The dead connection.
-        conn: ConnId,
     },
     /// A sync frame for one document.
     Frame {
@@ -108,7 +109,6 @@ pub struct ManagerEffect {
 /// See the module docs.
 pub struct ConnManager<R: Replica> {
     machines: BTreeMap<DocId, DocMachine<R>>,
-    subscriptions: BTreeMap<ConnId, BTreeSet<DocId>>,
     /// Manager-scoped timer token → (document, the machine's own token).
     timers: BTreeMap<TimerToken, (DocId, TimerToken)>,
     /// Manager-scoped persist token → (document, the machine's own token).
@@ -128,7 +128,6 @@ impl<R: Replica> ConnManager<R> {
     pub fn new() -> Self {
         Self {
             machines: BTreeMap::new(),
-            subscriptions: BTreeMap::new(),
             timers: BTreeMap::new(),
             persists: BTreeMap::new(),
             next_token: 0,
@@ -144,28 +143,12 @@ impl<R: Replica> ConnManager<R> {
     /// Feed one input; emitted effects are appended to `out`.
     pub fn handle(&mut self, input: ManagerInput, out: &mut Vec<ManagerEffect>) {
         match input {
-            ManagerInput::Subscribe { conn, doc, caps } => {
-                self.subscriptions
-                    .entry(conn)
-                    .or_default()
-                    .insert(doc.clone());
+            ManagerInput::Attach { conn, doc, caps } => {
                 self.machines.entry(doc.clone()).or_default();
                 self.drive(&doc, Input::PeerAttached { conn, caps }, out);
             }
-            ManagerInput::Unsubscribe { conn, doc } => {
-                if let Some(docs) = self.subscriptions.get_mut(&conn) {
-                    docs.remove(&doc);
-                    if docs.is_empty() {
-                        self.subscriptions.remove(&conn);
-                    }
-                }
+            ManagerInput::Detach { conn, doc } => {
                 self.drive(&doc, Input::PeerDetached { conn }, out);
-            }
-            ManagerInput::Disconnected { conn } => {
-                let docs = self.subscriptions.remove(&conn).unwrap_or_default();
-                for doc in docs {
-                    self.drive(&doc, Input::PeerDetached { conn }, out);
-                }
             }
             ManagerInput::Frame { conn, doc, frame } => {
                 self.drive(&doc, Input::Frame { conn, frame }, out);

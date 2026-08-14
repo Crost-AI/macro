@@ -14,10 +14,10 @@ fn feed(manager: &mut ConnManager<MockReplica>, input: ManagerInput) -> Vec<Mana
 }
 
 /// Bring one (conn, doc) to Ready, discarding setup effects.
-fn subscribe_ready(manager: &mut ConnManager<MockReplica>, conn: ConnId, id: &str) {
+fn attach_ready(manager: &mut ConnManager<MockReplica>, conn: ConnId, id: &str) {
     feed(
         manager,
-        ManagerInput::Subscribe {
+        ManagerInput::Attach {
             conn,
             doc: doc(id),
             caps: edit_caps(),
@@ -33,11 +33,11 @@ fn subscribe_ready(manager: &mut ConnManager<MockReplica>, conn: ConnId, id: &st
 }
 
 #[test]
-fn subscribe_creates_the_machine_and_lifts_load_with_the_doc_stamped() {
+fn attach_creates_the_machine_and_lifts_load_with_the_doc_stamped() {
     let mut manager = ConnManager::<MockReplica>::new();
     let fx = feed(
         &mut manager,
-        ManagerInput::Subscribe {
+        ManagerInput::Attach {
             conn: ConnId(1),
             doc: doc("doc-a"),
             caps: edit_caps(),
@@ -56,8 +56,8 @@ fn subscribe_creates_the_machine_and_lifts_load_with_the_doc_stamped() {
 #[test]
 fn frames_route_to_the_right_document() {
     let mut manager = ConnManager::<MockReplica>::new();
-    subscribe_ready(&mut manager, ConnId(1), "doc-a");
-    subscribe_ready(&mut manager, ConnId(1), "doc-b");
+    attach_ready(&mut manager, ConnId(1), "doc-a");
+    attach_ready(&mut manager, ConnId(1), "doc-b");
 
     let fx = feed(
         &mut manager,
@@ -79,13 +79,27 @@ fn frames_route_to_the_right_document() {
 }
 
 #[test]
-fn disconnect_fans_out_to_every_subscribed_document() {
+fn per_doc_detaches_reach_their_documents() {
+    // Socket-death fan-out is the edge's job (the router already tears down
+    // each route); the manager just sees one Detach per (conn, doc).
     let mut manager = ConnManager::<MockReplica>::new();
-    subscribe_ready(&mut manager, ConnId(1), "doc-a");
-    subscribe_ready(&mut manager, ConnId(1), "doc-b");
+    attach_ready(&mut manager, ConnId(1), "doc-a");
+    attach_ready(&mut manager, ConnId(2), "doc-b");
 
-    let fx = feed(&mut manager, ManagerInput::Disconnected { conn: ConnId(1) });
-    // Each document sees the last peer leave and arms its idle timer.
+    let mut fx = feed(
+        &mut manager,
+        ManagerInput::Detach {
+            conn: ConnId(1),
+            doc: doc("doc-a"),
+        },
+    );
+    fx.extend(feed(
+        &mut manager,
+        ManagerInput::Detach {
+            conn: ConnId(2),
+            doc: doc("doc-b"),
+        },
+    ));
     let last_leaves: Vec<&DocId> = fx
         .iter()
         .filter(|e| {
@@ -104,11 +118,17 @@ fn disconnect_fans_out_to_every_subscribed_document() {
 #[test]
 fn manager_scoped_timer_tokens_route_back_to_their_document() {
     let mut manager = ConnManager::<MockReplica>::new();
-    subscribe_ready(&mut manager, ConnId(1), "doc-a");
-    subscribe_ready(&mut manager, ConnId(2), "doc-b");
+    attach_ready(&mut manager, ConnId(1), "doc-a");
+    attach_ready(&mut manager, ConnId(2), "doc-b");
 
     // Detach both; each doc arms an idle timer under a manager-scoped token.
-    let fx = feed(&mut manager, ManagerInput::Disconnected { conn: ConnId(1) });
+    let fx = feed(
+        &mut manager,
+        ManagerInput::Detach {
+            conn: ConnId(1),
+            doc: doc("doc-a"),
+        },
+    );
     let timer_a = fx
         .iter()
         .find_map(|e| match (&e.doc, &e.effect) {
@@ -116,7 +136,13 @@ fn manager_scoped_timer_tokens_route_back_to_their_document() {
             _ => None,
         })
         .expect("doc-a idle timer");
-    let fx = feed(&mut manager, ManagerInput::Disconnected { conn: ConnId(2) });
+    let fx = feed(
+        &mut manager,
+        ManagerInput::Detach {
+            conn: ConnId(2),
+            doc: doc("doc-b"),
+        },
+    );
     let timer_b = fx
         .iter()
         .find_map(|e| match (&e.doc, &e.effect) {
@@ -139,9 +165,15 @@ fn manager_scoped_timer_tokens_route_back_to_their_document() {
 #[test]
 fn eviction_drops_stale_tokens_and_late_inputs_route_nowhere() {
     let mut manager = ConnManager::<MockReplica>::new();
-    subscribe_ready(&mut manager, ConnId(1), "doc-a");
+    attach_ready(&mut manager, ConnId(1), "doc-a");
 
-    let fx = feed(&mut manager, ManagerInput::Disconnected { conn: ConnId(1) });
+    let fx = feed(
+        &mut manager,
+        ManagerInput::Detach {
+            conn: ConnId(1),
+            doc: doc("doc-a"),
+        },
+    );
     let idle = fx
         .iter()
         .find_map(|e| match &e.effect {
@@ -170,7 +202,7 @@ fn eviction_drops_stale_tokens_and_late_inputs_route_nowhere() {
 #[test]
 fn persist_completions_route_through_manager_scoped_tokens() {
     let mut manager = ConnManager::<MockReplica>::new();
-    subscribe_ready(&mut manager, ConnId(1), "doc-a");
+    attach_ready(&mut manager, ConnId(1), "doc-a");
 
     let fx = feed(
         &mut manager,
@@ -220,10 +252,16 @@ fn persist_completions_route_through_manager_scoped_tokens() {
 }
 
 #[test]
-fn resubscribe_after_eviction_reloads_from_the_store() {
+fn reattach_after_eviction_reloads_from_the_store() {
     let mut manager = ConnManager::<MockReplica>::new();
-    subscribe_ready(&mut manager, ConnId(1), "doc-a");
-    let fx = feed(&mut manager, ManagerInput::Disconnected { conn: ConnId(1) });
+    attach_ready(&mut manager, ConnId(1), "doc-a");
+    let fx = feed(
+        &mut manager,
+        ManagerInput::Detach {
+            conn: ConnId(1),
+            doc: doc("doc-a"),
+        },
+    );
     let idle = fx
         .iter()
         .find_map(|e| match &e.effect {
@@ -236,7 +274,7 @@ fn resubscribe_after_eviction_reloads_from_the_store() {
 
     let fx = feed(
         &mut manager,
-        ManagerInput::Subscribe {
+        ManagerInput::Attach {
             conn: ConnId(2),
             doc: doc("doc-a"),
             caps: edit_caps(),

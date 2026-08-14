@@ -28,16 +28,16 @@ fn two_users_edit_a_document() {
     let doc = DocId("doc-a".into());
 
     flow.step(
-        "alice subscribes (first touch: the document must be loaded)",
-        ManagerInput::Subscribe {
+        "alice attaches (first touch: the document must be loaded)",
+        ManagerInput::Attach {
             conn: alice,
             doc: doc.clone(),
             caps: edit_caps("alice"),
         },
     );
     flow.step(
-        "bob subscribes while the load is still in flight",
-        ManagerInput::Subscribe {
+        "bob attaches while the load is still in flight",
+        ManagerInput::Attach {
             conn: bob,
             doc: doc.clone(),
             caps: edit_caps("bob"),
@@ -102,15 +102,18 @@ fn two_users_edit_a_document() {
         },
     );
     flow.step(
-        "bob closes the tab",
-        ManagerInput::Unsubscribe {
+        "bob closes the tab (the router translates it to a per-doc detach)",
+        ManagerInput::Detach {
             conn: bob,
             doc: doc.clone(),
         },
     );
     flow.step(
-        "alice's connection drops entirely: last peer leaves, idle timer armed",
-        ManagerInput::Disconnected { conn: alice },
+        "alice's socket dies; the router tears down her route for this doc",
+        ManagerInput::Detach {
+            conn: alice,
+            doc: doc.clone(),
+        },
     );
     let idle = flow.last_timer();
     flow.step(
@@ -132,8 +135,8 @@ fn reconnect_and_catch_up() {
     let doc = DocId("doc-b".into());
 
     flow.step(
-        "carol re-subscribes after a network blip",
-        ManagerInput::Subscribe {
+        "carol re-attaches after a network blip",
+        ManagerInput::Attach {
             conn: carol,
             doc: doc.clone(),
             caps: edit_caps("carol"),
@@ -168,8 +171,8 @@ fn store_outage_and_recovery() {
     let doc = DocId("doc-c".into());
 
     flow.step(
-        "dave subscribes",
-        ManagerInput::Subscribe {
+        "dave attaches",
+        ManagerInput::Attach {
             conn: dave,
             doc: doc.clone(),
             caps: edit_caps("dave"),
@@ -226,8 +229,8 @@ fn document_that_never_existed() {
     let doc = DocId("doc-new".into());
 
     flow.step(
-        "erin subscribes to a brand-new document",
-        ManagerInput::Subscribe {
+        "erin attaches to a brand-new document",
+        ManagerInput::Attach {
             conn: erin,
             doc: doc.clone(),
             caps: edit_caps("erin"),
@@ -325,17 +328,16 @@ fn banner(title: &str) {
 
 fn describe_input(input: &ManagerInput) -> String {
     match input {
-        ManagerInput::Subscribe { conn, doc, caps } => format!(
+        ManagerInput::Attach { conn, doc, caps } => format!(
             "Subscribe(conn {}, doc {}, user {:?}, can_edit {})",
             conn.0,
             doc.as_str(),
             caps.user_id.as_deref().unwrap_or("-"),
             caps.can_edit
         ),
-        ManagerInput::Unsubscribe { conn, doc } => {
-            format!("Unsubscribe(conn {}, doc {})", conn.0, doc.as_str())
+        ManagerInput::Detach { conn, doc } => {
+            format!("Detach(conn {}, doc {})", conn.0, doc.as_str())
         }
-        ManagerInput::Disconnected { conn } => format!("Disconnected(conn {})", conn.0),
         ManagerInput::Frame { conn, frame, .. } => {
             format!("Frame(conn {}, {})", conn.0, describe_client_frame(frame))
         }
