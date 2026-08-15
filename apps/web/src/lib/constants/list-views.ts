@@ -9,6 +9,7 @@ import { match } from 'ts-pattern';
 export const LIST_VIEWS = [
   'inbox',
   'recent',
+  'flow',
   'agents',
   'mail',
   'documents',
@@ -26,6 +27,7 @@ export type ListView = (typeof LIST_VIEWS)[number];
 export const LIST_VIEW_PATHS = {
   inbox: '/inbox',
   recent: '/recent',
+  flow: '/flow',
   agents: '/agents',
   mail: '/mail',
   documents: '/documents',
@@ -41,6 +43,7 @@ export const LIST_VIEW_PATHS = {
 export const LIST_VIEW_ID = {
   inbox: 'inbox',
   recent: 'recent',
+  flow: 'flow',
   agents: 'agents',
   mail: 'mail',
   documents: 'documents',
@@ -96,7 +99,7 @@ export const soupItemMatchesListView = (
     .with('channels', () => item.tag === 'channel')
     .with('calls', () => item.tag === 'call')
     .with('folders', () => item.tag === 'project')
-    .with('inbox', 'search', undefined, () => true)
+    .with('inbox', 'flow', 'search', undefined, () => true)
     // Membership in the recent view is "did I touch it", not a type check:
     // only rows that carry a touch timestamp (from the touched_by_me page
     // or an optimistic bump) belong. Without this, any websocket-inserted
