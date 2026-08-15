@@ -237,6 +237,10 @@ async function activate(
               activation.databaseAction === 'wipe-before-open'
                 ? 'wiped-before-open'
                 : 'opened-existing',
+            openOutcome:
+              activation.databaseAction === 'wipe-before-open'
+                ? 'reset-storage-uncertain'
+                : 'opened-existing',
           })
         );
         telemetry?.postMessage({

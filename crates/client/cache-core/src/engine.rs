@@ -27,7 +27,7 @@ use crate::queue::{
 use crate::record_selection::{
     RecordCursor, RecordSelection, RecordSelectionError, SelectedRecordPage, validate_limit,
 };
-use crate::store::Storage;
+use crate::store::{QueueDiagnostics, Storage};
 use crate::value::{EntityKey, Record, canonical_json};
 use lru::LruCache;
 use serde_json::Value as Json;
@@ -1307,6 +1307,14 @@ impl<S: Storage> Engine<S> {
 
     pub fn active_ops(&self) -> usize {
         self.deps.active_ops()
+    }
+
+    /// Returns payload-free durable mutation queue diagnostics.
+    pub async fn queue_diagnostics(&self) -> Result<QueueDiagnostics, EngineError<S::Error>> {
+        self.storage
+            .queue_diagnostics()
+            .await
+            .map_err(EngineError::Storage)
     }
 
     /// Access to the underlying storage for non-consuming diagnostics.

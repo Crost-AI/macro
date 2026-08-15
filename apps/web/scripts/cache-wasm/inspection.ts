@@ -108,6 +108,18 @@ function sourceContractViolations(
   ];
 }
 
+export function productionGlueHookViolations(glue: string): string[] {
+  const forbidden = [
+    'browserTestMakeNamespaceIncompatible',
+    'browserTestCorruptQueuePayload',
+  ];
+  return forbidden.flatMap((name) =>
+    glue.includes(name)
+      ? [`production cache WASM glue exports forbidden test hook ${name}`]
+      : []
+  );
+}
+
 export function inspectCacheWasmPackage(
   repoRoot: string
 ): CacheWasmPackageInspection {
@@ -145,7 +157,8 @@ export function inspectCacheWasmPackage(
     ...wasmContractViolations(binary, features, glueImportNames)
   );
   violations.push(
-    ...sourceContractViolations(glue, 'generated cache WASM glue')
+    ...sourceContractViolations(glue, 'generated cache WASM glue'),
+    ...productionGlueHookViolations(glue)
   );
 
   const engineWorkerPath = join(

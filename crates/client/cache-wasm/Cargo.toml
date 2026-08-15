@@ -4,6 +4,10 @@ name = "cache-wasm"
 publish = false
 version = "0.4.0"
 
+[features]
+default = []
+browser-test-hooks = ["cache-turso/browser-test-hooks"]
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 

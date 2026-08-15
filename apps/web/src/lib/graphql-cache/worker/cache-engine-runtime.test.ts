@@ -201,6 +201,73 @@ describe('cache engine worker runtime', () => {
     });
   });
 
+  it('throttles runtime linear memory, emits cached queue state, and drains high-water values', async () => {
+    const scope = new FakeWorkerScope();
+    const direct = new FakePort();
+    const observations: Array<Record<string, unknown>> = [];
+    const recordCachedQueueDiagnostics = vi.fn();
+    let now = 0;
+    let memoryBytes = 10;
+    installCacheEngineWorker({
+      scope,
+      now: () => now,
+      readLinearMemoryBytes: () => memoryBytes,
+      memoryTelemetryIntervalMs: 60_000,
+      ownerLockIsHeld: async () => true,
+      telemetry: {
+        record: (observation) => observations.push(observation),
+        flush: vi.fn(),
+      },
+      createCore: () => ({
+        addPort: vi.fn(),
+        drain: vi.fn(),
+        recordCachedQueueDiagnostics,
+        handleRequest: async (port, request) => {
+          port.postMessage({ id: request.id, ok: true, result: null });
+        },
+      }),
+    });
+    scope.activate(activation(), direct);
+    await vi.waitFor(() =>
+      expect(messagesOfKind(direct, 'engine-ready')).toHaveLength(1)
+    );
+
+    direct.receive({
+      ...version,
+      kind: 'heartbeat',
+      ownerEpoch: 7,
+      heartbeatId: 1,
+    });
+    now = 60_000;
+    memoryBytes = 20;
+    direct.receive({
+      ...version,
+      kind: 'heartbeat',
+      ownerEpoch: 7,
+      heartbeatId: 2,
+    });
+    memoryBytes = 15;
+    direct.receive({
+      ...version,
+      kind: 'drain-engine',
+      ownerEpoch: 7,
+    });
+    await vi.waitFor(() =>
+      expect(messagesOfKind(direct, 'engine-drained')).toHaveLength(1)
+    );
+
+    expect(recordCachedQueueDiagnostics).toHaveBeenCalledTimes(2);
+    expect(
+      observations.filter(
+        (observation) => observation.name === 'graphql_cache.linear_memory'
+      )
+    ).toEqual([
+      expect.objectContaining({ bytes: 10, highWaterBytes: 10 }),
+      expect.objectContaining({ bytes: 20, highWaterBytes: 20 }),
+      expect.objectContaining({ bytes: 15, highWaterBytes: 20 }),
+    ]);
+  });
+
   it('fatals instead of forwarding a core-emitted coordinator-only error code', async () => {
     const scope = new FakeWorkerScope();
     const direct = new FakePort();
@@ -243,6 +310,7 @@ describe('cache engine worker runtime', () => {
     expect(messagesOfKind(direct, 'engine-response')).toHaveLength(0);
     expect(messagesOfKind(direct, 'engine-fatal')[0]).toMatchObject({
       reason: 'CacheWorkerCore emitted a coordinator-only cache error code',
+      fatalCode: 'runtime-failure',
     });
   });
 
@@ -442,10 +510,15 @@ describe('cache engine worker runtime', () => {
     replacementRuntime.channel.port2.close();
   });
 
-  it('posts reset-required fatal before ordinary output and rejects every routed request', async () => {
+  it('emits one authoritative reset sequence across live fatal and recovery replacement', async () => {
+    const observations: Array<Record<string, unknown>> = [];
     const router = new CoordinatorRouter({
       verifyTabLockHeld: async () => true,
       watchTabLock: () => () => {},
+      telemetry: {
+        record: (observation) => observations.push(observation),
+        flush: vi.fn(),
+      },
     });
     const tabA = new FakePort();
     const tabB = new FakePort();
@@ -544,6 +617,12 @@ describe('cache engine worker runtime', () => {
       )
       .map((message) => (message as { kind: string }).kind);
     expect(fatalAndResponse).toEqual(['engine-fatal', 'engine-response']);
+    expect(outbound).toContainEqual(
+      expect.objectContaining({
+        kind: 'engine-fatal',
+        fatalCode: 'storage-reset-required',
+      })
+    );
     expect(router.snapshot()?.inFlightRequestCount).toBe(0);
     expect(cacheResponses(tabB)).toEqual(
       expect.arrayContaining([
@@ -569,8 +648,49 @@ describe('cache engine worker runtime', () => {
       })
     );
 
+    const replacementRuntime = await attachRuntime(
+      router,
+      tabB,
+      'tab-b',
+      2,
+      'wipe-before-open',
+      (options) => ({
+        addPort: vi.fn(),
+        drain: vi.fn(),
+        handleRequest: async (port, request) => {
+          if (request.kind === 'init') {
+            options.onInitializationOutcome?.('reset-storage-uncertain');
+            port.postMessage({ id: request.id, ok: true, result: null });
+          }
+        },
+      })
+    );
+    expect(
+      observations
+        .filter((observation) =>
+          [
+            'graphql_cache.storage_reset_required',
+            'graphql_cache.logical_reset',
+            'graphql_cache.reset_wipe',
+          ].includes(String(observation.name))
+        )
+        .map((observation) => observation.name)
+    ).toEqual([
+      'graphql_cache.storage_reset_required',
+      'graphql_cache.logical_reset',
+      'graphql_cache.reset_wipe',
+    ]);
+    expect(
+      observations.filter(
+        (observation) =>
+          observation.name === 'graphql_cache.storage_reset_required'
+      )
+    ).toHaveLength(1);
+
     runtime.channel.port1.close();
     runtime.channel.port2.close();
+    replacementRuntime.channel.port1.close();
+    replacementRuntime.channel.port2.close();
   });
 
   it('reports a fatal error for a valid envelope with the wrong owner epoch', async () => {

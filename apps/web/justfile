@@ -201,10 +201,30 @@ report-cache-wasm: build-prod
     CACHE_WASM_WRITE_MEASUREMENTS=true bunx --bun playwright test --config src/lib/graphql-cache/worker/browser-test/playwright.production.config.ts --project chromium-production --project firefox-production
     bun scripts/cache-wasm/cli.ts report --dist dist --revision-change-id "$measured_revision"
 
+# Run the local WP-12 production lifecycle/resource/fault suite, record exact
+# Chromium/Firefox versions, and build the honest exposure-blocked report.
+report-cache-wp12: build-cache-wasm-browser-production
+    CACHE_WP12_WRITE_MEASUREMENTS=true bunx --bun playwright test --config src/lib/graphql-cache/worker/browser-test/playwright.production.config.ts --project chromium-production --project firefox-production
+    bun scripts/cache-wp12/report.ts
+
+# Validate dashboard/alert/rollback policy without claiming live deployment.
+check-cache-wp12-spec:
+    bunx --bun vitest run --project scripts scripts/cache-wp12/report.test.ts
+
 # Build the production browser harness served by Vite preview.
-build-cache-wasm-browser-production: build-cache-wasm
+build-cache-wasm-browser-production: build-cache-wasm build-cache-wasm-browser-test-hooks
     bunx --bun vite build --config src/lib/graphql-cache/worker/browser-test/vite.config.ts
     bun scripts/cache-wasm/cli.ts package-dist --dist src/lib/graphql-cache/worker/browser-test/.dist-production
+
+# Build the separate destructive-hook WASM used only by WP-12 recovery tests.
+# Its distinct name keeps it outside the one-production-cache-WASM deploy gate.
+[private]
+build-cache-wasm-browser-test-hooks:
+    wasm-pack build {{justfile_directory()}}/../../crates/client/cache-wasm \
+      --target web --release \
+      --out-name cache_wasm_browser_test_hooks \
+      --out-dir {{justfile_directory()}}/src/lib/graphql-cache/wasm-browser-test \
+      --features browser-test-hooks
 
 # Exercise development and production asset URLs, lazy election, MIME,
 # fresh-scope startup, DB-ready, first-ready, and linear-memory budgets.

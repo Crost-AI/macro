@@ -1,5 +1,6 @@
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defineConfig, devices } from '@playwright/test';
+import { defineConfig } from '@playwright/test';
 
 const directory = fileURLToPath(new URL('.', import.meta.url));
 const webDirectory = fileURLToPath(new URL('../../../../../', import.meta.url));
@@ -9,8 +10,10 @@ export default defineConfig({
   testMatch: [
     'coordinator.browser.e2e.ts',
     'cache-wasm-packaging.browser.e2e.ts',
+    'wp12.browser.e2e.ts',
   ],
   timeout: 90_000,
+  globalSetup: resolve(directory, 'wp12-global-setup.ts'),
   fullyParallel: false,
   workers: 1,
   reporter: 'line',
@@ -30,7 +33,7 @@ export default defineConfig({
     {
       name: 'chromium-production',
       use: {
-        ...devices['Desktop Chrome'],
+        browserName: 'chromium',
         launchOptions: {
           executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
         },
@@ -39,7 +42,7 @@ export default defineConfig({
     {
       name: 'firefox-production',
       use: {
-        ...devices['Desktop Firefox'],
+        browserName: 'firefox',
         launchOptions: {
           executablePath: process.env.PLAYWRIGHT_FIREFOX_EXECUTABLE_PATH,
         },

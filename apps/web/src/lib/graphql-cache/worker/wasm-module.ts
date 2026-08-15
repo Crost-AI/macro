@@ -21,14 +21,43 @@ import type {
   SelectedRecordPageWire,
   WriteResult,
 } from '../protocol';
+import { workerCacheTelemetry } from '../telemetry-relay';
 
 /** Stable, payload-free marker latched on reset-required WASM errors. */
 export interface CacheStorageResetRequiredError extends Error {
   readonly cacheStorageResetRequired: true;
 }
 
+export type CacheOpenOutcome =
+  | 'opened-existing'
+  | 'opened-new'
+  | 'reset-incompatible'
+  | 'reset-corrupt'
+  | 'reset-storage-uncertain';
+
+export type CacheQueueDiagnostics =
+  | {
+      availability: 'available';
+      /** Decimal strings preserve Rust integer precision across wasm-bindgen. */
+      depth: string;
+      oldestCreatedAtMs: string | null;
+    }
+  | {
+      /** Compatibility engines must never masquerade as an empty queue. */
+      availability: 'unavailable';
+      depth: null;
+      oldestCreatedAtMs: null;
+    };
+
+export interface CacheOpenResult {
+  engine: CacheEngine;
+  outcome: CacheOpenOutcome;
+}
+
 export interface CacheEngine {
   boundIdentity(): Promise<string | null>;
+  /** Optional for compatibility engines; absence means unavailable. */
+  queueDiagnostics?(): Promise<CacheQueueDiagnostics>;
   readQuery(
     opId: string | undefined,
     query: string,
@@ -113,11 +142,21 @@ export interface CacheEngine {
 export interface CacheWasmModule {
   default: (input?: { module_or_path?: unknown }) => Promise<unknown>;
   openCache(scope: string, hotCapacity?: number): Promise<CacheEngine>;
+  /** Additive open API with a coarse, payload-free recovery outcome. */
+  openCacheWithOutcome?(
+    scope: string,
+    hotCapacity?: number
+  ): Promise<CacheOpenResult>;
   /** Atomically wipes before Turso open while retaining one OPFS owner lock. */
   openCacheForRecovery(
     scope: string,
     hotCapacity?: number
   ): Promise<CacheEngine>;
+  /** Additive recovery-open API with its coarse wipe outcome. */
+  openCacheForRecoveryWithOutcome?(
+    scope: string,
+    hotCapacity?: number
+  ): Promise<CacheOpenResult>;
   destroyCache(scope: string): Promise<void>;
   schemaHash(): string;
 }
@@ -135,21 +174,94 @@ export function cacheWasmLinearMemoryBytes(): number {
 export function loadCacheWasm(): Promise<CacheWasmModule> {
   if (!modulePromise) {
     modulePromise = (async () => {
+      const telemetry = workerCacheTelemetry();
+      const now = (): number => globalThis.performance?.now() ?? Date.now();
       const url = new URL('../wasm/cache_wasm.js', import.meta.url).href;
       const mod = (await import(/* @vite-ignore */ url)) as CacheWasmModule;
       // Resolve the wasm binary explicitly: vite copies the generated JS as
       // an opaque asset, so its internal relative `cache_wasm_bg.wasm` URL
       // would 404 in production. This `new URL` pattern is statically
-      // analyzable, so vite emits the binary as an asset and rewrites it.
+      // analyzable, so vite emits exactly one lazy hashed binary. Explicit
+      // fetch/compile lets WP-12 separate download, compile, and instantiate.
       const wasmUrl = new URL('../wasm/cache_wasm_bg.wasm', import.meta.url);
-      const exports = (await mod.default({ module_or_path: wasmUrl })) as {
-        memory?: WebAssembly.Memory;
-      };
-      if (!(exports.memory instanceof WebAssembly.Memory)) {
-        throw new Error('cache WASM did not export its linear memory');
+      const downloadStartedAt = now();
+      let bytes: ArrayBuffer;
+      try {
+        const response = await fetch(wasmUrl);
+        if (!response.ok) {
+          throw new Error(
+            `cache WASM download returned HTTP ${response.status}`
+          );
+        }
+        bytes = await response.arrayBuffer();
+        telemetry.record({
+          name: 'graphql_cache.wasm_download',
+          operationCategory: 'initialization',
+          outcome: 'success',
+          errorCode: 'none',
+          durationMs: now() - downloadStartedAt,
+          bytes: bytes.byteLength,
+        });
+      } catch (error) {
+        telemetry.record({
+          name: 'graphql_cache.wasm_download',
+          operationCategory: 'initialization',
+          outcome: 'error',
+          errorCode: 'wasm-download',
+          durationMs: now() - downloadStartedAt,
+        });
+        throw error;
       }
-      wasmMemory = exports.memory;
-      return mod;
+
+      const compileStartedAt = now();
+      let compiled: WebAssembly.Module;
+      try {
+        compiled = await WebAssembly.compile(bytes);
+        telemetry.record({
+          name: 'graphql_cache.wasm_compile',
+          operationCategory: 'initialization',
+          outcome: 'success',
+          errorCode: 'none',
+          durationMs: now() - compileStartedAt,
+        });
+      } catch (error) {
+        telemetry.record({
+          name: 'graphql_cache.wasm_compile',
+          operationCategory: 'initialization',
+          outcome: 'error',
+          errorCode: 'wasm-compile',
+          durationMs: now() - compileStartedAt,
+        });
+        throw error;
+      }
+
+      const instantiateStartedAt = now();
+      try {
+        const exports = (await mod.default({ module_or_path: compiled })) as {
+          memory?: WebAssembly.Memory;
+        };
+        if (!(exports.memory instanceof WebAssembly.Memory)) {
+          throw new Error('cache WASM did not export its linear memory');
+        }
+        wasmMemory = exports.memory;
+        telemetry.record({
+          name: 'graphql_cache.wasm_instantiate',
+          operationCategory: 'initialization',
+          outcome: 'success',
+          errorCode: 'none',
+          durationMs: now() - instantiateStartedAt,
+        });
+        return mod;
+      } catch (error) {
+        telemetry.record({
+          name: 'graphql_cache.wasm_instantiate',
+          operationCategory: 'initialization',
+          outcome: 'error',
+          errorCode: 'wasm-instantiate',
+          durationMs: now() - instantiateStartedAt,
+        });
+        throw error;
+      }
     })();
   }
   return modulePromise;

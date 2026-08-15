@@ -88,6 +88,10 @@ const ready = (
     ownerLockName: databaseOwnerLockName('scope'),
     ownerLockHeld: true,
     databaseActionProof: proof,
+    openOutcome:
+      proof === 'wiped-before-open'
+        ? 'reset-storage-uncertain'
+        : 'opened-existing',
   });
 };
 
@@ -102,6 +106,89 @@ const messagesOfKind = <T extends string>(port: FakePort, kind: T) =>
 describe('CoordinatorRouter', () => {
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('reports recovery reset success only after ready proof and failure on activation failure', async () => {
+    const observations: Array<Record<string, unknown>> = [];
+    const setupRecovery = async () => {
+      const router = new CoordinatorRouter({
+        verifyTabLockHeld: async () => true,
+        watchTabLock: () => () => {},
+        telemetry: {
+          record: (observation) => observations.push(observation),
+          flush: vi.fn(),
+        },
+      });
+      const tabA = new FakePort();
+      const tabB = new FakePort();
+      const engineA = new FakePort();
+      await register(router, tabA, 'tab-a');
+      await register(router, tabB, 'tab-b');
+      await attach(router, tabA, 'tab-a', 1, engineA);
+      ready(engineA, 'tab-a', 1, 'opened-existing');
+      await router.handleTabMessage(tabA as CoordinatorMessagePort, {
+        ...version,
+        kind: 'engine-lost',
+        tabId: 'tab-a',
+        ownerEpoch: 1,
+        reason: 'injected abrupt loss',
+      });
+      expect(router.snapshot()?.state).toMatchObject({
+        kind: 'activating',
+        ownerEpoch: 2,
+        databaseAction: 'wipe-before-open',
+      });
+      expect(
+        observations.filter(
+          (observation) => observation.name === 'graphql_cache.reset_wipe'
+        )
+      ).toEqual([]);
+      return { router, tabB };
+    };
+
+    const successful = await setupRecovery();
+    const successfulEngine = new FakePort();
+    await attach(
+      successful.router,
+      successful.tabB,
+      'tab-b',
+      2,
+      successfulEngine
+    );
+    ready(successfulEngine, 'tab-b', 2, 'wiped-before-open');
+    expect(
+      observations.filter(
+        (observation) => observation.name === 'graphql_cache.reset_wipe'
+      )
+    ).toEqual([
+      expect.objectContaining({
+        outcome: 'success',
+        resetReason: 'abrupt-owner-loss',
+      }),
+    ]);
+
+    observations.length = 0;
+    const failed = await setupRecovery();
+    const failedEngine = new FakePort();
+    await attach(failed.router, failed.tabB, 'tab-b', 2, failedEngine);
+    failedEngine.receive({
+      ...version,
+      kind: 'activation-failed',
+      tabId: 'tab-b',
+      ownerEpoch: 2,
+      reason: 'OPFS recovery open failed',
+      failureCode: 'recovery-open-failed',
+    });
+    expect(
+      observations.filter(
+        (observation) => observation.name === 'graphql_cache.reset_wipe'
+      )
+    ).toEqual([
+      expect.objectContaining({
+        outcome: 'error',
+        resetReason: 'abrupt-owner-loss',
+      }),
+    ]);
   });
 
   it('registers only after independent liveness-lock contention succeeds', async () => {

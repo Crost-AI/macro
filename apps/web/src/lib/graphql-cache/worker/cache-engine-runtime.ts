@@ -2,8 +2,16 @@
 
 import type { CacheRequest, CacheResponse } from '../protocol';
 import {
+  type CacheTelemetryRecorderLike,
+  classifyCacheError,
+  isolateCacheTelemetry,
+} from '../telemetry';
+import { workerCacheTelemetry } from '../telemetry-relay';
+import {
   CACHE_COORDINATOR_PROTOCOL_VERSION,
   type CoordinatorToEngineEnvelope,
+  type EngineFatalCode,
+  type EngineOpenOutcome,
   type EngineToCoordinatorEnvelope,
   isCachePush,
   isCacheResponse,
@@ -11,6 +19,7 @@ import {
   validateCoordinatorToEngineEnvelope,
   validatePageToEngineEnvelope,
 } from './coordinator-protocol';
+import { cacheWasmLinearMemoryBytes } from './wasm-module';
 import { CacheWorkerCore, type CacheWorkerCoreOptions } from './worker-core';
 
 export type CacheEngineRuntimeEvent =
@@ -22,7 +31,12 @@ export type CacheEngineRuntimeEvent =
     }
   | { kind: 'ready'; activation: PageToEngineEnvelope }
   | { kind: 'drained'; activation: PageToEngineEnvelope }
-  | { kind: 'fatal'; activation: PageToEngineEnvelope; reason: string };
+  | {
+      kind: 'fatal';
+      activation: PageToEngineEnvelope;
+      reason: string;
+      fatalCode: EngineFatalCode;
+    };
 
 export interface CacheEngineRuntimeHooks {
   beforeRequest?: (
@@ -39,6 +53,7 @@ interface CacheWorkerCoreLike {
     request: CacheRequest
   ): Promise<void>;
   drain(): Promise<void>;
+  recordCachedQueueDiagnostics?(): void;
 }
 
 interface DedicatedWorkerScopeLike {
@@ -51,6 +66,11 @@ export interface CacheEngineRuntimeOptions {
   hooks?: CacheEngineRuntimeHooks;
   createCore?: (options: CacheWorkerCoreOptions) => CacheWorkerCoreLike;
   ownerLockIsHeld?: (ownerLockName: string) => Promise<boolean>;
+  telemetry?: CacheTelemetryRecorderLike;
+  /** Injectable clock/memory source for throttling tests. */
+  now?: () => number;
+  readLinearMemoryBytes?: () => number;
+  memoryTelemetryIntervalMs?: number;
 }
 
 const withVersion = <T extends { coordinatorVersion: 1 }>(
@@ -107,23 +127,72 @@ async function activate(
   options: CacheEngineRuntimeOptions
 ): Promise<void> {
   const hooks = options.hooks;
-  hooks?.onEvent?.({ kind: 'activation-started', activation });
+  const telemetry = isolateCacheTelemetry(
+    options.telemetry ?? workerCacheTelemetry()
+  );
+  const now =
+    options.now ?? (() => globalThis.performance?.now() ?? Date.now());
+  const activationStartedAt = now();
+  const readLinearMemoryBytes =
+    options.readLinearMemoryBytes ?? cacheWasmLinearMemoryBytes;
+  const memoryTelemetryIntervalMs = options.memoryTelemetryIntervalMs ?? 60_000;
+  let lastMemoryTelemetryAt = Number.NEGATIVE_INFINITY;
+  let linearMemoryHighWaterBytes = 0;
+  const recordLinearMemory = (force: boolean): void => {
+    const observedAt = now();
+    if (
+      !force &&
+      observedAt - lastMemoryTelemetryAt < memoryTelemetryIntervalMs
+    ) {
+      return;
+    }
+    try {
+      const bytes = readLinearMemoryBytes();
+      linearMemoryHighWaterBytes = Math.max(linearMemoryHighWaterBytes, bytes);
+      lastMemoryTelemetryAt = observedAt;
+      telemetry.record({
+        name: 'graphql_cache.linear_memory',
+        operationCategory: 'storage',
+        outcome: 'success',
+        bytes,
+        highWaterBytes: linearMemoryHighWaterBytes,
+      });
+    } catch {
+      // A missing memory export only drops this observation.
+    }
+  };
+  const emitEvent = (event: CacheEngineRuntimeEvent): void => {
+    try {
+      hooks?.onEvent?.(event);
+    } catch {
+      // Observation hooks are never part of the ownership protocol.
+    }
+  };
+  emitEvent({ kind: 'activation-started', activation });
   let failed = false;
+  let initializationOpenOutcome: EngineOpenOutcome =
+    activation.databaseAction === 'wipe-before-open'
+      ? 'reset-storage-uncertain'
+      : 'opened-existing';
   let draining = false;
   const pendingAdmissions = new Set<Promise<void>>();
   const post = (message: EngineToCoordinatorEnvelope): void => {
     directPort.postMessage(message);
   };
-  const fatal = (reason: string): void => {
+  const fatal = (
+    reason: string,
+    fatalCode: EngineFatalCode = 'runtime-failure'
+  ): void => {
     if (failed) return;
     failed = true;
-    hooks?.onEvent?.({ kind: 'fatal', activation, reason });
+    emitEvent({ kind: 'fatal', activation, reason, fatalCode });
     post(
       withVersion<EngineToCoordinatorEnvelope>({
         kind: 'engine-fatal',
         tabId: activation.tabId,
         ownerEpoch: activation.ownerEpoch,
         reason,
+        fatalCode,
       })
     );
   };
@@ -134,8 +203,12 @@ async function activate(
   const core = createCore({
     recoveryOpen: activation.databaseAction === 'wipe-before-open',
     onStorageResetRequired: () => {
-      fatal('cache storage requested physical reset');
+      fatal('cache storage requested physical reset', 'storage-reset-required');
     },
+    onInitializationOutcome: (outcome) => {
+      initializationOpenOutcome = outcome;
+    },
+    telemetry,
   });
   const enginePort = {
     postMessage(message: unknown): void {
@@ -169,7 +242,7 @@ async function activate(
   };
 
   const admitRequest = (request: CacheRequest): void => {
-    hooks?.onEvent?.({ kind: 'request-admitted', activation, request });
+    emitEvent({ kind: 'request-admitted', activation, request });
     if (!hooks?.beforeRequest) {
       void core.handleRequest(enginePort, request);
       return;
@@ -211,7 +284,9 @@ async function activate(
         void (async () => {
           await Promise.all(pendingAdmissions);
           await core.drain();
-          hooks?.onEvent?.({ kind: 'drained', activation });
+          recordLinearMemory(true);
+          emitEvent({ kind: 'drained', activation });
+          telemetry.flush();
           post(
             withVersion<EngineToCoordinatorEnvelope>({
               kind: 'engine-drained',
@@ -226,6 +301,8 @@ async function activate(
         );
         break;
       case 'heartbeat':
+        recordLinearMemory(false);
+        core.recordCachedQueueDiagnostics?.();
         post(
           withVersion<EngineToCoordinatorEnvelope>({
             kind: 'heartbeat-ack',
@@ -249,6 +326,7 @@ async function activate(
       throw new Error('cache engine does not hold its physical owner Web Lock');
     }
     core.addPort(enginePort);
+    recordLinearMemory(true);
     post(
       withVersion<EngineToCoordinatorEnvelope>({
         kind: 'engine-ready',
@@ -260,16 +338,36 @@ async function activate(
           activation.databaseAction === 'wipe-before-open'
             ? 'wiped-before-open'
             : 'opened-existing',
+        openOutcome: initializationOpenOutcome,
       })
     );
-    hooks?.onEvent?.({ kind: 'ready', activation });
+    emitEvent({ kind: 'ready', activation });
+    telemetry.record({
+      name: 'graphql_cache.db_ready',
+      operationCategory: 'initialization',
+      outcome: 'success',
+      errorCode: 'none',
+      durationMs: now() - activationStartedAt,
+    });
   } catch (error) {
+    telemetry.record({
+      name: 'graphql_cache.db_ready',
+      operationCategory: 'initialization',
+      outcome: 'error',
+      errorCode: classifyCacheError(error),
+      durationMs: now() - activationStartedAt,
+    });
+    telemetry.flush();
     post(
       withVersion<EngineToCoordinatorEnvelope>({
         kind: 'activation-failed',
         tabId: activation.tabId,
         ownerEpoch: activation.ownerEpoch,
         reason: errorMessage(error),
+        failureCode:
+          activation.databaseAction === 'wipe-before-open'
+            ? 'recovery-open-failed'
+            : 'initialization-failed',
       })
     );
   }

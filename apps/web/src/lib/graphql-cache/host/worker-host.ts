@@ -27,6 +27,15 @@ import {
 } from '../protocol';
 import { quarantineCacheScope } from '../scope';
 import {
+  type CacheRolloutCohort,
+  type CacheTelemetryRecorderLike,
+  type CacheTelemetrySink,
+  classifyCacheError,
+  isolateCacheTelemetry,
+  operationCategoryForRequest,
+} from '../telemetry';
+import { createPageCacheTelemetry } from '../telemetry-relay';
+import {
   type CacheCoordinatorPageAdapter,
   createCacheCoordinatorPageAdapter,
 } from '../worker/coordinator-page-adapter';
@@ -47,6 +56,7 @@ type Pending = {
   kind: CacheRequest['kind'];
   opKey?: number;
   admitted: boolean;
+  startedAt: number;
   timer?: ReturnType<typeof setTimeout>;
 };
 
@@ -80,9 +90,22 @@ export interface WorkerHostOptions {
   initializationTimeoutMs?: number;
   /** Reports terminal initialization or coordinator-transport failure. */
   onInitializationError?: (error: Error) => void;
+  /** Allowlisted rollout cohort attached to browser-cache telemetry. */
+  rolloutCohort?: CacheRolloutCohort;
+  /** Injectable recorder for deterministic tests or alternate exporters. */
+  telemetry?: CacheTelemetryRecorderLike;
+  /** Injectable final sink; defaults to anonymous OpenTelemetry spans. */
+  telemetrySink?: CacheTelemetrySink;
+  /** Test seams for bounded origin-storage-pressure sampling. */
+  storageHealthIntervalMs?: number;
+  setInterval?: typeof globalThis.setInterval;
+  clearInterval?: typeof globalThis.clearInterval;
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+const DEFAULT_STORAGE_HEALTH_INTERVAL_MS = 5 * 60_000;
+const MIN_STORAGE_HEALTH_INTERVAL_MS = 1_000;
+const MAX_STORAGE_HEALTH_INTERVAL_MS = 15 * 60_000;
 
 function unsupportedBrowserReason(): string | undefined {
   if (typeof SharedWorker !== 'function') {
@@ -131,8 +154,27 @@ const isOwnerEpochLoss = (error: unknown): error is CacheResponseError =>
   error.errorCode === OWNER_EPOCH_LOST_ERROR_CODE;
 
 export function createWorkerCacheHost(options: WorkerHostOptions): CacheHost {
+  const pageTelemetry = options.telemetry
+    ? undefined
+    : createPageCacheTelemetry({
+        rolloutCohort: options.rolloutCohort ?? 'unknown',
+        sink: options.telemetrySink,
+      });
+  const telemetry = isolateCacheTelemetry(
+    options.telemetry ?? pageTelemetry?.recorder
+  );
+  const now = (): number => globalThis.performance?.now() ?? Date.now();
   const unsupportedReason = unsupportedBrowserReason();
-  if (unsupportedReason) return createNoopCacheHost(unsupportedReason);
+  if (unsupportedReason) {
+    telemetry?.record({
+      name: 'graphql_cache.host_ready',
+      operationCategory: 'initialization',
+      outcome: 'error',
+      errorCode: 'unsupported',
+    });
+    telemetry?.flush();
+    return createNoopCacheHost(unsupportedReason);
+  }
 
   const clientId = crypto.randomUUID();
   const pending = new Map<number, Pending>();
@@ -165,6 +207,35 @@ export function createWorkerCacheHost(options: WorkerHostOptions): CacheHost {
   let disposalMode: 'graceful' | 'abrupt' | undefined;
   let pagehideRegistered = false;
   let legacyIdbDeletionStarted = false;
+  let telemetryRelayStarted = false;
+  let telemetryFinished = false;
+  let initializationStartedAt = 0;
+  let storageHealthTimer: ReturnType<typeof setInterval> | undefined;
+  const setIntervalFn =
+    options.setInterval ?? globalThis.setInterval.bind(globalThis);
+  const clearIntervalFn =
+    options.clearInterval ?? globalThis.clearInterval.bind(globalThis);
+  const storageHealthIntervalMs = Math.min(
+    Math.max(
+      options.storageHealthIntervalMs ?? DEFAULT_STORAGE_HEALTH_INTERVAL_MS,
+      MIN_STORAGE_HEALTH_INTERVAL_MS
+    ),
+    MAX_STORAGE_HEALTH_INTERVAL_MS
+  );
+
+  const recordRequestOutcome = (
+    entry: Pending,
+    outcome: 'success' | 'error',
+    error?: unknown
+  ): void => {
+    telemetry?.record({
+      name: 'graphql_cache.host_request',
+      operationCategory: operationCategoryForRequest({ kind: entry.kind }),
+      outcome,
+      errorCode: outcome === 'error' ? classifyCacheError(error) : 'none',
+      durationMs: now() - entry.startedAt,
+    });
+  };
 
   const onMessage = (event: MessageEvent<WorkerMessage>) => {
     const msg = event.data;
@@ -203,6 +274,7 @@ export function createWorkerCacheHost(options: WorkerHostOptions): CacheHost {
       if (isOwnerEpochLoss(error)) observeOwnerEpochLoss(error);
       pending.delete(msg.id);
       if (entry.timer !== undefined) clearTimeout(entry.timer);
+      recordRequestOutcome(entry, 'error', error);
       entry.reject(error);
       finishGracefulDisposeIfDrained();
       return;
@@ -216,6 +288,7 @@ export function createWorkerCacheHost(options: WorkerHostOptions): CacheHost {
     ) {
       registeredOpKeys.add(entry.opKey);
     }
+    recordRequestOutcome(entry, 'success');
     entry.resolve(msg.result);
     finishGracefulDisposeIfDrained();
   };
@@ -289,11 +362,16 @@ export function createWorkerCacheHost(options: WorkerHostOptions): CacheHost {
 
   function getAdapter(): CacheCoordinatorPageAdapter {
     if (adapter) return adapter;
+    if (!telemetryRelayStarted) {
+      telemetryRelayStarted = true;
+      pageTelemetry?.relay.start();
+    }
     const created = createCacheCoordinatorPageAdapter({
       scope: options.scope,
       hotCapacity: options.hotCapacity,
       onEngineReplaced,
       onTerminalError: failTransport,
+      telemetry,
     });
     created.onmessage = onMessage;
     adapter = created;
@@ -313,6 +391,7 @@ export function createWorkerCacheHost(options: WorkerHostOptions): CacheHost {
     pending.clear();
     for (const entry of entries) {
       if (entry.timer !== undefined) clearTimeout(entry.timer);
+      recordRequestOutcome(entry, 'error', error);
       if (
         transportUncertain &&
         entry.admitted &&
@@ -371,13 +450,21 @@ export function createWorkerCacheHost(options: WorkerHostOptions): CacheHost {
 
   function failInitialization(error: Error): void {
     if (state === 'failed' || state === 'disposed' || state === 'ready') return;
+    telemetry?.record({
+      name: 'graphql_cache.host_ready',
+      operationCategory: 'initialization',
+      outcome: 'error',
+      errorCode: classifyCacheError(error),
+      durationMs:
+        initializationStartedAt > 0 ? now() - initializationStartedAt : 0,
+    });
     state = 'failed';
     initialization = undefined;
     initializationError = error;
     rejectPending(error);
     clearSubscribers();
     unregisterPagehide();
-    void disposeAdapter(false);
+    void disposeAdapter(false).then(finishTelemetry);
     reportFailure(error);
   }
 
@@ -389,6 +476,7 @@ export function createWorkerCacheHost(options: WorkerHostOptions): CacheHost {
 
   function failTransport(error: Error): void {
     if (terminalFailureHandled) return;
+    stopStorageHealthSampling();
     const admittedWorkIsUncertain = [...pending.values()].some(
       (entry) => entry.admitted
     );
@@ -400,7 +488,7 @@ export function createWorkerCacheHost(options: WorkerHostOptions): CacheHost {
     rejectPending(error, true);
     clearSubscribers();
     unregisterPagehide();
-    void disposeAdapter(false);
+    void disposeAdapter(false).then(finishTelemetry);
     // Product failure handling may immediately construct another host. Make
     // the matching old scope unreachable before invoking that callback.
     void quarantineCacheScope(options.scope).then(() => {
@@ -410,6 +498,20 @@ export function createWorkerCacheHost(options: WorkerHostOptions): CacheHost {
         // Failure reporting cannot reopen or invalidate completed quarantine.
       }
     });
+  }
+
+  function stopStorageHealthSampling(): void {
+    if (storageHealthTimer === undefined) return;
+    clearIntervalFn(storageHealthTimer);
+    storageHealthTimer = undefined;
+  }
+
+  function finishTelemetry(): void {
+    if (telemetryFinished) return;
+    stopStorageHealthSampling();
+    telemetryFinished = true;
+    telemetry?.flush();
+    pageTelemetry?.relay.dispose();
   }
 
   function startAdapterDisposal(graceful: boolean): void {
@@ -422,6 +524,7 @@ export function createWorkerCacheHost(options: WorkerHostOptions): CacheHost {
       if (state !== 'disposing') return;
       state = 'disposed';
       unregisterPagehide();
+      finishTelemetry();
     });
   }
 
@@ -437,6 +540,7 @@ export function createWorkerCacheHost(options: WorkerHostOptions): CacheHost {
   }
 
   function disposeHost(graceful: boolean): void {
+    stopStorageHealthSampling();
     if (state === 'disposed') return;
     if (state === 'disposing') {
       if (graceful || disposalMode === 'abrupt') return;
@@ -495,6 +599,7 @@ export function createWorkerCacheHost(options: WorkerHostOptions): CacheHost {
         kind: msg.kind,
         opKey,
         admitted: false,
+        startedAt: now(),
       };
       const timeoutMs =
         msg.kind === 'init'
@@ -508,7 +613,9 @@ export function createWorkerCacheHost(options: WorkerHostOptions): CacheHost {
       if (timeoutMs !== undefined) {
         entry.timer = setTimeout(() => {
           if (pending.delete(id)) {
-            reject(new Error(`cache worker timeout: ${msg.kind}`));
+            const error = new Error(`cache worker timeout: ${msg.kind}`);
+            recordRequestOutcome(entry, 'error', error);
+            reject(error);
             finishGracefulDisposeIfDrained();
           }
         }, timeoutMs);
@@ -524,14 +631,63 @@ export function createWorkerCacheHost(options: WorkerHostOptions): CacheHost {
         if (pending.delete(id) && entry.timer !== undefined) {
           clearTimeout(entry.timer);
         }
-        reject(asError(error));
+        const requestError = asError(error);
+        recordRequestOutcome(entry, 'error', requestError);
+        reject(requestError);
       }
     });
+  }
+
+  async function observeStorageHealth(): Promise<void> {
+    try {
+      const storage = navigator.storage;
+      const [estimate, persisted] = await Promise.all([
+        storage.estimate(),
+        typeof storage.persisted === 'function'
+          ? storage.persisted()
+          : Promise.resolve(undefined),
+      ]);
+      const usageBytes = estimate.usage;
+      const quotaBytes = estimate.quota;
+      telemetry?.record({
+        name: 'graphql_cache.origin_storage_pressure',
+        operationCategory: 'storage',
+        outcome: 'success',
+        persistence:
+          persisted === true
+            ? 'granted'
+            : persisted === false
+              ? 'denied'
+              : 'unknown',
+        usageBytes,
+        quotaBytes,
+        ratio:
+          usageBytes !== undefined && quotaBytes !== undefined && quotaBytes > 0
+            ? usageBytes / quotaBytes
+            : undefined,
+      });
+    } catch (error) {
+      telemetry?.record({
+        name: 'graphql_cache.origin_storage_pressure',
+        operationCategory: 'storage',
+        outcome: 'error',
+        errorCode: classifyCacheError(error),
+        persistence: 'unknown',
+      });
+    }
+  }
+
+  function startStorageHealthSampling(): void {
+    void observeStorageHealth();
+    storageHealthTimer ??= setIntervalFn(() => {
+      void observeStorageHealth();
+    }, storageHealthIntervalMs);
   }
 
   function startInitialization(): Promise<void> {
     state = 'initializing';
     replacementError = undefined;
+    initializationStartedAt = now();
     const handshake = request({
       kind: 'init',
       scope: options.scope,
@@ -541,6 +697,14 @@ export function createWorkerCacheHost(options: WorkerHostOptions): CacheHost {
         if (state !== 'initializing') return;
         state = 'ready';
         initialization = undefined;
+        telemetry?.record({
+          name: 'graphql_cache.host_ready',
+          operationCategory: 'initialization',
+          outcome: 'success',
+          errorCode: 'none',
+          durationMs: now() - initializationStartedAt,
+        });
+        startStorageHealthSampling();
         if (recoveryInProgress) {
           const opKeys = [...lostRegisteredOpKeys].filter(
             (opKey) =>
@@ -768,6 +932,13 @@ export function createWorkerCacheHost(options: WorkerHostOptions): CacheHost {
     async clear(): Promise<void> {
       await ensureInitialized();
       await request({ kind: 'clear' });
+      telemetry?.record({
+        name: 'graphql_cache.logical_reset',
+        operationCategory: 'lifecycle',
+        outcome: 'success',
+        errorCode: 'none',
+        resetReason: 'explicit-clear',
+      });
     },
 
     onOpsAffected(cb: (opKeys: number[]) => void): () => void {

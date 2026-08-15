@@ -13,6 +13,16 @@ export type OwnerEpoch = number;
 export type RouteId = number;
 export type DatabaseAction = 'open-existing' | 'wipe-before-open';
 export type DatabaseActionProof = 'opened-existing' | 'wiped-before-open';
+export type EngineOpenOutcome =
+  | 'opened-existing'
+  | 'opened-new'
+  | 'reset-incompatible'
+  | 'reset-corrupt'
+  | 'reset-storage-uncertain';
+export type EngineFatalCode = 'storage-reset-required' | 'runtime-failure';
+export type ActivationFailureCode =
+  | 'initialization-failed'
+  | 'recovery-open-failed';
 
 export type TabToCoordinatorEnvelope =
   | {
@@ -140,6 +150,7 @@ export type EngineToCoordinatorEnvelope =
       ownerLockName: string;
       ownerLockHeld: true;
       databaseActionProof: DatabaseActionProof;
+      openOutcome: EngineOpenOutcome;
     }
   | {
       coordinatorVersion: 1;
@@ -166,6 +177,7 @@ export type EngineToCoordinatorEnvelope =
       tabId: string;
       ownerEpoch: OwnerEpoch;
       reason: string;
+      fatalCode: EngineFatalCode;
     }
   | {
       coordinatorVersion: 1;
@@ -173,6 +185,7 @@ export type EngineToCoordinatorEnvelope =
       tabId: string;
       ownerEpoch: OwnerEpoch;
       reason: string;
+      failureCode: ActivationFailureCode;
     }
   | {
       coordinatorVersion: 1;
@@ -233,6 +246,23 @@ const isDatabaseAction = (value: unknown): value is DatabaseAction =>
 
 const isDatabaseActionProof = (value: unknown): value is DatabaseActionProof =>
   value === 'opened-existing' || value === 'wiped-before-open';
+
+const isEngineOpenOutcome = (value: unknown): value is EngineOpenOutcome =>
+  [
+    'opened-existing',
+    'opened-new',
+    'reset-incompatible',
+    'reset-corrupt',
+    'reset-storage-uncertain',
+  ].includes(String(value));
+
+const isEngineFatalCode = (value: unknown): value is EngineFatalCode =>
+  value === 'storage-reset-required' || value === 'runtime-failure';
+
+const isActivationFailureCode = (
+  value: unknown
+): value is ActivationFailureCode =>
+  value === 'initialization-failed' || value === 'recovery-open-failed';
 
 const isOptionalRecord = (
   value: unknown
@@ -792,12 +822,14 @@ export function validateEngineToCoordinatorEnvelope(
           'ownerLockName',
           'ownerLockHeld',
           'databaseActionProof',
+          'openOutcome',
         ]) &&
         isNonEmptyString(value.tabId) &&
         isPositiveInteger(value.ownerEpoch) &&
         isNonEmptyString(value.ownerLockName) &&
         value.ownerLockHeld === true &&
-        isDatabaseActionProof(value.databaseActionProof)
+        isDatabaseActionProof(value.databaseActionProof) &&
+        isEngineOpenOutcome(value.openOutcome)
       ) {
         return pass(value as EngineToCoordinatorEnvelope);
       }
@@ -849,6 +881,23 @@ export function validateEngineToCoordinatorEnvelope(
       }
       break;
     case 'engine-fatal':
+      if (
+        hasOnlyKeys(value, [
+          'coordinatorVersion',
+          'kind',
+          'tabId',
+          'ownerEpoch',
+          'reason',
+          'fatalCode',
+        ]) &&
+        isNonEmptyString(value.tabId) &&
+        isPositiveInteger(value.ownerEpoch) &&
+        isNonEmptyString(value.reason) &&
+        isEngineFatalCode(value.fatalCode)
+      ) {
+        return pass(value as EngineToCoordinatorEnvelope);
+      }
+      break;
     case 'activation-failed':
       if (
         hasOnlyKeys(value, [
@@ -857,10 +906,12 @@ export function validateEngineToCoordinatorEnvelope(
           'tabId',
           'ownerEpoch',
           'reason',
+          'failureCode',
         ]) &&
         isNonEmptyString(value.tabId) &&
         isPositiveInteger(value.ownerEpoch) &&
-        isNonEmptyString(value.reason)
+        isNonEmptyString(value.reason) &&
+        isActivationFailureCode(value.failureCode)
       ) {
         return pass(value as EngineToCoordinatorEnvelope);
       }

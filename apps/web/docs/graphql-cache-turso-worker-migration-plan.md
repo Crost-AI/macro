@@ -1,6 +1,6 @@
 # Browser normalized cache: IndexedDB to Turso migration plan
 
-Status: **WP-11 packaging evidence complete; exposure remains blocked on owner budget acceptance and WP-12 Safari/navigation rollout evidence**
+Status: **WP-12 local Chromium/Firefox subset includes fail-closed finalizer evidence, the actual selector/kill path, reproducible barrier-proven admitted mutating-RPC termination, feature-gated test-artifact incompatible/corrupt recovery, non-authoritative diagnostic fallback, real standby close, and logout reset; exposure remains 0%/off because required Section 10 real-browser/native gates, owner acceptance, external Safari, live delivery, and rollback deployment remain pending**
 
 Scope: browser normalized GraphQL cache only. The Tauri native
 `cache-sqlite` host stays unchanged. The `idb` use in collaboration storage and
@@ -317,7 +317,8 @@ Store in `meta`:
 
 - the anonymous scope;
 - `cache_core::codec::cache_namespace(scope)`;
-- a separate Turso browser-storage schema version;
+- a separate Turso browser-storage schema version (version 2 adds the queue
+  `created_at_ms` diagnostics index);
 - a clean-shutdown marker if the chosen recovery design needs one.
 
 Any mismatch wipes every table/file. Unlike the native SQLite backend, the
@@ -356,6 +357,9 @@ CREATE TABLE mutation_queue (
   last_error TEXT,
   created_at_ms INTEGER NOT NULL
 );
+
+CREATE INDEX mutation_queue_created_at_ms_idx
+  ON mutation_queue(created_at_ms);
 
 CREATE TABLE optimistic_layers (
   mutation_id INTEGER PRIMARY KEY,
@@ -791,8 +795,8 @@ workspace member/lockfile entry and regeneration of workflow outputs.
 
 **Status:** implementation and candidate-gate evidence complete. All proposed
 numeric gates pass in the recorded environment, but they are not approved
-rollout budgets. Exposure remains blocked on product-owner acceptance and
-WP-12's Safari/navigation/telemetry evidence. See
+rollout budgets. Exposure remains blocked on product-owner acceptance and the
+remaining WP-12 external Safari/live-delivery/rollback gates. See
 [`graphql-cache-turso-wp11-report.md`](./graphql-cache-turso-wp11-report.md).
 
 **Owner paths**
@@ -818,6 +822,14 @@ WP-12's Safari/navigation/telemetry evidence. See
 **Depends on:** WP-07 and G0 measurements.
 
 ### WP-12 — E2E, telemetry, and rollout controls
+
+**Status:** implementation and a local Chromium/Firefox subset are complete;
+this is not a complete candidate gate. Production exposure remains 0%/off while
+the machine-readable Section 10 inventory retains required real-browser/native
+gaps, latest stable macOS Safari, live S3/CloudFront, owner budget acceptance,
+and credentialed rollback/provider deployment. See
+[`graphql-cache-turso-wp12-report.md`](./graphql-cache-turso-wp12-report.md) and
+[`graphql-cache-turso-wp12-runbook.md`](./graphql-cache-turso-wp12-runbook.md).
 
 **Owner paths**
 
@@ -869,6 +881,11 @@ Integration rules:
 - Each verified work package gets its own jj revision before handoff.
 
 ## 10. Required test matrix
+
+WP-12 tracks every item and target in
+[`../ops/graphql-cache-wp12-test-matrix.json`](../ops/graphql-cache-wp12-test-matrix.json).
+Lower-level evidence is linked but never relabeled as real-browser evidence;
+any pending required entry blocks a complete-candidate claim.
 
 ### 10.1 Rust storage contract
 
@@ -922,14 +939,23 @@ recorded by WP-12):
    the Turso database.
 6. Abruptly terminate the active worker/tab during a read; the next owner
    wipes/reopens and the old request rejects.
-7. Abruptly terminate during every mutating storage transaction; the next
-   owner starts empty and does not replay old-epoch RPCs.
+7. Deterministically arm each persistent mutating RPC after runtime admission
+   and before core execution, terminate the actual DedicatedWorker, then wait
+   for replacement readiness and a distinctive request-admission barrier. Derive
+   zero unexpected replacement mutating admissions from events rather than a
+   literal replay count. The same-page iframe harness avoids popup races. Prove
+   the next owner starts empty without old-epoch mutation/API replay. This is
+   the enforceable uncertain-admission boundary; do not claim mid-SQL
+   interruption without a separate sound transaction-boundary hook.
 8. After engine replacement, all tabs reexecute active operations and rebuild
    dependency registration.
 9. Go offline, cleanly restart the owner, and read a previously cached query.
 10. Change identity and confirm a complete local reset.
 11. Exercise logout, incompatible namespace, corruption, quota denial, private
-    mode, and storage eviction.
+    mode, and storage eviction. Destructive incompatible/corrupt controls must
+    live only in a separately named `browser-test-hooks` WASM; production
+    inspection rejects those exports, and matrix/evidence labels these two
+    real-browser cases as test-artifact rather than exact-production-artifact.
 12. Upgrade from the IDB build and confirm Turso starts empty without opening
     or reading IDB state; only the exact former `graphql-cache:<scope>` database
     is deleted, and blocked deletion does not delay cache APIs.
@@ -964,14 +990,26 @@ Collect by browser and app version:
 - raw/compressed combined WASM size;
 - cache read hit/miss/error and p50/p95/p99 latency;
 - initial page load and navigation timing control vs treatment;
-- active-worker memory;
-- OPFS quota/usage and persistence-granted status;
+- periodic/current/high-water WASM linear memory (total worker JS/native
+  memory remains a separate pending gap because unisolated Chromium/Firefox
+  workers expose no common standards-based measurement API);
+- origin-wide quota/usage and persistence-granted status from
+  `navigator.storage` (not OPFS-only usage);
 - storage transaction latency by operation kind;
 - owner elections, graceful drains, abrupt losses, lock wait, and activation
   time;
-- complete-reset count and reason category;
+- storage-reset-required uncertainty count separately from reset/wipe execution
+  success/failure and reason category;
 - integrity-check and OPFS failures;
-- queue depth/oldest age during normal healthy operation;
+- payload-free coarse initialization open/recovery outcome; the coordinator
+  is the sole reset-phase authority and a typed engine fatal code yields
+  reset-required/logical/wipe phases exactly once across replacement;
+- queue diagnostic availability plus depth/oldest age from a static aggregate
+  returning only count and oldest enqueue timestamp. The timestamp index is
+  query-plan checked at 10,000 rows. `COUNT(*)` remains O(n), so refresh is
+  serialized, limited to initialization/once-per-minute mutation checkpoints,
+  and bounded to 250 ms; heartbeat/drain emit only the latest successful cached
+  snapshot and recalculate age without storage I/O;
 - stale-epoch response drops;
 - unexpected multiple-owner detection.
 

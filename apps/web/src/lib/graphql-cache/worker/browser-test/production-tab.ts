@@ -179,6 +179,49 @@ const handleCommand = (command: ProductionHarnessCommand): void => {
         ok: true,
       });
       break;
+    case 'arm-mutation-block':
+      if (!currentWorker) {
+        report({
+          kind: 'command-result',
+          commandId: command.commandId,
+          ok: false,
+          error: 'tab has no production worker',
+        });
+        return;
+      }
+      currentWorker.postMessage(
+        {
+          testKind: 'arm-mutation-block',
+          requestKind: command.requestKind,
+        },
+        []
+      );
+      report({
+        kind: 'command-result',
+        commandId: command.commandId,
+        ok: true,
+      });
+      break;
+    case 'request':
+      void sendRequest(command.commandId, command.request);
+      break;
+    case 'terminate-worker':
+      if (!currentWorker) {
+        report({
+          kind: 'command-result',
+          commandId: command.commandId,
+          ok: false,
+          error: 'tab has no production worker',
+        });
+        return;
+      }
+      currentWorker.terminate();
+      report({
+        kind: 'command-result',
+        commandId: command.commandId,
+        ok: true,
+      });
+      break;
   }
 };
 

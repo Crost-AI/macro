@@ -80,6 +80,7 @@ async fn expect_every_storage_method_latched(
     );
     expect_reset_reason(storage.enqueue_mutation(queued("Blocked")).await, expected);
     expect_reset_reason(storage.load_mutation_queue().await, expected);
+    expect_reset_reason(storage.queue_diagnostics().await, expected);
     expect_reset_reason(
         storage
             .claim_next_mutation(MutationClaimRequest {
@@ -107,6 +108,111 @@ async fn expect_every_storage_method_latched(
         expected,
     );
     expect_reset_reason(storage.clear().await, expected);
+}
+
+#[test]
+fn queue_diagnostics_use_one_payload_free_aggregate_query() {
+    block_on(async {
+        let mut storage = TursoStorage::open_in_memory("queue-diagnostics").unwrap();
+        assert_eq!(
+            storage.queue_diagnostics().await.unwrap(),
+            QueueDiagnostics {
+                availability: QueueDiagnosticsAvailability::Available,
+                depth: 0,
+                oldest_created_at_ms: None,
+            }
+        );
+        let first = storage.enqueue_mutation(queued("First")).await.unwrap();
+        let second = storage.enqueue_mutation(queued("Second")).await.unwrap();
+        raw_execute(
+            &storage,
+            "UPDATE mutation_queue SET created_at_ms = ?2 WHERE id = ?1",
+            vec![
+                Value::from_i64(mutation_id_to_sql(first).unwrap()),
+                Value::from_i64(10),
+            ],
+        );
+        raw_execute(
+            &storage,
+            "UPDATE mutation_queue SET created_at_ms = ?2 WHERE id = ?1",
+            vec![
+                Value::from_i64(mutation_id_to_sql(second).unwrap()),
+                Value::from_i64(20),
+            ],
+        );
+        assert_eq!(
+            storage.queue_diagnostics().await.unwrap(),
+            QueueDiagnostics {
+                availability: QueueDiagnosticsAvailability::Available,
+                depth: 2,
+                oldest_created_at_ms: Some(10),
+            }
+        );
+    });
+}
+
+#[test]
+fn queue_diagnostics_use_the_created_at_covering_index_at_scale() {
+    block_on(async {
+        let storage = TursoStorage::open_in_memory("queue-diagnostics-plan").unwrap();
+        raw_execute(
+            &storage,
+            "WITH RECURSIVE values_to_insert(value) AS (VALUES(1) UNION ALL SELECT value + 1 FROM values_to_insert WHERE value < 10000) INSERT INTO mutation_queue (query, variables_json, created_at_ms) SELECT 'mutation Scale { scale }', '{}', 10001 - value FROM values_to_insert",
+            Vec::new(),
+        );
+        let plan = driver::query(
+            &storage.connection(),
+            &format!("EXPLAIN QUERY PLAN {QUEUE_DIAGNOSTICS_SELECT}"),
+            Vec::new(),
+        )
+        .unwrap();
+        let details = plan
+            .iter()
+            .filter_map(|row| required_text(row, 3).ok())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            details.contains("mutation_queue_created_at_ms_idx"),
+            "diagnostics query did not use the covering timestamp index: {details}"
+        );
+        assert_eq!(
+            storage.queue_diagnostics().await.unwrap(),
+            QueueDiagnostics {
+                availability: QueueDiagnosticsAvailability::Available,
+                depth: 10_000,
+                oldest_created_at_ms: Some(1),
+            }
+        );
+    });
+}
+
+#[test]
+fn queue_diagnostics_failure_never_latches_storage_health() {
+    block_on(async {
+        let mut storage = TursoStorage::open_in_memory("queue-diagnostics-health").unwrap();
+        storage.arm_fault(TestFault::ResetAfter {
+            site: TestFaultSite::Diagnostics,
+            index: 0,
+            reason: PhysicalResetReason::Io,
+        });
+        assert_eq!(
+            storage
+                .queue_diagnostics()
+                .await
+                .unwrap_err()
+                .physical_reset_reason(),
+            Some(PhysicalResetReason::Io)
+        );
+        storage
+            .enqueue_mutation(queued("StillHealthy"))
+            .await
+            .unwrap();
+        assert_eq!(storage.queue_diagnostics().await.unwrap().depth, 1);
+        assert_eq!(
+            storage.try_close().unwrap(),
+            TursoStorageCloseOutcome::Healthy
+        );
+    });
 }
 
 #[test]
@@ -188,6 +294,10 @@ fn every_metadata_mismatch_and_missing_schema_requests_physical_reset() {
             ),
             ("missing", "DELETE FROM meta WHERE key = 'namespace'"),
             ("schema", "DROP TABLE records"),
+            (
+                "queue-diagnostics-index",
+                "DROP INDEX mutation_queue_created_at_ms_idx",
+            ),
         ] {
             let database = TursoMemoryDatabase::new(format!("mismatch-{name}.db"));
             let storage = database.open("scope").unwrap();
@@ -254,6 +364,7 @@ fn semantically_equivalent_schema_formatting_is_accepted_on_reopen() {
             "last_error" text,
             "created_at_ms" integer not null
         )"#,
+        "CREATE INDEX mutation_queue_created_at_ms_idx ON mutation_queue(created_at_ms)",
         r#"create table `optimistic_layers` (
             `mutation_id` integer primary key,
             [optimistic_data_json] text not null,

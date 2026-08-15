@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   loroWasmContractViolations,
+  productionGlueHookViolations,
   removeCacheWasmBrotliSidecar,
   staticImportSpecifiers,
   unexpectedDistWasmPaths,
@@ -164,6 +165,21 @@ describe('cache WASM binary contract', () => {
         '--enable-threads',
       ]).join('\n')
     ).toContain('atomics/threads');
+  });
+});
+
+describe('production cache WASM export inspection', () => {
+  it('rejects destructive browser-test hook exports', () => {
+    expect(productionGlueHookViolations('export function openCache() {}')).toEqual(
+      []
+    );
+    expect(
+      productionGlueHookViolations(
+        'export function browserTestCorruptQueuePayload() {}'
+      )
+    ).toEqual([
+      'production cache WASM glue exports forbidden test hook browserTestCorruptQueuePayload',
+    ]);
   });
 });
 

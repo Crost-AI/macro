@@ -1,12 +1,18 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
+import tsconfigPaths from 'vite-tsconfig-paths';
 
 const directory = fileURLToPath(new URL('.', import.meta.url));
 
 export default defineConfig(({ command }) => ({
   root: directory,
   base: command === 'build' ? '/app/' : '/',
+  plugins: [
+    tsconfigPaths({
+      projects: [resolve(directory, '../../../../../tsconfig.json')],
+    }),
+  ],
   define: {
     __CACHE_WASM_BUILD_MODE__: JSON.stringify(
       command === 'build' ? 'production' : 'development'
@@ -40,6 +46,9 @@ export default defineConfig(({ command }) => ({
           'tab.html',
           'measurement.html',
           'exact-production-host.html',
+          'wp12.html',
+          'wp12-graphql-soup.html',
+          'wp12-internal.html',
         ].map((name) => [name.replace('.html', ''), resolve(directory, name)])
       ),
     },

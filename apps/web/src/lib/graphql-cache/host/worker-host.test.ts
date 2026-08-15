@@ -231,6 +231,44 @@ describe('createWorkerCacheHost', () => {
     expect(onInitializationError).toHaveBeenCalledOnce();
   });
 
+  it('samples origin storage pressure periodically and clears the timer on dispose', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const estimate = vi.fn(async () => ({ usage: 25, quota: 100 }));
+    vi.stubGlobal('navigator', {
+      ...(navigator as unknown as Record<string, unknown>),
+      storage: {
+        getDirectory: vi.fn(),
+        estimate,
+        persisted: vi.fn(async () => true),
+      },
+    });
+    const observations: Array<Record<string, unknown>> = [];
+    const host = createWorkerCacheHost({
+      scope: 'scope-1',
+      storageHealthIntervalMs: 1_000,
+      telemetry: {
+        record: (observation) => observations.push(observation),
+        flush: vi.fn(),
+      },
+    });
+
+    await host.readQuery({ query: 'query Ready { value }' });
+    await Promise.resolve();
+    expect(estimate).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(estimate).toHaveBeenCalledTimes(3);
+
+    host.dispose();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(estimate).toHaveBeenCalledTimes(3);
+    expect(
+      observations.filter(
+        (observation) =>
+          observation.name === 'graphql_cache.origin_storage_pressure'
+      )
+    ).toHaveLength(3);
+  });
+
   it('constructs the coordinator adapter and starts cutover cleanup lazily on first RPC', async () => {
     const host = createWorkerCacheHost({ scope: 'lazy-scope' });
     host.onOpsAffected(() => undefined);

@@ -1,5 +1,10 @@
 import type { CacheRequest, WorkerMessage } from '../protocol';
 import {
+  type CacheTelemetryRecorderLike,
+  classifyCacheError,
+  isolateCacheTelemetry,
+} from '../telemetry';
+import {
   CACHE_COORDINATOR_PROTOCOL_VERSION,
   type CoordinatorToTabEnvelope,
   isCacheRequest,
@@ -40,6 +45,8 @@ export interface CacheCoordinatorPageAdapterOptions {
   /** Fatal SharedWorker/MessagePort/envelope failure after resources close. */
   onTerminalError?: (error: Error) => void;
   gracefulTimeoutMs?: number;
+  /** Privacy-safe lifecycle recorder supplied by the browser host. */
+  telemetry?: CacheTelemetryRecorderLike;
 }
 
 export interface PageAdapterDisposeOptions {
@@ -106,6 +113,9 @@ export class CacheCoordinatorPageAdapter {
   private highestOwnerEpochSeen = 0;
   private latestEngineReplacedEpoch = 0;
   private closed = false;
+  private readonly telemetry: CacheTelemetryRecorderLike;
+  private readonly now = (): number =>
+    globalThis.performance?.now() ?? Date.now();
 
   constructor(private readonly options: CacheCoordinatorPageAdapterOptions) {
     if (!options.scope) throw new Error('cache coordinator scope is required');
@@ -123,6 +133,7 @@ export class CacheCoordinatorPageAdapter {
     this.lockManager = options.lockManager;
     this.gracefulTimeoutMs =
       options.gracefulTimeoutMs ?? DEFAULT_GRACEFUL_TIMEOUT_MS;
+    this.telemetry = isolateCacheTelemetry(options.telemetry);
   }
 
   /** Acquires tab liveness and registers without constructing an engine. */
@@ -284,6 +295,7 @@ export class CacheCoordinatorPageAdapter {
       this.options.scope,
       this.tabId
     );
+    const lockStartedAt = this.now();
     let acquired: (() => void) | undefined;
     let acquisitionFailed: ((error: Error) => void) | undefined;
     const acquiredPromise = new Promise<void>((resolve, reject) => {
@@ -307,7 +319,25 @@ export class CacheCoordinatorPageAdapter {
           error instanceof Error ? error : new Error(String(error))
         );
       });
-    await acquiredPromise;
+    try {
+      await acquiredPromise;
+    } catch (error) {
+      this.telemetry.record({
+        name: 'graphql_cache.lock_wait',
+        operationCategory: 'lifecycle',
+        outcome: 'error',
+        errorCode: classifyCacheError(error),
+        durationMs: this.now() - lockStartedAt,
+      });
+      throw error;
+    }
+    this.telemetry.record({
+      name: 'graphql_cache.lock_wait',
+      operationCategory: 'lifecycle',
+      outcome: 'success',
+      errorCode: 'none',
+      durationMs: this.now() - lockStartedAt,
+    });
     if (this.closed) return;
 
     const worker = this.createSharedWorker(this.options.scope);

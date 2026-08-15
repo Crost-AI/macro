@@ -8,7 +8,7 @@ use cache_core::queue::{
     ClaimedMutation, MutationClaimRequest, MutationClaimToken, MutationId, MutationRequest,
     NewQueuedMutation, PersistedOptimisticLayer, QueuedMutation, StoredMutation,
 };
-use cache_core::store::Storage;
+use cache_core::store::{QueueDiagnostics, QueueDiagnosticsAvailability, Storage};
 use cache_core::value::{EntityKey, Record};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -27,12 +27,22 @@ use turso_opfs::{
 };
 
 /// Frozen browser-storage schema version, independent of cache postcard versions.
-pub const BROWSER_STORAGE_SCHEMA_VERSION: u32 = 1;
+pub const BROWSER_STORAGE_SCHEMA_VERSION: u32 = 2;
 
-const CREATE_SCHEMA: [&str; 4] = [
+/// Coarse outcome of validating an OPFS Turso session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TursoStorageOpenOutcome {
+    /// Existing compatible storage was validated and preserved.
+    OpenedExisting,
+    /// A fresh physical database was initialized.
+    OpenedNew,
+}
+
+const CREATE_SCHEMA: [&str; 5] = [
     "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
     "CREATE TABLE records (__typename TEXT NOT NULL, id TEXT NOT NULL, value BLOB NOT NULL, PRIMARY KEY (__typename, id))",
     "CREATE TABLE mutation_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, query TEXT NOT NULL, operation_name TEXT, variables_json TEXT NOT NULL, identity TEXT, attempt_count INTEGER NOT NULL DEFAULT 0, next_attempt_at_ms INTEGER, lease_owner TEXT, lease_generation INTEGER NOT NULL DEFAULT 0, lease_expires_at_ms INTEGER, last_error TEXT, created_at_ms INTEGER NOT NULL)",
+    "CREATE INDEX mutation_queue_created_at_ms_idx ON mutation_queue(created_at_ms)",
     "CREATE TABLE optimistic_layers (mutation_id INTEGER PRIMARY KEY, optimistic_data_json TEXT NOT NULL, normalized_updates BLOB NOT NULL, FOREIGN KEY (mutation_id) REFERENCES mutation_queue(id) ON DELETE CASCADE)",
 ];
 const RECORD_GET: &str = "SELECT value FROM records WHERE __typename = ?1 AND id = ?2";
@@ -46,6 +56,7 @@ const ORPHAN_LAYER_SELECT: &str = "SELECT o.mutation_id FROM optimistic_layers A
 const ANY_LAYER_SELECT: &str = "SELECT mutation_id FROM optimistic_layers LIMIT 1";
 const CLAIM_SELECT: &str = "SELECT lease_owner, lease_generation FROM mutation_queue WHERE id = ?1";
 const REQUIRE_LAYER_SELECT: &str = "SELECT 1 FROM optimistic_layers WHERE mutation_id = ?1";
+const QUEUE_DIAGNOSTICS_SELECT: &str = "SELECT COUNT(*), MIN(created_at_ms) FROM mutation_queue";
 
 /// Turso-backed implementation of [`Storage`].
 ///
@@ -84,17 +95,93 @@ impl TursoStorage {
         session: ConnectedOpfsSession,
         scope: &str,
     ) -> Result<Self, TursoStorageOpenFailure> {
+        Self::from_opfs_session_with_outcome(session, scope).map(|(storage, _)| storage)
+    }
+
+    /// Validates or initializes an OPFS session and returns its coarse outcome.
+    pub fn from_opfs_session_with_outcome(
+        session: ConnectedOpfsSession,
+        scope: &str,
+    ) -> Result<(Self, TursoStorageOpenOutcome), TursoStorageOpenFailure> {
         let fresh = session.disposition() == OpenDisposition::Fresh;
         let connection = session.connection();
         let result = initialize(&connection, scope, fresh);
         drop(connection);
         match result {
-            Ok(()) => Ok(Self {
-                health: AtomicU8::new(0),
-                session,
-            }),
+            Ok(()) => Ok((
+                Self {
+                    health: AtomicU8::new(0),
+                    session,
+                },
+                if fresh {
+                    TursoStorageOpenOutcome::OpenedNew
+                } else {
+                    TursoStorageOpenOutcome::OpenedExisting
+                },
+            )),
             Err(error) => Err(TursoStorageOpenFailure { error, session }),
         }
+    }
+
+    /// Browser-test-artifact-only helper used by the storage-control worker.
+    #[cfg(feature = "browser-test-hooks")]
+    #[doc(hidden)]
+    pub fn browser_test_make_namespace_incompatible(&mut self) -> Result<(), TursoStorageError> {
+        self.require_healthy()?;
+        let connection = self.connection();
+        self.latch_result(driver::write_transaction(&connection, || {
+            require_changed(
+                driver::execute(
+                    &connection,
+                    "UPDATE meta SET value = 'browser-test-incompatible' WHERE key = 'namespace'",
+                    Vec::new(),
+                )?,
+                1,
+            )
+        }))
+    }
+
+    /// Browser-test-artifact-only helper that writes an invalid queue payload.
+    #[cfg(feature = "browser-test-hooks")]
+    #[doc(hidden)]
+    pub fn browser_test_corrupt_queue_payload(&mut self) -> Result<(), TursoStorageError> {
+        self.require_healthy()?;
+        let connection = self.connection();
+        self.latch_result(driver::write_transaction(&connection, || {
+            require_changed(
+                driver::execute(
+                    &connection,
+                    QUEUE_INSERT,
+                    vec![
+                        text("mutation BrowserTestCorrupt { __typename }"),
+                        Value::Null,
+                        text("{}"),
+                        Value::Null,
+                        Value::from_i64(0),
+                        Value::Null,
+                        Value::Null,
+                        Value::from_i64(0),
+                        Value::Null,
+                        Value::Null,
+                        Value::from_i64(1),
+                    ],
+                )?,
+                1,
+            )?;
+            let id = mutation_id_from_row(connection.last_insert_rowid())?;
+            require_changed(
+                driver::execute(
+                    &connection,
+                    LAYER_INSERT,
+                    vec![
+                        Value::from_i64(mutation_id_to_sql(id)?),
+                        text("{}"),
+                        Value::from_blob(vec![0xff]),
+                    ],
+                )?,
+                1,
+            )
+        }))
     }
 
     /// Consumes storage and closes Turso into a health-typed OPFS capability.
@@ -702,6 +789,31 @@ impl Storage for TursoStorage {
         self.latch_result(result)
     }
 
+    async fn queue_diagnostics(&self) -> Result<QueueDiagnostics, Self::Error> {
+        self.require_healthy()?;
+        // Diagnostics are deliberately outside a transaction and outside the
+        // health latch. A failed observation must never alter cache recovery.
+        self.fault_after(TestFaultSite::Diagnostics, 0)?;
+        let connection = self.connection();
+        let rows = driver::query(&connection, QUEUE_DIAGNOSTICS_SELECT, Vec::new())?;
+        let [row] = rows.as_slice() else {
+            return Err(invariant());
+        };
+        if row.len() != 2 {
+            return Err(invariant());
+        }
+        let depth = u64::try_from(required_i64(row, 0)?).map_err(|_| invariant())?;
+        let oldest_created_at_ms = nullable_i64(row, 1)?;
+        if (depth == 0) != oldest_created_at_ms.is_none() {
+            return Err(invariant());
+        }
+        Ok(QueueDiagnostics {
+            availability: QueueDiagnosticsAvailability::Available,
+            depth,
+            oldest_created_at_ms,
+        })
+    }
+
     async fn claim_next_mutation(
         &mut self,
         request: MutationClaimRequest,
@@ -968,6 +1080,7 @@ fn initialize(
         ORPHAN_LAYER_SELECT,
         CLAIM_SELECT,
         REQUIRE_LAYER_SELECT,
+        QUEUE_DIAGNOSTICS_SELECT,
     ] {
         driver::validate(connection, sql).map_err(TursoStorageError::initialization)?;
     }
@@ -1153,7 +1266,7 @@ fn validate_frozen_schema(connection: &Arc<Connection>) -> Result<(), TursoStora
     validate_table_columns(connection, "optimistic_layers", OPTIMISTIC_COLUMNS)?;
     validate_table_indexes(connection, "meta", &[(0, "key")])?;
     validate_table_indexes(connection, "records", &[(0, "__typename"), (1, "id")])?;
-    validate_table_indexes(connection, "mutation_queue", &[])?;
+    validate_mutation_queue_indexes(connection)?;
     validate_table_indexes(connection, "optimistic_layers", &[])?;
     validate_table_constraints(connection, "meta", false)?;
     validate_table_constraints(connection, "records", false)?;
@@ -1179,6 +1292,7 @@ fn validate_allowed_schema_objects(connection: &Arc<Connection>) -> Result<(), T
     let expected = ["meta", "mutation_queue", "optimistic_layers", "records"];
     let support = [SQLITE_SEQUENCE_TABLE, TURSO_AUTOINCREMENT_TABLE];
     let mut seen = [false; 4];
+    let mut diagnostics_index_seen = false;
     let mut support_seen = [false; 2];
     for row in rows {
         if row.len() != 3 {
@@ -1199,6 +1313,19 @@ fn validate_allowed_schema_objects(connection: &Arc<Connection>) -> Result<(), T
         if object_type == "index" && matches!(row.get(2), Some(Value::Null)) {
             continue;
         }
+        if name == "mutation_queue_created_at_ms_idx" {
+            if object_type != "index"
+                || required_text(&row, 2).ok().as_deref()
+                    != Some(
+                        "CREATE INDEX mutation_queue_created_at_ms_idx ON mutation_queue (created_at_ms)",
+                    )
+                || diagnostics_index_seen
+            {
+                return Err(compatibility());
+            }
+            diagnostics_index_seen = true;
+            continue;
+        }
         if let Some(position) = support.iter().position(|expected| *expected == name) {
             if object_type != "table"
                 || !matches!(row.get(2), Some(Value::Text(_)))
@@ -1212,7 +1339,10 @@ fn validate_allowed_schema_objects(connection: &Arc<Connection>) -> Result<(), T
         }
         return Err(compatibility());
     }
-    if seen.into_iter().all(|present| present) && support_seen.into_iter().all(|present| present) {
+    if seen.into_iter().all(|present| present)
+        && diagnostics_index_seen
+        && support_seen.into_iter().all(|present| present)
+    {
         Ok(())
     } else {
         Err(compatibility())
@@ -1327,6 +1457,57 @@ fn default_matches(value: Option<&Value>, expected_zero: bool) -> bool {
         (Some(Value::Numeric(Numeric::Integer(0))), true) => true,
         _ => false,
     }
+}
+
+fn validate_mutation_queue_indexes(connection: &Arc<Connection>) -> Result<(), TursoStorageError> {
+    let rows = driver::query(
+        connection,
+        "PRAGMA index_list('mutation_queue')",
+        Vec::new(),
+    )
+    .map_err(TursoStorageError::initialization)?;
+    let [row] = rows.as_slice() else {
+        return Err(compatibility());
+    };
+    if row.len() != 5
+        || required_i64(row, 0).ok() != Some(0)
+        || required_text(row, 1).ok().as_deref() != Some("mutation_queue_created_at_ms_idx")
+        || required_i64(row, 2).ok() != Some(0)
+        || required_text(row, 3).ok().as_deref() != Some("c")
+        || required_i64(row, 4).ok() != Some(0)
+    {
+        return Err(compatibility());
+    }
+    let index_rows = driver::query(
+        connection,
+        "PRAGMA index_xinfo('mutation_queue_created_at_ms_idx')",
+        Vec::new(),
+    )
+    .map_err(TursoStorageError::initialization)?;
+    let [created_at, rowid] = index_rows.as_slice() else {
+        return Err(compatibility());
+    };
+    if created_at.len() != 6
+        || required_i64(created_at, 0).ok() != Some(0)
+        || required_i64(created_at, 1).ok() != Some(11)
+        || required_text(created_at, 2).ok().as_deref() != Some("created_at_ms")
+        || required_i64(created_at, 3).ok() != Some(0)
+        || required_text(created_at, 4).ok().as_deref() != Some("BINARY")
+        || required_i64(created_at, 5).ok() != Some(1)
+        || rowid.len() != 6
+        || required_i64(rowid, 0).ok() != Some(1)
+        || required_i64(rowid, 1).ok() != Some(-1)
+        || !rowid.get(2).is_some_and(|value| {
+            matches!(value, Value::Null)
+                || matches!(value, Value::Text(text) if text.as_str().is_empty())
+        })
+        || required_i64(rowid, 3).ok() != Some(0)
+        || required_text(rowid, 4).ok().as_deref() != Some("BINARY")
+        || required_i64(rowid, 5).ok() != Some(0)
+    {
+        return Err(compatibility());
+    }
+    Ok(())
 }
 
 fn validate_table_indexes(
@@ -1841,6 +2022,7 @@ fn invariant() -> TursoStorageError {
 
 #[derive(Clone, Copy)]
 enum TestFaultSite {
+    Diagnostics,
     Put,
     Delete,
     Enqueue,

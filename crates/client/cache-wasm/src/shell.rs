@@ -9,8 +9,12 @@ use cache_core::link_patch::{OptimisticLinkPatch, QueryRevalidation};
 use cache_core::query_inspection::QueryInspection;
 use cache_core::queue::{ClaimedMutation, MutationClaimRequest, MutationClaimToken};
 use cache_core::record_selection::{RecordCursor, RecordSelection};
+use cache_core::store::QueueDiagnosticsAvailability;
 use cache_core::value::EntityKey;
-use cache_turso::{TursoStorage, TursoStorageCloseOutcome, TursoStorageError};
+use cache_turso::{
+    PhysicalResetReason, TursoStorage, TursoStorageCloseOutcome, TursoStorageError,
+    TursoStorageOpenOutcome,
+};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -65,6 +69,49 @@ impl OpInterner {
 enum JsReadResult {
     Hit { data: serde_json::Value },
     Miss,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CacheOpenOutcome {
+    OpenedExisting,
+    OpenedNew,
+    ResetIncompatible,
+    ResetCorrupt,
+    ResetStorageUncertain,
+}
+
+impl CacheOpenOutcome {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenedExisting => "opened-existing",
+            Self::OpenedNew => "opened-new",
+            Self::ResetIncompatible => "reset-incompatible",
+            Self::ResetCorrupt => "reset-corrupt",
+            Self::ResetStorageUncertain => "reset-storage-uncertain",
+        }
+    }
+}
+
+impl From<TursoStorageOpenOutcome> for CacheOpenOutcome {
+    fn from(outcome: TursoStorageOpenOutcome) -> Self {
+        match outcome {
+            TursoStorageOpenOutcome::OpenedExisting => Self::OpenedExisting,
+            TursoStorageOpenOutcome::OpenedNew => Self::OpenedNew,
+        }
+    }
+}
+
+fn recovery_outcome(reason: PhysicalResetReason) -> CacheOpenOutcome {
+    match reason {
+        PhysicalResetReason::Compatibility => CacheOpenOutcome::ResetIncompatible,
+        PhysicalResetReason::Corruption
+        | PhysicalResetReason::Codec
+        | PhysicalResetReason::Invariant
+        | PhysicalResetReason::Integrity => CacheOpenOutcome::ResetCorrupt,
+        PhysicalResetReason::StorageFull
+        | PhysicalResetReason::TransactionOutcomeUncertain
+        | PhysicalResetReason::Io => CacheOpenOutcome::ResetStorageUncertain,
+    }
 }
 
 #[derive(Serialize)]
@@ -258,23 +305,47 @@ async fn open_owner(owner: OpfsOwner) -> Result<OpenResult, JsValue> {
     }
 }
 
-async fn open_storage(scope: &str, owner: OpfsOwner) -> Result<TursoStorage, JsValue> {
-    let owner = match open_owner(owner).await? {
+struct OpenedStorage {
+    storage: TursoStorage,
+    outcome: CacheOpenOutcome,
+}
+
+async fn open_storage(scope: &str, owner: OpfsOwner) -> Result<OpenedStorage, JsValue> {
+    let (owner, reset_outcome) = match open_owner(owner).await? {
         OpenResult::Ready(session) => {
             let connected = session.connect().map_err(err_js)?;
-            match TursoStorage::from_opfs_session(connected, scope) {
-                Ok(storage) => return Ok(storage),
-                Err(failure) => failure.reset().await.map_err(err_js)?,
+            match TursoStorage::from_opfs_session_with_outcome(connected, scope) {
+                Ok((storage, outcome)) => {
+                    return Ok(OpenedStorage {
+                        storage,
+                        outcome: outcome.into(),
+                    });
+                }
+                Err(failure) => {
+                    let outcome = recovery_outcome(
+                        failure
+                            .error()
+                            .physical_reset_reason()
+                            .unwrap_or(PhysicalResetReason::Compatibility),
+                    );
+                    (failure.reset().await.map_err(err_js)?, outcome)
+                }
             }
         }
-        OpenResult::ResetRequired(session) => session.reset().await.map_err(err_js)?,
+        OpenResult::ResetRequired(session) => (
+            session.reset().await.map_err(err_js)?,
+            CacheOpenOutcome::ResetStorageUncertain,
+        ),
     };
 
     match open_owner(owner).await? {
         OpenResult::Ready(session) => {
             let connected = session.connect().map_err(err_js)?;
             match TursoStorage::from_opfs_session(connected, scope) {
-                Ok(storage) => Ok(storage),
+                Ok(storage) => Ok(OpenedStorage {
+                    storage,
+                    outcome: reset_outcome,
+                }),
                 Err(failure) => {
                     let reset_required = failure.error().requires_physical_reset();
                     let owner = failure.reset().await.map_err(err_js)?;
@@ -295,7 +366,7 @@ async fn open_storage(scope: &str, owner: OpfsOwner) -> Result<TursoStorage, JsV
     }
 }
 
-async fn acquire_storage(scope: &str, recovery_wipe: bool) -> Result<TursoStorage, JsValue> {
+async fn acquire_storage(scope: &str, recovery_wipe: bool) -> Result<OpenedStorage, JsValue> {
     let owner = OpfsOwner::acquire(&database_identity(scope))
         .await
         .map_err(err_js)?;
@@ -304,25 +375,47 @@ async fn acquire_storage(scope: &str, recovery_wipe: bool) -> Result<TursoStorag
     } else {
         owner
     };
-    open_storage(scope, owner).await
+    let mut opened = open_storage(scope, owner).await?;
+    if recovery_wipe {
+        opened.outcome = CacheOpenOutcome::ResetStorageUncertain;
+    }
+    Ok(opened)
 }
 
 async fn open_cache_inner(
     scope: String,
     hot_capacity: Option<u32>,
     recovery_wipe: bool,
-) -> Result<CacheEngine, JsValue> {
+) -> Result<(CacheEngine, CacheOpenOutcome), JsValue> {
     validate_hot_capacity(hot_capacity)?;
-    let storage = acquire_storage(&scope, recovery_wipe).await?;
-    Ok(CacheEngine {
-        state: Rc::new(Mutex::new(CacheState {
-            engine: Some(build_engine(storage, hot_capacity)),
-            scope,
-            hot_capacity,
-            reset_required: false,
-        })),
-        ops: Rc::new(RefCell::new(OpInterner::default())),
-    })
+    let OpenedStorage { storage, outcome } = acquire_storage(&scope, recovery_wipe).await?;
+    Ok((
+        CacheEngine {
+            state: Rc::new(Mutex::new(CacheState {
+                engine: Some(build_engine(storage, hot_capacity)),
+                scope,
+                hot_capacity,
+                reset_required: false,
+            })),
+            ops: Rc::new(RefCell::new(OpInterner::default())),
+        },
+        outcome,
+    ))
+}
+
+fn cache_open_result(engine: CacheEngine, outcome: CacheOpenOutcome) -> Result<JsValue, JsValue> {
+    let result = js_sys::Object::new();
+    js_sys::Reflect::set(
+        &result,
+        &JsValue::from_str("engine"),
+        &JsValue::from(engine),
+    )?;
+    js_sys::Reflect::set(
+        &result,
+        &JsValue::from_str("outcome"),
+        &JsValue::from_str(outcome.as_str()),
+    )?;
+    Ok(result.into())
 }
 
 /// Opens (or creates) the cache for `scope` after acquiring its exclusive OPFS
@@ -330,7 +423,19 @@ async fn open_cache_inner(
 /// incomplete or incompatible files are reset and reopened before returning.
 #[wasm_bindgen(js_name = openCache)]
 pub async fn open_cache(scope: String, hot_capacity: Option<u32>) -> Result<CacheEngine, JsValue> {
-    open_cache_inner(scope, hot_capacity, false).await
+    open_cache_inner(scope, hot_capacity, false)
+        .await
+        .map(|(engine, _)| engine)
+}
+
+/// Additive open API returning the engine and payload-free recovery outcome.
+#[wasm_bindgen(js_name = openCacheWithOutcome)]
+pub async fn open_cache_with_outcome(
+    scope: String,
+    hot_capacity: Option<u32>,
+) -> Result<JsValue, JsValue> {
+    let (engine, outcome) = open_cache_inner(scope, hot_capacity, false).await?;
+    cache_open_result(engine, outcome)
 }
 
 /// Acquires the canonical owner once, recovery-wipes before any Turso open,
@@ -340,7 +445,19 @@ pub async fn open_cache_for_recovery(
     scope: String,
     hot_capacity: Option<u32>,
 ) -> Result<CacheEngine, JsValue> {
-    open_cache_inner(scope, hot_capacity, true).await
+    open_cache_inner(scope, hot_capacity, true)
+        .await
+        .map(|(engine, _)| engine)
+}
+
+/// Additive recovery-open API returning the engine and coarse wipe outcome.
+#[wasm_bindgen(js_name = openCacheForRecoveryWithOutcome)]
+pub async fn open_cache_for_recovery_with_outcome(
+    scope: String,
+    hot_capacity: Option<u32>,
+) -> Result<JsValue, JsValue> {
+    let (engine, outcome) = open_cache_inner(scope, hot_capacity, true).await?;
+    cache_open_result(engine, outcome)
 }
 
 /// Recovery-wipes and recreates the cache database for `scope` while holding
@@ -356,6 +473,76 @@ pub async fn destroy_cache(scope: String) -> Result<(), JsValue> {
         .release()
         .await
         .map_err(err_js)
+}
+
+#[cfg(feature = "browser-test-hooks")]
+enum BrowserTestStorageMutation {
+    IncompatibleNamespace,
+    CorruptQueuePayload,
+}
+
+#[cfg(feature = "browser-test-hooks")]
+async fn browser_test_mutate_closed_storage(
+    scope: String,
+    mutation: BrowserTestStorageMutation,
+) -> Result<(), JsValue> {
+    let owner = OpfsOwner::acquire(&database_identity(&scope))
+        .await
+        .map_err(err_js)?;
+    let session = match open_owner(owner).await? {
+        OpenResult::Ready(session) => session,
+        OpenResult::ResetRequired(session) => {
+            let owner = session.reset().await.map_err(err_js)?;
+            owner.release().await.map_err(err_js)?;
+            return Err(err_js("browser-test storage was already reset-required"));
+        }
+    };
+    let connected = session.connect().map_err(err_js)?;
+    let mut storage = match TursoStorage::from_opfs_session(connected, &scope) {
+        Ok(storage) => storage,
+        Err(failure) => {
+            let owner = failure.reset().await.map_err(err_js)?;
+            owner.release().await.map_err(err_js)?;
+            return Err(err_js("browser-test storage validation failed"));
+        }
+    };
+    match mutation {
+        BrowserTestStorageMutation::IncompatibleNamespace => {
+            storage.browser_test_make_namespace_incompatible()
+        }
+        BrowserTestStorageMutation::CorruptQueuePayload => {
+            storage.browser_test_corrupt_queue_payload()
+        }
+    }
+    .map_err(err_js)?;
+    match storage.try_close().map_err(err_js)? {
+        TursoStorageCloseOutcome::Healthy(closed) => closed
+            .preserve()
+            .map_err(err_js)?
+            .release()
+            .await
+            .map_err(err_js),
+        TursoStorageCloseOutcome::ResetRequired(closed) => {
+            let owner = closed.reset().await.map_err(err_js)?;
+            owner.release().await.map_err(err_js)?;
+            Err(err_js("browser-test mutation unexpectedly required reset"))
+        }
+    }
+}
+
+/// Test-artifact-only incompatible-namespace hook.
+#[cfg(feature = "browser-test-hooks")]
+#[wasm_bindgen(js_name = browserTestMakeNamespaceIncompatible)]
+pub async fn browser_test_make_namespace_incompatible(scope: String) -> Result<(), JsValue> {
+    browser_test_mutate_closed_storage(scope, BrowserTestStorageMutation::IncompatibleNamespace)
+        .await
+}
+
+/// Test-artifact-only corrupt-queue hook.
+#[cfg(feature = "browser-test-hooks")]
+#[wasm_bindgen(js_name = browserTestCorruptQueuePayload)]
+pub async fn browser_test_corrupt_queue_payload(scope: String) -> Result<(), JsValue> {
+    browser_test_mutate_closed_storage(scope, BrowserTestStorageMutation::CorruptQueuePayload).await
 }
 
 /// Schema hash baked into this build (build diagnostics).
@@ -455,6 +642,56 @@ async fn close_storage(storage: BrowserStorage, force_reset: bool) -> Result<Opf
 
 #[wasm_bindgen]
 impl CacheEngine {
+    /// Returns payload-free durable mutation queue diagnostics.
+    #[wasm_bindgen(js_name = queueDiagnostics)]
+    pub fn queue_diagnostics(&self) -> js_sys::Promise {
+        let state = self.state.clone();
+        future_to_promise(async move {
+            let mut state = state.lock().await;
+            // Observation failures bypass `engine_result`: diagnostics never
+            // latch reset-required state or alter the engine lifecycle.
+            let diagnostics = state
+                .engine_mut()?
+                .queue_diagnostics()
+                .await
+                .map_err(err_js)?;
+            let value = js_sys::Object::new();
+            let available = diagnostics.availability == QueueDiagnosticsAvailability::Available;
+            js_sys::Reflect::set(
+                &value,
+                &JsValue::from_str("availability"),
+                &JsValue::from_str(if available {
+                    "available"
+                } else {
+                    "unavailable"
+                }),
+            )?;
+            js_sys::Reflect::set(
+                &value,
+                &JsValue::from_str("depth"),
+                &if available {
+                    JsValue::from_str(&diagnostics.depth.to_string())
+                } else {
+                    JsValue::NULL
+                },
+            )?;
+            js_sys::Reflect::set(
+                &value,
+                &JsValue::from_str("oldestCreatedAtMs"),
+                &if available {
+                    diagnostics
+                        .oldest_created_at_ms
+                        .map_or(JsValue::NULL, |timestamp| {
+                            JsValue::from_str(&timestamp.to_string())
+                        })
+                } else {
+                    JsValue::NULL
+                },
+            )?;
+            Ok(value.into())
+        })
+    }
+
     /// Returns the opaque identity bound to this cache, or `null` when no
     /// identity-bearing response has been stored yet.
     #[wasm_bindgen(js_name = boundIdentity)]
@@ -970,7 +1207,7 @@ impl CacheEngine {
                 }
             };
             let storage = match open_storage(&scope, owner).await {
-                Ok(storage) => storage,
+                Ok(opened) => opened.storage,
                 Err(error) => {
                     state.reset_required = true;
                     return Err(error);

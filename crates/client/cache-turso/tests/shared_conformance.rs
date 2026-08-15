@@ -426,6 +426,14 @@ async fn reopen_contract<F: BackendFactory>(
 
 async fn queue_contract<S: Storage>(storage: &mut S) {
     assert!(storage.load_mutation_queue().await.unwrap().is_empty());
+    assert_eq!(
+        storage.queue_diagnostics().await.unwrap(),
+        cache_core::store::QueueDiagnostics {
+            availability: cache_core::store::QueueDiagnosticsAvailability::Available,
+            depth: 0,
+            oldest_created_at_ms: None,
+        }
+    );
     assert!(
         storage
             .claim_next_mutation(claim_request("empty", 0, 1))
@@ -452,6 +460,14 @@ async fn queue_contract<S: Storage>(storage: &mut S) {
     let first = storage.enqueue_mutation(queued("First")).await.unwrap();
     let second = storage.enqueue_mutation(queued("Second")).await.unwrap();
     assert!(second > first);
+    assert_eq!(
+        storage.queue_diagnostics().await.unwrap(),
+        cache_core::store::QueueDiagnostics {
+            availability: cache_core::store::QueueDiagnosticsAvailability::Available,
+            depth: 2,
+            oldest_created_at_ms: Some(1),
+        }
+    );
     let first_claim = storage
         .claim_next_mutation(claim_request("runner-a", 1, 10))
         .await

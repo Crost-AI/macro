@@ -2,7 +2,7 @@
 
 Status: **candidate gates pass; production exposure remains blocked**
 
-Measured 2026-08-15 on Jujutsu change `ktmqknurlsrporqovmonoqtzpwznwqls`.
+Measured 2026-08-17 on Jujutsu change `ukyrkmnlolqutzpuyxywqplnxnxmqywr`.
 The machine-readable evidence is
 [`../measurements/cache-wasm-wp11.json`](../measurements/cache-wasm-wp11.json),
 with per-browser samples under `../measurements/generated/`. Reproduce the
@@ -31,7 +31,11 @@ derived from global `Worker`/`SharedWorker`, including aliases, `Proxy`,
 `.bind`, sequence expressions, computed global properties, and
 `Reflect.construct`; static marker checks also reject
 SharedArrayBuffer, Atomics, WASI, and pthread paths. No Turso/libSQL npm package
-or separate Turso WASM is present.
+or separate Turso WASM is present. The inspector also rejects the destructive
+`browserTestMakeNamespaceIncompatible` and `browserTestCorruptQueuePayload`
+exports. WP-12 builds those exports only into a separately named
+`browser-test-hooks` artifact for recovery tests; that test artifact is absent
+from the application dist and excluded from every WP-11 size/timing/hash gate.
 
 The app also emits exactly one known hashed Loro WASM. The allowlist is not
 filename-only: its binary must contain only wasm-bindgen function imports from
@@ -44,18 +48,18 @@ WASM or cache binary renamed to the Loro pattern fails inspection. Only
 
 | Metric | Measured | Candidate gate | Result |
 |---|---:|---:|---|
-| cache WASM build, recorded warm workspace target/sccache | 16.653 s | 180 s | pass |
-| first target-fill observation in the same shell | 63.392 s | 180 s | pass |
-| raw combined WASM | 11,388,540 B | 12,582,912 B (12 MiB) | pass |
-| GNU gzip 1.14 `-9` from stdin | 3,904,015 B | 4,718,592 B (4.5 MiB) | pass |
-| deployed Node-zlib Brotli quality 11 sidecar | 2,658,000 B | 3,145,728 B (3 MiB) | pass |
-| generated wasm-bindgen glue | 52,253 B | 65,536 B (64 KiB) | pass |
-| Node cold compile + instantiate p95, 5 fresh processes | 39.840 ms | 1,000 ms | pass |
-| Chromium production DB-ready p95, 5 fresh scopes | 534.900 ms | 3,000 ms | pass |
-| Firefox production DB-ready p95, 5 fresh scopes | 390 ms | 3,000 ms | pass |
-| Chromium production host first-ready p95 | 552.400 ms | 5,000 ms | pass |
-| Firefox production host first-ready p95 | 394 ms | 5,000 ms | pass |
-| active WASM linear memory, both production engines | 9,961,472 B | 33,554,432 B (32 MiB) | pass |
+| cache WASM build, recorded warm workspace target/sccache | 15.324 s | 180 s | pass |
+| first target-fill observation in an empty temporary target | 87.599 s | 180 s | pass |
+| raw combined WASM | 11,407,381 B | 12,582,912 B (12 MiB) | pass |
+| GNU gzip 1.14 `-9` from stdin | 3,910,054 B | 4,718,592 B (4.5 MiB) | pass |
+| deployed Node-zlib Brotli quality 11 sidecar | 2,658,816 B | 3,145,728 B (3 MiB) | pass |
+| generated wasm-bindgen glue | 53,595 B | 65,536 B (64 KiB) | pass |
+| Node cold compile + instantiate p95, 5 fresh processes | 39.571 ms | 1,000 ms | pass |
+| Chromium production DB-ready p95, 5 fresh scopes | 414.900 ms | 3,000 ms | pass |
+| Firefox production DB-ready p95, 5 fresh scopes | 487 ms | 3,000 ms | pass |
+| Chromium production host first-ready p95 | 427.200 ms | 5,000 ms | pass |
+| Firefox production host first-ready p95 | 493 ms | 5,000 ms | pass |
+| active WASM linear memory, both production engines | 10,027,008 B | 33,554,432 B (32 MiB) | pass |
 
 The build number is cache-sensitive, so the report records the cache state
 rather than presenting it as hardware-independent. The conservative first
@@ -135,9 +139,12 @@ paths, user agents, and every raw timing sample. Summary:
 ## Remaining risks and exposure decision
 
 Passing these candidate budgets does **not** authorize exposure. Product-owner
-acceptance of the numeric budgets remains pending. WP-12 still owns exact
-stable Safari evidence, navigation/control comparisons, production telemetry,
-kill switch, cohorts, and rollback thresholds.
+acceptance of the numeric budgets remains pending. WP-12 records a local
+Chromium/Firefox navigation/resource subset, privacy-safe telemetry, a
+session-latched kill-switch policy, and provider-neutral rollback thresholds.
+Required Section 10 real-browser/native entries, exact stable Safari, live
+delivery, owner acceptance, and deployed rollback automation remain pending.
+See [`graphql-cache-turso-wp12-report.md`](./graphql-cache-turso-wp12-report.md).
 
 Headroom is finite: raw WASM is about 90.5% of the candidate cap and Brotli is
 about 84.5% of its cap. Toolchain or Turso upgrades can change wasm-opt and

@@ -172,6 +172,7 @@ describe('coordinator runtime protocol', () => {
         ownerLockName: 'owner-lock',
         ownerLockHeld: true,
         databaseActionProof: 'wiped-before-open',
+        openOutcome: 'reset-storage-uncertain',
       }).ok
     ).toBe(true);
     expect(
@@ -183,8 +184,29 @@ describe('coordinator runtime protocol', () => {
         ownerLockName: 'owner-lock',
         ownerLockHeld: false,
         databaseActionProof: 'wiped-before-open',
+        openOutcome: 'reset-storage-uncertain',
       }).ok
     ).toBe(false);
+    expect(
+      validateEngineToCoordinatorEnvelope({
+        ...version,
+        kind: 'engine-fatal',
+        tabId: 'tab',
+        ownerEpoch: 1,
+        reason: 'reset',
+        fatalCode: 'storage-reset-required',
+      }).ok
+    ).toBe(true);
+    expect(
+      validateEngineToCoordinatorEnvelope({
+        ...version,
+        kind: 'activation-failed',
+        tabId: 'tab',
+        ownerEpoch: 1,
+        reason: 'open failed',
+        failureCode: 'recovery-open-failed',
+      }).ok
+    ).toBe(true);
     expect(
       validateEngineToCoordinatorEnvelope({
         ...version,

@@ -15,7 +15,9 @@ mod key;
 mod storage;
 
 pub use error::{PhysicalResetReason, TursoStorageError};
-pub use storage::{BROWSER_STORAGE_SCHEMA_VERSION, TursoStorage, TursoStorageCloseOutcome};
+pub use storage::{
+    BROWSER_STORAGE_SCHEMA_VERSION, TursoStorage, TursoStorageCloseOutcome, TursoStorageOpenOutcome,
+};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use storage::TursoMemoryDatabase;
