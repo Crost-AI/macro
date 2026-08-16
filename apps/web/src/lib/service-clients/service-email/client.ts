@@ -547,17 +547,19 @@ export const emailClient = {
       })
     ).map((result) => result);
   },
-  async upsertEmailFilter(args: UpsertEmailFilterRequest) {
+  async upsertEmailFilter(args: UpsertEmailFilterRequest, linkId?: string) {
     return (
       await emailFetch<UpsertEmailFilterResponse>('/email/filters', {
         method: 'PUT',
         body: JSON.stringify(args),
+        headers: emailLinkHeaders(linkId),
       })
     ).map((result) => result);
   },
-  async deleteEmailFilter(args: { id: string }) {
+  async deleteEmailFilter(args: { id: string }, linkId?: string) {
     return emailFetch(`/email/filters/${args.id}`, {
       method: 'DELETE',
+      headers: emailLinkHeaders(linkId),
     });
   },
   async listCalendars() {

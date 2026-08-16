@@ -7,11 +7,13 @@ import {
   ENABLE_GRAPHQL_SOUP_OVERRIDE,
 } from '@core/constant/featureFlags';
 import { DEFAULT_THREAD_MESSAGES_LIMIT } from '@core/constant/pagination';
+import type { ResultError } from '@core/util/result';
 import {
   catchToResult,
   ThrownResultError,
   throwOnErr,
 } from '@core/util/result';
+import { type LogAttributes, Telemetry } from '@macro-inc/observability';
 import ArrowCounterClockwise from '@phosphor-icons/core/regular/arrow-counter-clockwise.svg?component-solid';
 import { emailClient } from '@service-email/client';
 import type {
@@ -733,8 +735,51 @@ export function useUnscheduleMessageMutation(
 }
 
 /**
- * Blocks a sender and shows appropriate toasts with undo support.
- * Shared by the email thread view and soup context menu.
+ * Stable names for the sender-action failures, logged as the `action`
+ * attribute. Kept independent of the toast copy so a search stays valid when
+ * the wording changes.
+ */
+export const SENDER_ACTION = {
+  block: 'email.block_sender',
+  unblock: 'email.unblock_sender',
+  upsertFilter: 'email.upsert_sender_filter',
+  deleteFilter: 'email.delete_sender_filter',
+} as const;
+
+type SenderActionName = (typeof SENDER_ACTION)[keyof typeof SENDER_ACTION];
+
+/**
+ * Report a sender-action failure before its toast. The toast renders generic
+ * copy and drops the `Result` error, so hand the real one to Telemetry first —
+ * it mirrors to the console whether or not OTLP export is on, which is what
+ * makes a 401 or a wrong-inbox 404 attributable after the fact.
+ *
+ * `inbox` records whether the call named an inbox or fell through to the
+ * backend's primary-inbox default, the distinction the multi-inbox bug turned
+ * on. The sender address is deliberately left out.
+ */
+function reportSenderActionFailure(
+  action: SenderActionName,
+  errors: ResultError[],
+  linkId: string | undefined,
+  attributes?: LogAttributes
+): void {
+  Telemetry.error(new ThrownResultError(errors), {
+    action,
+    errorCodes: errors.map((e) => e.code).join(','),
+    linkId,
+    inbox: linkId ? 'explicit' : 'primary-default',
+    ...attributes,
+  });
+}
+
+/**
+ * Blocks a sender in one inbox and shows appropriate toasts with undo support.
+ * Shared by the email thread view and soup context menu. `linkId` scopes the
+ * block to a non-primary inbox; omitting it targets the caller's primary one.
+ *
+ * The endpoint only enqueues the Gmail-side block, so a success here means the
+ * request was accepted, not that Gmail has applied it — hence the toast copy.
  */
 export async function blockSenderWithToast(
   senderEmail: string,
@@ -748,12 +793,13 @@ export async function blockSenderWithToast(
   );
 
   if (result.isErr()) {
+    reportSenderActionFailure(SENDER_ACTION.block, result.error, linkId);
     toast.failure('Failed to block sender', { subtext: senderEmail });
     return;
   }
 
-  toast.success('Sender blocked', {
-    subtext: `All new messages will be trashed for ${senderEmail}`,
+  toast.success('Blocking sender', {
+    subtext: `New messages from ${senderEmail} will be trashed once the block takes effect`,
     actions: [
       {
         label: 'Undo',
@@ -766,9 +812,14 @@ export async function blockSenderWithToast(
             linkId
           );
           if (undoResult.isErr()) {
+            reportSenderActionFailure(
+              SENDER_ACTION.unblock,
+              undoResult.error,
+              linkId
+            );
             toast.failure('Failed to unblock sender', { subtext: senderEmail });
           } else {
-            toast.success('Sender unblocked');
+            toast.success('Unblocking sender');
           }
         },
       },
@@ -776,18 +827,33 @@ export async function blockSenderWithToast(
   });
 }
 
+/**
+ * Files a sender under Signal or Noise for one inbox. Filters are per-inbox
+ * server-side, so `linkId` has to ride along on both the upsert and the undo
+ * delete or the filter lands in (or is removed from) the wrong inbox.
+ */
 async function upsertSenderFilterWithToast(
   senderEmail: string,
-  isImportant: boolean
+  isImportant: boolean,
+  linkId?: string
 ) {
   const label = isImportant ? 'Signal' : 'Noise';
 
-  const result = await emailClient.upsertEmailFilter({
-    email_address: senderEmail,
-    is_important: isImportant,
-  });
+  const result = await emailClient.upsertEmailFilter(
+    {
+      email_address: senderEmail,
+      is_important: isImportant,
+    },
+    linkId
+  );
 
   if (result.isErr()) {
+    reportSenderActionFailure(
+      SENDER_ACTION.upsertFilter,
+      result.error,
+      linkId,
+      { isImportant }
+    );
     toast.failure(`Failed to mark sender as ${label}`, {
       subtext: senderEmail,
     });
@@ -804,10 +870,19 @@ async function upsertSenderFilterWithToast(
         label: 'Undo',
         icon: ArrowCounterClockwise,
         onClick: async () => {
-          const undoResult = await emailClient.deleteEmailFilter({
-            id: filterId,
-          });
+          const undoResult = await emailClient.deleteEmailFilter(
+            {
+              id: filterId,
+            },
+            linkId
+          );
           if (undoResult.isErr()) {
+            reportSenderActionFailure(
+              SENDER_ACTION.deleteFilter,
+              undoResult.error,
+              linkId,
+              { filterId }
+            );
             toast.failure('Failed to undo', { subtext: senderEmail });
           } else {
             invalidateAllSoup();
@@ -819,8 +894,12 @@ async function upsertSenderFilterWithToast(
   });
 }
 
-export const markSenderSignalWithToast = (senderEmail: string) =>
-  upsertSenderFilterWithToast(senderEmail, true);
+export const markSenderSignalWithToast = (
+  senderEmail: string,
+  linkId?: string
+) => upsertSenderFilterWithToast(senderEmail, true, linkId);
 
-export const markSenderNoiseWithToast = (senderEmail: string) =>
-  upsertSenderFilterWithToast(senderEmail, false);
+export const markSenderNoiseWithToast = (
+  senderEmail: string,
+  linkId?: string
+) => upsertSenderFilterWithToast(senderEmail, false, linkId);
