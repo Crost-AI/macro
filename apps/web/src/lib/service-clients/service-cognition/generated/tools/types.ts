@@ -44,7 +44,7 @@ export type ToolPropertyTargetEntityType =
   | 'document'
   | 'project'
   | 'chat'
-  | 'thread'
+  | 'email'
   | 'channel'
   | 'call'
   | 'user'
@@ -1860,7 +1860,7 @@ export interface GetCompanyResponse {
   summary: string;
 }
 /**
- * Get all properties attached to an entity (document, project, CRM company, etc.). Tasks are targeted as entity_type=document. Returns property definitions with their current values and available options for select-type properties. Select and tag values also come back resolved as human-readable labels in currentValueLabels. Tags are properties with dataType "tag"; only tags visible to the user (their own and their team's) are returned. Use ListTags to see every tag available to the user, and SetEntityProperty with the tag definition id and add_option_ids/remove_option_ids to apply or remove tags. For task documents, system properties (Assignees, Status, Priority, Due Date, etc.) are always present — you can update them directly with SetEntityProperty using well-known IDs without calling this first. For CRM companies (entity_type=company, entity_id=the company UUID), this returns the builtin Stage / Owner / Revenue properties (with the team's stage options) plus any custom company properties.
+ * Get all properties attached to an entity (document, project, email thread, CRM company, etc.). Tasks are targeted as entity_type=document. Email threads are targeted as entity_type=email, using the thread id from ListEntities. Returns property definitions with their current values and available options for select-type properties. Select and tag values also come back resolved as human-readable labels in currentValueLabels. Tags are properties with dataType "tag"; only tags visible to the user (their own and their team's) are returned. Use ListTags to see every tag available to the user, and SetEntityProperty with the tag definition id and add_option_ids/remove_option_ids to apply or remove tags. For task documents, system properties (Assignees, Status, Priority, Due Date, etc.) are always present — you can update them directly with SetEntityProperty using well-known IDs without calling this first. For CRM companies (entity_type=company, entity_id=the company UUID), this returns the builtin Stage / Owner / Revenue properties (with the team's stage options) plus any custom company properties.
  */
 export interface GetEntityProperties {
   /**
@@ -2489,13 +2489,19 @@ export interface ToolTag {
   label: string;
 }
 /**
- * List the current members and pending invites for the authenticated user's team. Requires the caller to be a team member. The returned roles (owner/admin/member) are app permission levels only, not job titles — they say nothing about the org chart. Never infer that someone is a founder, an executive, or the company's owner from their workspace role.
+ * List the current members and pending invites for the authenticated user's team. A caller who belongs to no team gets a successful result with inTeam=false and empty members/invited — working solo is normal, so don't treat it as a failure or retry. The returned roles (owner/admin/member) are app permission levels only, not job titles — they say nothing about the org chart. Never infer that someone is a founder, an executive, or the company's owner from their workspace role.
  */
 export type ListTeamMembers = {};
 /**
  * Response from [`ListTeamMembers`].
  */
 export interface ListTeamMembersResponse {
+  /**
+   * Whether the caller belongs to a team. `false` means the caller works
+   * solo — a normal state, not an error — and `members` and `invited` are
+   * empty. Defaulted so historical responses without it still parse.
+   */
+  inTeam?: boolean;
   /**
    * Pending team invites.
    */
@@ -3619,7 +3625,7 @@ export interface SendEmail {
   to: EmailRecipient[];
 }
 /**
- * Set or update a property value on an entity (document, project, etc.). Tasks are targeted as entity_type='document'. Provide the property_definition_id and exactly one value field matching the property's data type.
+ * Set or update a property value on an entity (document, project, email thread, etc.). Tasks are targeted as entity_type='document'; email threads as entity_type='email' with the thread id from ListEntities. Provide the property_definition_id and exactly one value field matching the property's data type.
  *
  * For multi-select properties — including tags — prefer add_option_ids / remove_option_ids over option_ids: they add or remove just those options atomically, composing with concurrent edits. option_ids replaces the entire value, so a stale read can silently drop options someone else just added; only use it when the user asks to set the value to exactly a given list. To apply a tag, pass the tag set's property_definition_id and the tag's option id (both from ListTags) in add_option_ids; to remove a tag, use remove_option_ids.
  *

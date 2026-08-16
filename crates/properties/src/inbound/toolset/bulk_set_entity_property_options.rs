@@ -21,7 +21,8 @@ const MAX_BULK_ENTITIES: usize = 200;
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct BulkTargetEntity {
-    /// The type of entity. Tasks are targeted as 'document'.
+    /// The type of entity. Tasks are targeted as 'document'; email threads as
+    /// 'email', using the thread id from ListEntities.
     pub entity_type: ToolPropertyTargetEntityType,
     /// The id of the entity.
     pub entity_id: String,
@@ -85,7 +86,7 @@ fn entity_type_label(entity_type: ToolPropertyTargetEntityType) -> &'static str 
         ToolPropertyTargetEntityType::Document => "document",
         ToolPropertyTargetEntityType::Project => "project",
         ToolPropertyTargetEntityType::Chat => "chat",
-        ToolPropertyTargetEntityType::Thread => "thread",
+        ToolPropertyTargetEntityType::Email => "email",
         ToolPropertyTargetEntityType::Channel => "channel",
         ToolPropertyTargetEntityType::Call => "call",
         ToolPropertyTargetEntityType::User => "user",

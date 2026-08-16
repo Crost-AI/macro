@@ -60,17 +60,33 @@ impl From<TeamInviteDetails> for ToolTeamInvite {
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ListTeamMembersResponse {
+    /// Whether the caller belongs to a team. `false` means the caller works
+    /// solo — a normal state, not an error — and `members` and `invited` are
+    /// empty. Defaulted so historical responses without it still parse.
+    #[serde(default)]
+    pub in_team: bool,
     /// Current accepted team members.
     pub members: Vec<ToolTeamMember>,
     /// Pending team invites.
     pub invited: Vec<ToolTeamInvite>,
 }
 
+impl ListTeamMembersResponse {
+    /// The successful result for a caller who belongs to no team.
+    fn no_team() -> Self {
+        Self {
+            in_team: false,
+            members: Vec::new(),
+            invited: Vec::new(),
+        }
+    }
+}
+
 /// List current and invited members of the caller's team.
 #[derive(Debug, Deserialize, JsonSchema, Clone, Default)]
 #[schemars(
     title = "ListTeamMembers",
-    description = "List the current members and pending invites for the authenticated user's team. Requires the caller to be a team member. The returned roles (owner/admin/member) are app permission levels only, not job titles — they say nothing about the org chart. Never infer that someone is a founder, an executive, or the company's owner from their workspace role."
+    description = "List the current members and pending invites for the authenticated user's team. A caller who belongs to no team gets a successful result with inTeam=false and empty members/invited — working solo is normal, so don't treat it as a failure or retry. The returned roles (owner/admin/member) are app permission levels only, not job titles — they say nothing about the org chart. Never infer that someone is a founder, an executive, or the company's owner from their workspace role."
 )]
 #[allow(unused)]
 // empty structs can't be deserialized;
@@ -92,7 +108,13 @@ where
     ) -> ToolResult<Self::Output> {
         tracing::info!("List team members");
 
-        let entity_access_receipt = team_member_receipt(&service_context, request_context).await?;
+        // No team is the normal solo-user state: report it as data the model
+        // can act on rather than as a tool error.
+        let Some(entity_access_receipt) =
+            team_member_receipt(&service_context, request_context).await?
+        else {
+            return Ok(ListTeamMembersResponse::no_team());
+        };
 
         let team_members = service_context
             .service
@@ -104,16 +126,18 @@ where
             })?;
 
         Ok(ListTeamMembersResponse {
+            in_team: true,
             members: team_members.members.into_iter().map(Into::into).collect(),
             invited: team_members.invited.into_iter().map(Into::into).collect(),
         })
     }
 }
 
+/// Mint the caller's team-membership receipt, or `None` when they have no team.
 async fn team_member_receipt<TSvc, ESvc>(
     service_context: &ServiceContext<TeamToolContext<TSvc, ESvc>>,
     request_context: RequestContext,
-) -> Result<EntityAccessReceipt<MemberTeamRole>, ToolCallError>
+) -> Result<Option<EntityAccessReceipt<MemberTeamRole>>, ToolCallError>
 where
     TSvc: TeamMembersService,
     ESvc: EntityAccessService,
@@ -125,10 +149,7 @@ where
         .map_err(team_access_error)?;
 
     let Some(team_info) = team_info else {
-        return Err(ToolCallError {
-            description: "user is not in a team".to_string(),
-            internal_error: anyhow::anyhow!("user is not in a team"),
-        });
+        return Ok(None);
     };
 
     EntityAccessReceipt::try_new_authenticated_user(
@@ -141,6 +162,7 @@ where
             role: team_info.role,
         },
     )
+    .map(Some)
     .map_err(team_access_error)
 }
 

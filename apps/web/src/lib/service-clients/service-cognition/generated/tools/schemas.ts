@@ -80,7 +80,7 @@ export const BulkSetEntityPropertyOptions = z.object({
         'document',
         'project',
         'chat',
-        'thread',
+        'email',
         'channel',
         'call',
         'user',
@@ -986,7 +986,7 @@ export const GetEntityProperties = z.object({
     'document',
     'project',
     'chat',
-    'thread',
+    'email',
     'channel',
     'call',
     'user',
@@ -1805,6 +1805,7 @@ export const ListTagsResponse = z.object({
 export const ListTeamMembers = z.record(z.any());
 
 export const ListTeamMembersResponse = z.object({
+  inTeam: z.boolean().optional(),
   invited: z.array(z.object({ email: z.string(), role: z.string() })),
   members: z.array(z.object({ role: z.string(), userId: z.string() })),
 });
@@ -3267,7 +3268,7 @@ export const SetEntityProperty = z.object({
     'document',
     'project',
     'chat',
-    'thread',
+    'email',
     'channel',
     'call',
     'user',
