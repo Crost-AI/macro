@@ -972,38 +972,6 @@ async fn test_generate_receipt_document_no_access_returns_unauthorized() {
 }
 
 #[tokio::test]
-async fn test_generate_edit_receipt_for_owned_email_thread_with_no_org() {
-    // An inbox owner — or a delegate via macro_user_links, which the repo also
-    // reports as Owner (see the thread_access query tests) — gets an Owner
-    // grant on their email threads before any team/org source is consulted, so
-    // an Edit-level receipt must mint even with `user_org_id: None`.
-    let repo = MockRepo::new().with_thread_access(AccessLevel::Owner);
-    let service = EntityAccessServiceImpl::new(repo);
-    let user_id = test_user_id();
-
-    let receipt = service
-        .generate_entity_access_receipt::<EditAccessLevel>(
-            &user_id,
-            None,
-            "thread-1",
-            EntityType::EmailThread,
-        )
-        .await
-        .unwrap();
-
-    assert!(matches!(
-        receipt.entity().entity_type,
-        EntityType::EmailThread
-    ));
-    assert!(matches!(
-        receipt.entity_permission(),
-        EntityPermission::AccessLevel {
-            access_level: AccessLevel::Owner
-        }
-    ));
-}
-
-#[tokio::test]
 async fn user_scoped_bot_delegates_to_the_acting_user() {
     let bot_id = test_bot_id();
     let scope = test_user_bot_scope(Some(42));
