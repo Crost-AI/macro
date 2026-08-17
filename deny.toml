@@ -215,6 +215,7 @@ deny = [
     "tracing-panic",             # External crate allowed to use tracing-subscriber
     "tracing-tree",
     "tracing-web",               # External WASM tracing layer
+    "turso_core",                # External Turso crate requires tracing-subscriber directly
     "worker-rs-otel",             # Cloudflare/WASM OpenTelemetry integration
     "workspace-hack",             # cargo-hakari generated crate
   ], reason = "Use macro_entrypoint for tracing setup in workspace crates" },
