@@ -1,0 +1,86 @@
+# Crost fork CI — build Rust workspace + SolidJS on pull requests.
+name: Crost CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+  push:
+    branches:
+      - main
+      - 'crost/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: crost-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust workspace
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Nix
+        uses: ./.github/actions/setup-nix
+
+      - name: Setup Nix dev shell
+        uses: ./.github/actions/setup-nix-dev-shell
+
+      - name: Build Rust workspace (offline sqlx)
+        run: SQLX_OFFLINE=true cargo build --workspace --bins
+        env:
+          NIX_REMOTE: daemon
+
+      - name: Teardown Nix
+        if: always()
+        uses: ./.github/actions/teardown-nix
+
+  web:
+    name: SolidJS app
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Nix
+        uses: ./.github/actions/setup-nix
+
+      - name: Setup web prerequisites
+        uses: ./.github/actions/setup-reqs-web
+
+      - name: Build frontend (production)
+        run: just build-dev
+        working-directory: apps/web
+
+      - name: Teardown Nix
+        if: always()
+        uses: ./.github/actions/teardown-nix
+
+  status:
+    name: Crost CI status
+    runs-on: ubuntu-latest
+    needs:
+      - rust
+      - web
+    if: always()
+    steps:
+      - name: Check job results
+        run: |
+          echo "rust: ${{ needs.rust.result }}"
+          echo "web: ${{ needs.web.result }}"
+          if [[ "${{ needs.rust.result }}" == "failure" ]] || \
+             [[ "${{ needs.web.result }}" == "failure" ]]; then
+            echo "One or more jobs failed"
+            exit 1
+          fi
+          echo "All jobs passed"

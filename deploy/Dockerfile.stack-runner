@@ -1,0 +1,26 @@
+# syntax=docker/dockerfile:1
+# Runner image for Crost self-host compose. Provides Nix dev shell + Docker CLI
+# so `deploy/selfhost-up.sh` can invoke `just stack up` against the host daemon.
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    bash \
+    ca-certificates \
+    curl \
+    git \
+    docker.io \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix \
+  | sh -s -- install linux --no-confirm --init none \
+    --extra-conf "experimental-features = nix-command flakes" \
+    --extra-conf "trusted-users = root"
+
+ENV PATH="/nix/var/nix/profiles/default/bin:${PATH}"
+WORKDIR /workspace
+
+COPY deploy/selfhost-up.sh /usr/local/bin/macro-selfhost-up.sh
+RUN chmod +x /usr/local/bin/macro-selfhost-up.sh
+
+ENTRYPOINT ["/usr/local/bin/macro-selfhost-up.sh"]
