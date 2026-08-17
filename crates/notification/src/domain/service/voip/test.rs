@@ -145,6 +145,13 @@ impl NotificationRepository for MockRepo {
     ) -> Result<Vec<crate::domain::models::UserNotificationRow<serde_json::Value>>, Report> {
         unimplemented!()
     }
+    async fn get_notification_ids_for_entity(
+        &self,
+        _: MacroUserIdStr<'_>,
+        _: &model_entity::Entity<'_>,
+    ) -> Result<Vec<uuid::Uuid>, Report> {
+        unimplemented!()
+    }
     async fn get_basic_notifications(
         &self,
         _: &[uuid::Uuid],

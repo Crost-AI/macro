@@ -15,7 +15,7 @@ use crate::domain::models::queue_message::{
 use crate::domain::models::request::{
     BuildApnsOutput, GetNotificationsByEventItemIdsRequest, NotificationEntityRef,
     NotificationListFilters, NotificationStatus, SendNotificationRequest,
-    UpdateNotificationsRequest,
+    UpdateNotificationsForEntityRequest, UpdateNotificationsRequest,
 };
 use crate::domain::models::{
     DeviceEndpoint, DisabledNotificationType, Notification, NotificationResult,
@@ -66,6 +66,12 @@ pub trait NotificationReader: Send + Sync + 'static {
     fn update_notifications_and_return(
         &self,
         req: UpdateNotificationsRequest,
+    ) -> impl Future<Output = Result<Vec<UserNotificationRow<serde_json::Value>>, Report>> + Send;
+
+    /// Update every active notification associated with an entity for a user.
+    fn update_notifications_for_entity(
+        &self,
+        req: UpdateNotificationsForEntityRequest,
     ) -> impl Future<Output = Result<Vec<UserNotificationRow<serde_json::Value>>, Report>> + Send;
 
     /// Get a user's non-deleted notifications, paginated.
@@ -633,6 +639,28 @@ where
         req: UpdateNotificationsRequest<'_>,
     ) -> Result<Vec<UserNotificationRow<serde_json::Value>>, Report> {
         self.update_notifications_impl(req).await
+    }
+
+    #[tracing::instrument(err, skip(self))]
+    async fn update_notifications_for_entity(
+        &self,
+        req: UpdateNotificationsForEntityRequest<'_>,
+    ) -> Result<Vec<UserNotificationRow<serde_json::Value>>, Report> {
+        let notification_ids = self
+            .repository
+            .get_notification_ids_for_entity(req.user_id.copied(), &req.entity)
+            .await?;
+
+        if notification_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        self.update_notifications_impl(UpdateNotificationsRequest {
+            user_id: req.user_id,
+            notification_ids: &notification_ids,
+            status: req.status,
+        })
+        .await
     }
 
     #[tracing::instrument(err, skip(self))]

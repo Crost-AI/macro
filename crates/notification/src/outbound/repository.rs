@@ -16,7 +16,7 @@ use crate::outbound::device_registration::DeviceRegistrationDbOps;
 use chrono::{DateTime, Utc};
 use macro_user_id::cowlike::CowLike;
 use macro_user_id::user_id::MacroUserIdStr;
-use model_entity::EntityType;
+use model_entity::{Entity, EntityType};
 use models_pagination::{CreatedAt, Query};
 use rootcause::Report;
 use serde::Serialize;
@@ -509,6 +509,13 @@ pub trait NotificationDbOps: DeviceRegistrationDbOps + Send + Sync + 'static {
         Output = Result<Vec<UserNotificationRow<serde_json::Value>>, Report>,
     > + Send;
 
+    /// Get active user-owned notification IDs associated with a primary or secondary entity.
+    fn get_notification_ids_for_entity(
+        &self,
+        user_id: &MacroUserIdStr<'_>,
+        entity: &Entity<'_>,
+    ) -> impl std::future::Future<Output = Result<Vec<Uuid>, Report>> + Send;
+
     /// Get basic notification data (collapse keys) for push clearing.
     fn get_basic_notifications(
         &self,
@@ -943,6 +950,37 @@ impl NotificationDbOps for PgPool {
         rows.into_iter()
             .map(UpdatedUserNotificationRow::into_domain)
             .collect()
+    }
+
+    async fn get_notification_ids_for_entity(
+        &self,
+        user_id: &MacroUserIdStr<'_>,
+        entity: &Entity<'_>,
+    ) -> Result<Vec<Uuid>, Report> {
+        let notification_ids = sqlx::query_scalar!(
+            r#"
+            SELECT un.notification_id
+            FROM user_notification un
+            JOIN notification n ON n.id = un.notification_id
+            WHERE un.user_id = $1
+              AND un.deleted_at IS NULL
+              AND (
+                (n.event_item_type = $2 AND n.event_item_id = $3)
+                OR (
+                    n.secondary_event_item_type = $2
+                    AND n.secondary_event_item_id = $3
+                )
+              )
+            ORDER BY un.created_at, un.notification_id
+            "#,
+            user_id.as_ref(),
+            entity.entity_type.as_ref(),
+            entity.entity_id.as_ref(),
+        )
+        .fetch_all(self)
+        .await?;
+
+        Ok(notification_ids)
     }
 
     async fn get_basic_notifications(
@@ -1623,6 +1661,16 @@ impl<D: NotificationDbOps + Send + Sync> NotificationRepository for DbNotificati
     ) -> Result<Vec<UserNotificationRow<serde_json::Value>>, Report> {
         self.db
             .mark_notifications_done(user_id, notification_ids, done)
+            .await
+    }
+
+    async fn get_notification_ids_for_entity(
+        &self,
+        user_id: MacroUserIdStr<'_>,
+        entity: &Entity<'_>,
+    ) -> Result<Vec<Uuid>, Report> {
+        self.db
+            .get_notification_ids_for_entity(&user_id, entity)
             .await
     }
 

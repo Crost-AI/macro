@@ -1,4 +1,5 @@
 use macro_user_id::user_id::MacroUserIdStr;
+use model_entity::Entity;
 use models_pagination::{CreatedAt, Query};
 use notification::domain::models::TaggedContent;
 use notification::domain::models::request::{NotificationEntityRef, NotificationListFilters};
@@ -103,6 +104,16 @@ impl NotificationRepository for SandboxNotificationRepository {
     ) -> Result<Vec<UserNotificationRow<serde_json::Value>>, Report> {
         self.inner
             .mark_notifications_done(user_id, notification_ids, done)
+            .await
+    }
+
+    async fn get_notification_ids_for_entity(
+        &self,
+        user_id: MacroUserIdStr<'_>,
+        entity: &Entity<'_>,
+    ) -> Result<Vec<Uuid>, Report> {
+        self.inner
+            .get_notification_ids_for_entity(user_id, entity)
             .await
     }
 

@@ -13,6 +13,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use uuid::Uuid;
 
+use model_entity::Entity;
 use models_pagination::{CreatedAt, Query};
 
 use crate::domain::models::device::DeviceType;
@@ -107,6 +108,13 @@ pub trait NotificationRepository: Send + Sync + 'static {
         notification_ids: &[Uuid],
         done: bool,
     ) -> impl Future<Output = Result<Vec<UserNotificationRow<serde_json::Value>>, Report>> + Send;
+
+    /// Get active user-owned notification IDs associated with a primary or secondary entity.
+    fn get_notification_ids_for_entity(
+        &self,
+        user_id: MacroUserIdStr<'_>,
+        entity: &Entity<'_>,
+    ) -> impl Future<Output = Result<Vec<Uuid>, Report>> + Send;
 
     /// Get basic notification data (collapse keys) needed for push clearing.
     fn get_basic_notifications(

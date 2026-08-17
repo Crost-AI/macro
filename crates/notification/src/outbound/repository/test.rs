@@ -376,6 +376,88 @@ async fn test_mark_notifications_seen_does_not_affect_other_users(pool: Pool<Pos
     assert!(row.seen_at.is_none());
 }
 
+#[sqlx::test(migrator = "MACRO_DB_MIGRATIONS")]
+async fn test_get_notification_ids_for_entity_matches_primary_and_secondary_for_user(
+    pool: Pool<Postgres>,
+) {
+    let user = test_user("entity-user@test.com");
+    let other_user = test_user("other-entity-user@test.com");
+    let primary_id = Uuid::new_v4();
+    let secondary_id = Uuid::new_v4();
+    let deleted_id = Uuid::new_v4();
+    let other_user_id = Uuid::new_v4();
+    let wrong_type_id = Uuid::new_v4();
+
+    for (notification_id, recipient, primary_entity, secondary_entity) in [
+        (
+            primary_id,
+            user.clone(),
+            EntityType::Document.with_entity_str("entity-1"),
+            None,
+        ),
+        (
+            secondary_id,
+            user.clone(),
+            EntityType::Channel.with_entity_str("channel-1"),
+            Some(EntityType::Document.with_entity_str("entity-1")),
+        ),
+        (
+            deleted_id,
+            user.clone(),
+            EntityType::Document.with_entity_str("entity-1"),
+            None,
+        ),
+        (
+            other_user_id,
+            other_user,
+            EntityType::Document.with_entity_str("entity-1"),
+            None,
+        ),
+        (
+            wrong_type_id,
+            user.clone(),
+            EntityType::Project.with_entity_str("entity-1"),
+            None,
+        ),
+    ] {
+        pool.create_notification(
+            SendNotificationRequestBuilder {
+                notification_entity: primary_entity,
+                secondary_notification_entity: secondary_entity,
+                notification: TaggedContent::new(TestNotification {
+                    message: "entity notification".to_string(),
+                }),
+                sender_id: None,
+                recipient_ids: HashSet::from([recipient]),
+            },
+            notification_id,
+            "test_service",
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    sqlx::query!(
+        "UPDATE user_notification SET deleted_at = NOW() WHERE user_id = $1 AND notification_id = $2",
+        user.as_ref(),
+        deleted_id,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let entity = EntityType::Document.with_entity_str("entity-1");
+    let notification_ids = pool
+        .get_notification_ids_for_entity(&user, &entity)
+        .await
+        .unwrap()
+        .into_iter()
+        .collect::<HashSet<_>>();
+
+    assert_eq!(notification_ids, HashSet::from([primary_id, secondary_id]));
+}
+
 #[sqlx::test(
     migrator = "MACRO_DB_MIGRATIONS",
     fixtures(
