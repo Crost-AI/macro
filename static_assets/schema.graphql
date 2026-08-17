@@ -94,6 +94,10 @@ type CompleteMutationRoot {
 	"""
 	updateNotifications(input: UpdateNotificationsInput!): [GraphqlNotification!]!
 	"""
+	Update all notifications associated with an entity for the authenticated user.
+	"""
+	updateNotificationsForEntity(input: UpdateNotificationsForEntityInput!): [GraphqlNotification!]!
+	"""
 	Mark an accessible email thread as seen and return its authoritative cache record.
 	"""
 	markEmailThreadSeen(input: MarkEmailThreadSeenInput!): GraphqlSoupEmailThread!
@@ -5477,6 +5481,24 @@ input UpdateEntitySharePolicyInput {
 	New link/channel policy values.
 	"""
 	policy: EntitySharePolicyInput!
+}
+
+"""
+Input for updating all notifications associated with an entity.
+"""
+input UpdateNotificationsForEntityInput {
+	"""
+	Canonical entity type.
+	"""
+	entityType: GraphqlEntityType!
+	"""
+	Canonical entity identifier.
+	"""
+	entityId: ID!
+	"""
+	Status operation applied to every matching notification.
+	"""
+	operation: NotificationUpdateOperation!
 }
 
 """

@@ -1,10 +1,16 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use async_graphql::{Context, Enum, ID, InputObject, Object};
-use graphql_common::{parse_id, require_authenticated_user};
+use graphql_common::{GraphqlEntityType, parse_id, require_authenticated_user};
 use macro_user_id::user_id::MacroUserIdStr;
+use model_entity::Entity;
 use notification::domain::{
-    models::{UserNotificationRow, request::NotificationStatus},
+    models::{
+        UserNotificationRow,
+        request::{
+            NotificationStatus, UpdateNotificationsForEntityRequest, UpdateNotificationsRequest,
+        },
+    },
     service::NotificationReader,
 };
 use rootcause::Report;
@@ -24,6 +30,14 @@ pub trait NotificationMutationService: Send + Sync + 'static {
         notification_ids: Vec<Uuid>,
         status: NotificationStatus,
     ) -> impl Future<Output = Result<Vec<UserNotificationRow<serde_json::Value>>, Report>> + Send;
+
+    /// Update every user-owned notification associated with an entity.
+    fn update_notifications_for_entity(
+        &self,
+        user_id: MacroUserIdStr<'static>,
+        entity: Entity<'static>,
+        status: NotificationStatus,
+    ) -> impl Future<Output = Result<Vec<UserNotificationRow<serde_json::Value>>, Report>> + Send;
 }
 
 impl<S> NotificationMutationService for S
@@ -36,10 +50,25 @@ where
         notification_ids: Vec<Uuid>,
         status: NotificationStatus,
     ) -> Result<Vec<UserNotificationRow<serde_json::Value>>, Report> {
-        self.update_notifications_and_return(
-            notification::domain::models::request::UpdateNotificationsRequest {
+        self.update_notifications_and_return(UpdateNotificationsRequest {
+            user_id,
+            notification_ids: &notification_ids,
+            status,
+        })
+        .await
+    }
+
+    async fn update_notifications_for_entity(
+        &self,
+        user_id: MacroUserIdStr<'static>,
+        entity: Entity<'static>,
+        status: NotificationStatus,
+    ) -> Result<Vec<UserNotificationRow<serde_json::Value>>, Report> {
+        NotificationReader::update_notifications_for_entity(
+            self,
+            UpdateNotificationsForEntityRequest {
                 user_id,
-                notification_ids: &notification_ids,
+                entity,
                 status,
             },
         )
@@ -56,6 +85,17 @@ impl NotificationMutationService for NoOpNotificationMutationService {
         &self,
         _user_id: MacroUserIdStr<'static>,
         _notification_ids: Vec<Uuid>,
+        _status: NotificationStatus,
+    ) -> Result<Vec<UserNotificationRow<serde_json::Value>>, Report> {
+        Err(rootcause::report!(
+            "notification mutations are not configured"
+        ))
+    }
+
+    async fn update_notifications_for_entity(
+        &self,
+        _user_id: MacroUserIdStr<'static>,
+        _entity: Entity<'static>,
         _status: NotificationStatus,
     ) -> Result<Vec<UserNotificationRow<serde_json::Value>>, Report> {
         Err(rootcause::report!(
@@ -114,6 +154,17 @@ pub struct UpdateNotificationsInput {
     pub operation: GraphqlNotificationUpdateOperation,
 }
 
+/// Input for updating all notifications associated with an entity.
+#[derive(InputObject)]
+pub struct UpdateNotificationsForEntityInput {
+    /// Canonical entity type.
+    pub entity_type: GraphqlEntityType,
+    /// Canonical entity identifier.
+    pub entity_id: ID,
+    /// Status operation applied to every matching notification.
+    pub operation: GraphqlNotificationUpdateOperation,
+}
+
 /// GraphQL notification mutations.
 #[Object]
 impl<S> NotificationMutationRoot<S>
@@ -138,16 +189,43 @@ where
             .await
             .map_err(|error| async_graphql::Error::new(error.to_string()))?;
 
-        notifications
-            .into_iter()
-            .map(GraphqlNotification::try_from)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| {
-                tracing::error!(
-                    error = ?error,
-                    "failed to deserialize notification metadata"
-                );
-                async_graphql::Error::new("notification metadata is unavailable")
-            })
+        to_graphql_notifications(notifications)
     }
+
+    /// Update all notifications associated with an entity for the authenticated user.
+    async fn update_notifications_for_entity(
+        &self,
+        ctx: &Context<'_>,
+        input: UpdateNotificationsForEntityInput,
+    ) -> async_graphql::Result<Vec<GraphqlNotification>> {
+        let user_id = require_authenticated_user(ctx)?;
+        let entity = input
+            .entity_type
+            .into_model()
+            .with_entity_string(input.entity_id.0);
+        let service = ctx.data::<Arc<S>>()?;
+        let notifications = service
+            .update_notifications_for_entity(user_id, entity, input.operation.into())
+            .await
+            .map_err(|error| async_graphql::Error::new(error.to_string()))?;
+
+        to_graphql_notifications(notifications)
+    }
+}
+
+/// Convert authoritative domain rows into typed GraphQL notifications.
+fn to_graphql_notifications(
+    notifications: Vec<UserNotificationRow<serde_json::Value>>,
+) -> async_graphql::Result<Vec<GraphqlNotification>> {
+    notifications
+        .into_iter()
+        .map(GraphqlNotification::try_from)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            tracing::error!(
+                error = ?error,
+                "failed to deserialize notification metadata"
+            );
+            async_graphql::Error::new("notification metadata is unavailable")
+        })
 }

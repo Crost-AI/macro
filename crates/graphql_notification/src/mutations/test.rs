@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use async_graphql::{EmptySubscription, Object, Schema};
 use chrono::Utc;
-use model_entity::EntityType;
+use model_entity::{Entity, EntityType};
 use model_notifications::{ChannelMessageSendMetadata, ChannelType, CommonChannelMetadata};
 use notification::domain::models::request::NotificationStatus;
 
@@ -20,6 +20,50 @@ impl QueryRoot {
 #[derive(Default)]
 struct CapturingNotificationService {
     calls: Mutex<Vec<(String, Vec<Uuid>, &'static str)>>,
+    entity_calls: Mutex<Vec<(String, EntityType, String, &'static str)>>,
+}
+
+fn operation_name(status: &NotificationStatus) -> &'static str {
+    match status {
+        NotificationStatus::Seen => "seen",
+        NotificationStatus::Done(true) => "done",
+        NotificationStatus::Done(false) => "undone",
+    }
+}
+
+fn notification_row(
+    user_id: MacroUserIdStr<'static>,
+    notification_id: Uuid,
+    entity: Entity<'static>,
+    status: &NotificationStatus,
+) -> UserNotificationRow<serde_json::Value> {
+    let now = Utc::now();
+    UserNotificationRow {
+        owner_id: user_id,
+        notification_id,
+        notification_event_type: "channel_message_send".to_string(),
+        entity,
+        sent: true,
+        done: matches!(status, NotificationStatus::Done(true)),
+        created_at: now,
+        viewed_at: matches!(status, NotificationStatus::Seen).then_some(now),
+        updated_at: now,
+        deleted_at: None,
+        notification_metadata: serde_json::to_value(ChannelMessageSendMetadata {
+            sender: None,
+            sender_display_name: None,
+            message_content: "Test message".to_string(),
+            message_id: "message-1".to_string(),
+            has_attachments: false,
+            common: CommonChannelMetadata {
+                channel_type: ChannelType::Public,
+                channel_name: "Test channel".to_string(),
+            },
+            sender_profile_picture_url: None,
+        })
+        .unwrap(),
+        sender_id: None,
+    }
 }
 
 impl NotificationMutationService for CapturingNotificationService {
@@ -29,45 +73,43 @@ impl NotificationMutationService for CapturingNotificationService {
         notification_ids: Vec<Uuid>,
         status: NotificationStatus,
     ) -> Result<Vec<UserNotificationRow<serde_json::Value>>, Report> {
-        let operation = match status {
-            NotificationStatus::Seen => "seen",
-            NotificationStatus::Done(true) => "done",
-            NotificationStatus::Done(false) => "undone",
-        };
+        let operation = operation_name(&status);
         self.calls
             .lock()
             .unwrap()
             .push((user_id.to_string(), notification_ids.clone(), operation));
-        let now = Utc::now();
         Ok(notification_ids
             .into_iter()
-            .map(|notification_id| UserNotificationRow {
-                owner_id: user_id.clone(),
-                notification_id,
-                notification_event_type: "channel_message_send".to_string(),
-                entity: EntityType::Channel.with_entity_string("channel-1".to_string()),
-                sent: true,
-                done: false,
-                created_at: now,
-                viewed_at: Some(now),
-                updated_at: now,
-                deleted_at: None,
-                notification_metadata: serde_json::to_value(ChannelMessageSendMetadata {
-                    sender: None,
-                    sender_display_name: None,
-                    message_content: "Test message".to_string(),
-                    message_id: "message-1".to_string(),
-                    has_attachments: false,
-                    common: CommonChannelMetadata {
-                        channel_type: ChannelType::Public,
-                        channel_name: "Test channel".to_string(),
-                    },
-                    sender_profile_picture_url: None,
-                })
-                .unwrap(),
-                sender_id: None,
+            .map(|notification_id| {
+                notification_row(
+                    user_id.clone(),
+                    notification_id,
+                    EntityType::Channel.with_entity_string("channel-1".to_string()),
+                    &status,
+                )
             })
             .collect())
+    }
+
+    async fn update_notifications_for_entity(
+        &self,
+        user_id: MacroUserIdStr<'static>,
+        entity: Entity<'static>,
+        status: NotificationStatus,
+    ) -> Result<Vec<UserNotificationRow<serde_json::Value>>, Report> {
+        let operation = operation_name(&status);
+        self.entity_calls.lock().unwrap().push((
+            user_id.to_string(),
+            entity.entity_type,
+            entity.entity_id.to_string(),
+            operation,
+        ));
+        Ok(vec![notification_row(
+            user_id,
+            Uuid::from_u128(1),
+            entity,
+            &status,
+        )])
     }
 }
 
@@ -127,5 +169,61 @@ async fn update_notifications_maps_operation_and_returns_normalized_rows_in_orde
             vec![second, first],
             "seen",
         ),]
+    );
+}
+
+#[tokio::test]
+async fn update_notifications_for_entity_maps_entity_and_operation() {
+    let service = Arc::new(CapturingNotificationService::default());
+    let user = MacroUserIdStr::try_from_email("entity-user@example.com").unwrap();
+    let schema = Schema::build(
+        QueryRoot,
+        NotificationMutationRoot::<CapturingNotificationService>::new(),
+        EmptySubscription,
+    )
+    .data(service.clone())
+    .data(user)
+    .finish();
+
+    let response = schema
+        .execute(
+            r#"mutation {
+                updateNotificationsForEntity(input: {
+                    entityType: DOCUMENT,
+                    entityId: "document-1",
+                    operation: MARK_DONE
+                }) {
+                    id
+                    done
+                    entityType
+                    entityId
+                }
+            }"#,
+        )
+        .await;
+
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let data = response.data.into_json().unwrap();
+    assert_eq!(
+        data["updateNotificationsForEntity"][0]["id"],
+        Uuid::from_u128(1).to_string()
+    );
+    assert_eq!(data["updateNotificationsForEntity"][0]["done"], true);
+    assert_eq!(
+        data["updateNotificationsForEntity"][0]["entityType"],
+        "DOCUMENT"
+    );
+    assert_eq!(
+        data["updateNotificationsForEntity"][0]["entityId"],
+        "document-1"
+    );
+    assert_eq!(
+        service.entity_calls.lock().unwrap().as_slice(),
+        [(
+            "macro|entity-user@example.com".to_string(),
+            EntityType::Document,
+            "document-1".to_string(),
+            "done",
+        )]
     );
 }
