@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE reminder\n                SET next_run_at = $2, updated_at = now()\n                WHERE id = $1 AND next_run_at = $3\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2c120a902a1349b3d24e90d53c534960a1e16bcaaae54b5e91ec25d9643101b3"
+}

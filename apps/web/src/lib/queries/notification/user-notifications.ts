@@ -940,6 +940,28 @@ export function restoreUserNotifications(notifications: NotificationItem[]) {
   });
 }
 
+/**
+ * Whether `existing` is an earlier firing of the reminder `arriving` is for.
+ *
+ * A recurring reminder produces one notification per firing, all pointing at the
+ * same reminder. The dispatcher deletes the previous one server-side when the
+ * next is delivered, so only the outstanding firing remains — but that delete
+ * has no realtime event and the arriving notification is merged into the cache
+ * without a refetch, so nothing here would notice it. This is what keeps the two
+ * sides agreeing: drop the superseded row as its replacement lands.
+ */
+function isSupersededReminder(
+  existing: NotificationItem,
+  arriving: NotificationItem
+): boolean {
+  if (arriving.entity_type !== 'reminder') return false;
+  if (existing.entity_type !== 'reminder') return false;
+  if (existing.entity_id !== arriving.entity_id) return false;
+  // Same notification, not a superseded one — that case is handled as a
+  // duplicate insert.
+  return existing.id !== arriving.id;
+}
+
 export function optimisticInsertNotification(
   notification: UnifiedNotification
 ) {
@@ -957,6 +979,16 @@ export function optimisticInsertNotification(
         page.items.some((n) => n.id === item.id)
       );
       if (exists) return data;
+
+      // Clear the firing this one replaces before inserting, so a daily reminder
+      // shows one row rather than one per day since the user last looked.
+      const withoutSuperseded = data.pages.map((page) => {
+        const kept = page.items.filter((n) => !isSupersededReminder(n, item));
+        return kept.length === page.items.length
+          ? page
+          : { ...page, items: kept };
+      });
+      data = { ...data, pages: withoutSuperseded };
 
       return {
         ...data,

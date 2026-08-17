@@ -2964,6 +2964,14 @@ type GraphqlReminderMetadata {
 	Reminder description.
 	"""
 	description: String!
+	"""
+	Which firing this notification is for, in RFC 3339 format.
+	
+	The counterpart of a calendar alarm's `occurrenceKey`: it is what tells
+	two notifications from the same recurring reminder apart. Absent on
+	notifications written before recurring dispatch existed.
+	"""
+	scheduledFor: String
 }
 
 """

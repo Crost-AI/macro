@@ -12,10 +12,13 @@ import {
 const doc = (id: string, name: string) =>
   ({ type: 'document', id, name }) as EntityData;
 
+const REMIND_AT = '2026-08-09T09:00:00.000Z';
+
 const draft = (id: string, description: string) => ({
   id,
   description,
-  remindAt: new Date('2026-08-09T09:00:00.000Z'),
+  remindAt: new Date(REMIND_AT),
+  schedule: { type: 'once' as const, remindAt: REMIND_AT },
   completed: false,
 });
 

@@ -1,6 +1,16 @@
 import { toast } from '@core/component/Toast/Toast';
 import { registerHotkey, useHotkeyDOMScope } from '@core/hotkey/hotkeys';
-import { useDateSearch } from '@core/util/dateSearch/useDateSearch';
+import {
+  type CronParts,
+  describeCron,
+  isValidTime,
+  type ScheduleFrequency,
+  WEEKDAY_OPTIONS,
+} from '@core/util/cron';
+import {
+  type DateOption,
+  useDateSearch,
+} from '@core/util/dateSearch/useDateSearch';
 import {
   type ListNavActions,
   useListKeyBindings,
@@ -17,6 +27,7 @@ import {
   getSoupEntityById,
   optimisticUpdateSoupEntity,
 } from '@queries/soup/cache';
+import type { ReminderSchedule } from '@service-storage/generated/schemas/reminderSchedule';
 import { mergeRefs } from '@solid-primitives/refs';
 import {
   Button,
@@ -25,6 +36,7 @@ import {
   CommandMenuListItem,
   CommandMenuSearchInput,
   CommandMenuShell,
+  cn,
   Dialog,
   Hotkey,
 } from '@ui';
@@ -48,20 +60,26 @@ import {
   reminderComposerState,
 } from './reminder-composer';
 import {
+  defaultRepeatParts,
+  describeReminderSchedule,
   formatReminderWhen,
   futureDateOptions,
+  isRecurring,
   onceSchedule,
   REMINDER_DEFAULT_TIME,
   REMINDER_DESCRIPTION_MAX_LENGTH,
+  recurringSchedule,
   reminderDefaultOptions,
   reminderEditOptions,
   reminderEditPatch,
+  repeatPartsFromDate,
+  repeatPartsFromSchedule,
   resolveEditedDescription,
   resolveReminderDescription,
 } from './reminder-schedule';
 
-/** The composer's two questions, asked in this order. */
-type Step = 'description' | 'when';
+/** The composer's questions, asked in this order. */
+type Step = 'description' | 'when' | 'repeat';
 
 /**
  * Asks two questions — what and when — for a reminder, either a new one about
@@ -84,6 +102,12 @@ export function ReminderComposerModal() {
   const [description, setDescription] = createSignal('');
   const [query, setQuery] = createSignal('');
   const [selectedIndex, setSelectedIndex] = createSignal(0);
+  // The recurrence being built, only meaningful on the repeat step. Seeded when
+  // that step opens — from the reminder's own schedule when editing one that
+  // already repeats, so its picker starts where the user left it.
+  const [repeatParts, setRepeatParts] = createSignal<CronParts>(
+    repeatPartsFromDate(new Date())
+  );
 
   const createReminder = useCreateReminderMutation();
   // Soup rows come from the normalized soup cache, not the reminders queries,
@@ -113,12 +137,29 @@ export function ReminderComposerModal() {
    * @returns whether it stepped back rather than closed.
    */
   const handleEscape = (): boolean => {
+    // Unwinds one step at a time, so escape from the repeat picker lands back on
+    // the date list rather than throwing the whole reminder away.
+    if (step() === 'repeat') {
+      setStep('when');
+      return true;
+    }
     if (step() === 'when') {
       setStep('description');
       return true;
     }
     closeReminderComposer();
     return false;
+  };
+
+  /** Open the repeat picker, seeded from whatever schedule is in play. */
+  const openRepeatStep = () => {
+    const current = editing()?.schedule;
+    setRepeatParts(
+      current && isRecurring(current)
+        ? repeatPartsFromSchedule(current)
+        : defaultRepeatParts()
+    );
+    setStep('repeat');
   };
 
   // Only reachable with focus outside the header input — the hotkey layer skips
@@ -149,15 +190,30 @@ export function ReminderComposerModal() {
   const advanceFromDescription = () => setStep('when');
 
   // The dialog's Enter binding is a single shared slot, so whichever step is on
-  // screen has to claim it or the other step's stale handler stays live.
+  // screen has to claim it or the other step's stale handler stays live. The
+  // date step claims it from inside `WhenList`, which owns the list it moves
+  // through; the other two have no list, so they claim it here.
   createEffect(
     on(step, (current) => {
-      if (current !== 'description') return;
-      keybindings(descriptionStepKeybindings(advanceFromDescription));
+      if (current === 'description') {
+        keybindings(descriptionStepKeybindings(advanceFromDescription));
+      } else if (current === 'repeat') {
+        keybindings(listlessStepKeybindings(() => void submitRepeat()));
+      }
     })
   );
 
-  const submitCreate = async (date: Date, target: EntityData) => {
+  /** How to confirm a schedule that was just set, in the past tense. */
+  const confirmationFor = (schedule: ReminderSchedule) => {
+    const recurrence = describeReminderSchedule(schedule);
+    if (recurrence) return `Reminder set — ${recurrence.toLowerCase()}`;
+    return `Reminder set for ${formatReminderWhen(new Date(schedule.type === 'once' ? schedule.remindAt : Date.now()))}`;
+  };
+
+  const submitCreate = async (
+    schedule: ReminderSchedule,
+    target: EntityData
+  ) => {
     const resolved = resolveReminderDescription(description(), target);
     const attachTo = reminderTarget(target);
     closeReminderComposer();
@@ -165,17 +221,20 @@ export function ReminderComposerModal() {
     try {
       await createReminder.mutateAsync({
         description: resolved,
-        schedule: onceSchedule(date),
+        schedule,
         // Both or neither: the API rejects one without the other.
         ...(attachTo ?? undefined),
       });
-      toast.success(`Reminder set for ${formatReminderWhen(date)}`);
+      toast.success(confirmationFor(schedule));
     } catch {
       toast.failure('Failed to create reminder');
     }
   };
 
-  const submitEdit = async (date: Date, draft: ReminderDraft) => {
+  const submitEdit = async (
+    schedule: ReminderSchedule,
+    draft: ReminderDraft
+  ) => {
     const patch = reminderEditPatch(draft, {
       // Blank means the same here as it does when creating: name it after
       // whatever it is about.
@@ -184,7 +243,7 @@ export function ReminderComposerModal() {
         draft.description,
         draft.fallbackDescription
       ),
-      remindAt: date,
+      schedule,
     });
     closeReminderComposer();
 
@@ -195,13 +254,20 @@ export function ReminderComposerModal() {
     try {
       await updateReminder.mutateAsync({ id: draft.id, patch });
       toast.success(
-        patch.schedule
-          ? `Reminder set for ${formatReminderWhen(date)}`
-          : 'Reminder updated'
+        patch.schedule ? confirmationFor(patch.schedule) : 'Reminder updated'
       );
     } catch {
       toast.failure('Failed to update reminder');
     }
+  };
+
+  /** Send whichever kind of schedule the user landed on. */
+  const submitSchedule = async (schedule: ReminderSchedule) => {
+    const draft = editing();
+    if (draft) return await submitEdit(schedule, draft);
+
+    const target = entity();
+    if (target) return await submitCreate(schedule, target);
   };
 
   const submit = async (date: Date) => {
@@ -217,10 +283,14 @@ export function ReminderComposerModal() {
       return;
     }
 
-    if (draft) return await submitEdit(date, draft);
+    await submitSchedule(onceSchedule(date));
+  };
 
-    const target = entity();
-    if (target) return await submitCreate(date, target);
+  /** Send the recurrence built on the repeat step. */
+  const submitRepeat = async () => {
+    // No past-date check: a recurrence has no single instant to have passed, and
+    // the backend derives its first firing from the cron itself.
+    await submitSchedule(recurringSchedule(repeatParts()));
   };
 
   /**
@@ -236,7 +306,8 @@ export function ReminderComposerModal() {
   // step — the description typed so far as a way back to it. Editing has no
   // entity, so the row is only there once something has been typed.
   const showsToolbar = () =>
-    entity() !== undefined || (step() === 'when' && !!description().trim());
+    entity() !== undefined ||
+    (step() !== 'description' && !!description().trim());
 
   return (
     <Dialog
@@ -279,6 +350,11 @@ export function ReminderComposerModal() {
                 onInput={setQuery}
               />
             </Match>
+            <Match when={step() === 'repeat'}>
+              {/* Not an input: the repeat picker is controls, not a query, so
+                  the header states what is being answered instead. */}
+              <span class="px-2 text-base text-ink-muted">How often?</span>
+            </Match>
           </Switch>
         </CommandMenuShell.Header>
         <Show when={hasTarget()}>
@@ -316,10 +392,26 @@ export function ReminderComposerModal() {
                 <WhenList
                   query={query}
                   current={() => editing()?.remindAt}
+                  currentRecurrence={() => {
+                    const schedule = editing()?.schedule;
+                    return schedule && isRecurring(schedule)
+                      ? describeReminderSchedule(schedule)
+                      : undefined;
+                  }}
                   selectedIndex={selectedIndex}
                   setSelectedIndex={setSelectedIndex}
                   onSubmit={(date) => void submit(date)}
+                  onRepeat={openRepeatStep}
                   setKeybindings={keybindings}
+                />
+              </CommandMenuShell.Body>
+            </Match>
+            <Match when={step() === 'repeat'}>
+              <CommandMenuShell.Body>
+                <RepeatStep
+                  parts={repeatParts}
+                  setParts={setRepeatParts}
+                  onSubmit={() => void submitRepeat()}
                 />
               </CommandMenuShell.Body>
             </Match>
@@ -331,14 +423,21 @@ export function ReminderComposerModal() {
 }
 
 /**
- * What the description step does with the dialog's shared list bindings.
+ * The dialog's shared list bindings for a step that has no list.
  *
- * There is no list to move through, so the arrows are inert and Enter is the
- * skip-through: it advances whether or not anything was typed, subject to the
- * step's own check.
+ * The arrows go inert and Enter does the step's one action, so a step made of
+ * controls rather than rows still answers the key everything else answers.
+ */
+function listlessStepKeybindings(select: VoidFunction): ListNavActions {
+  return { next: () => {}, previous: () => {}, select };
+}
+
+/**
+ * What the description step does with those bindings: Enter is the
+ * skip-through, advancing whether or not anything was typed.
  */
 function descriptionStepKeybindings(advance: VoidFunction): ListNavActions {
-  return { next: () => {}, previous: () => {}, select: advance };
+  return listlessStepKeybindings(advance);
 }
 
 /**
@@ -405,13 +504,27 @@ function DescriptionStep(props: { onContinue: VoidFunction }) {
   );
 }
 
+/**
+ * One row of the date list: a date to fire once at, or the way through to the
+ * repeat picker.
+ *
+ * Modelled as a union rather than appending a fake `DateOption` so the repeat
+ * row cannot be mistaken for a date and submitted as one.
+ */
+type WhenRow =
+  | { kind: 'date'; option: DateOption }
+  | { kind: 'repeat'; label: string; detail?: string };
+
 function WhenList(props: {
   query: () => string;
   /** The firing an edited reminder already has, offered as "Keep current time". */
   current: () => Date | undefined;
+  /** An edited reminder's existing recurrence in words, when it has one. */
+  currentRecurrence: () => string | undefined;
   selectedIndex: () => number;
   setSelectedIndex: (next: number | ((prev: number) => number)) => void;
   onSubmit: (date: Date) => void;
+  onRepeat: VoidFunction;
   setKeybindings: (actions: {
     next: VoidFunction;
     previous: VoidFunction;
@@ -437,32 +550,63 @@ function WhenList(props: {
     return futureDateOptions(rawOptions(), now);
   });
 
+  const rows = createMemo<WhenRow[]>(() => {
+    const recurrence = props.currentRecurrence();
+    const dates: WhenRow[] = dateOptions().map((option, index) =>
+      // A reminder that already repeats has no single "current time" to keep —
+      // its schedule is the recurrence — so the lead option says so instead of
+      // offering the next firing as though that were the whole story.
+      index === 0 && recurrence && !props.query().trim()
+        ? {
+            kind: 'date',
+            option: {
+              ...option,
+              displayText: 'Keep repeating',
+              secondaryText: recurrence,
+            },
+          }
+        : { kind: 'date', option }
+    );
+
+    // Always last, so it never displaces the date someone is reaching for, and
+    // Enter on a date still creates a one-shot in two keystrokes.
+    return [
+      ...dates,
+      {
+        kind: 'repeat',
+        label: recurrence ? 'Change repeat…' : 'Repeat…',
+        detail: recurrence,
+      },
+    ];
+  });
+
+  const activate = (row: WhenRow) => {
+    if (row.kind === 'repeat') return props.onRepeat();
+    props.onSubmit(row.option.date);
+  };
+
   createEffect(
-    on(dateOptions, (options) => {
-      if (options.length === 0) {
-        props.setSelectedIndex(0);
-      } else {
-        props.setSelectedIndex(
-          Math.min(props.selectedIndex(), options.length - 1)
-        );
-      }
+    on(rows, (current) => {
+      props.setSelectedIndex(
+        Math.min(props.selectedIndex(), Math.max(current.length - 1, 0))
+      );
     })
   );
 
   props.setKeybindings({
     next: () => {
-      const len = dateOptions().length;
+      const len = rows().length;
       if (len === 0) return;
       props.setSelectedIndex((prev) => (prev + 1) % len);
     },
     previous: () => {
-      const len = dateOptions().length;
+      const len = rows().length;
       if (len === 0) return;
       props.setSelectedIndex((prev) => (prev - 1 + len) % len);
     },
     select: () => {
-      const selected = dateOptions()[props.selectedIndex()];
-      if (selected) props.onSubmit(selected.date);
+      const selected = rows()[props.selectedIndex()];
+      if (selected) activate(selected);
     },
   });
 
@@ -479,36 +623,29 @@ function WhenList(props: {
     <>
       <div class="p-2 max-h-54 overflow-y-auto overflow-x-hidden scrollbar-hidden">
         <Show
-          when={dateOptions().length > 0}
+          when={dateOptions().length > 0 || !props.query().trim()}
           fallback={
-            <Show
-              when={props.query().trim()}
-              fallback={
-                <CommandMenuEmptyState>
-                  Enter a date, time or duration
-                </CommandMenuEmptyState>
-              }
-            >
-              <CommandMenuEmptyState>
-                No future dates match "{props.query()}"
-              </CommandMenuEmptyState>
-            </Show>
+            <CommandMenuEmptyState>
+              No future dates match "{props.query()}"
+            </CommandMenuEmptyState>
           }
         >
-          <For each={dateOptions()}>
-            {(option, index) => (
+          <For each={rows()}>
+            {(row, index) => (
               <CommandMenuListItem
                 id={`reminder-date-option-${index()}`}
                 selected={isSelected(index())}
-                onClick={() => props.onSubmit(option.date)}
+                onClick={() => activate(row)}
                 onMouseMove={() => props.setSelectedIndex(index())}
                 class="scroll-m-2"
               >
                 <div class="flex-1 text-left">
-                  <p class="text-sm font-medium">{option.displayText}</p>
+                  <p class="text-sm font-medium">
+                    {row.kind === 'date' ? row.option.displayText : row.label}
+                  </p>
                 </div>
                 <span class="text-xs text-ink-muted">
-                  {option.secondaryText}
+                  {row.kind === 'date' ? row.option.secondaryText : row.detail}
                 </span>
               </CommandMenuListItem>
             )}
@@ -531,6 +668,130 @@ function WhenList(props: {
           label="Back"
         />
       </div>
+    </>
+  );
+}
+
+/** The three recurrences the picker offers, in ascending period. */
+const REPEAT_FREQUENCIES: Array<{ value: ScheduleFrequency; label: string }> = [
+  { value: 'day', label: 'Daily' },
+  { value: 'week', label: 'Weekly' },
+  { value: 'month', label: 'Monthly' },
+];
+
+/**
+ * Builds a recurrence: how often, on which days, at what time.
+ *
+ * Deliberately the same shape as the automation schedule editor — frequency,
+ * then the one control that frequency needs, then a time — because it is the
+ * same question, and someone who has set up an automation should not have to
+ * learn a second way to say "every weekday at 9".
+ */
+function RepeatStep(props: {
+  parts: () => CronParts;
+  setParts: (next: CronParts) => void;
+  onSubmit: VoidFunction;
+}) {
+  const update = (patch: Partial<CronParts>) =>
+    props.setParts({ ...props.parts(), ...patch });
+
+  const toggleDay = (value: string) => {
+    const days = props.parts().daysOfWeek;
+    // Never empty: an empty selection builds an every-day cron, which is not
+    // what unticking your last day is asking for.
+    const next = days.includes(value)
+      ? days.filter((day) => day !== value)
+      : [...days, value];
+    if (next.length > 0) update({ daysOfWeek: next });
+  };
+
+  const summary = () => describeCron(props.parts());
+  const isValid = () => isValidTime(props.parts().time);
+
+  return (
+    <>
+      <div class="p-3 space-y-3 max-h-72 overflow-y-auto scrollbar-hidden">
+        <div class="flex gap-1">
+          <For each={REPEAT_FREQUENCIES}>
+            {(option) => (
+              <button
+                type="button"
+                class={cn(
+                  'flex-1 rounded px-2 py-1.5 text-sm border',
+                  props.parts().frequency === option.value
+                    ? 'bg-active border-edge text-ink'
+                    : 'border-edge-muted text-ink-muted hover:text-ink'
+                )}
+                onClick={() => update({ frequency: option.value })}
+              >
+                {option.label}
+              </button>
+            )}
+          </For>
+        </div>
+
+        <Show when={props.parts().frequency === 'week'}>
+          <div class="flex gap-1">
+            <For each={WEEKDAY_OPTIONS}>
+              {(day) => (
+                <button
+                  type="button"
+                  class={cn(
+                    'flex-1 rounded px-1 py-1.5 text-xs border',
+                    props.parts().daysOfWeek.includes(day.value)
+                      ? 'bg-active border-edge text-ink'
+                      : 'border-edge-muted text-ink-muted hover:text-ink'
+                  )}
+                  aria-pressed={props.parts().daysOfWeek.includes(day.value)}
+                  onClick={() => toggleDay(day.value)}
+                >
+                  {day.label}
+                </button>
+              )}
+            </For>
+          </div>
+        </Show>
+
+        <div class="flex items-center gap-2">
+          <Show when={props.parts().frequency === 'month'}>
+            <label class="flex items-center gap-2 text-sm text-ink-muted">
+              Day
+              <input
+                type="number"
+                min="1"
+                max="31"
+                class="w-16 rounded-sm border border-edge-muted bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent/20"
+                value={props.parts().dayOfMonth}
+                onInput={(e) => update({ dayOfMonth: e.currentTarget.value })}
+              />
+            </label>
+          </Show>
+          <label class="flex items-center gap-2 text-sm text-ink-muted">
+            At
+            <input
+              type="time"
+              class="rounded-sm border border-edge-muted bg-surface px-2 py-1.5 text-sm text-ink outline-none focus:border-accent/20"
+              value={props.parts().time}
+              onInput={(e) => update({ time: e.currentTarget.value })}
+            />
+          </label>
+        </div>
+      </div>
+
+      <CommandMenuShell.Footer class="gap-3 py-3">
+        <span class="text-xs text-ink-muted truncate">{summary()}</span>
+        <Button
+          variant="active"
+          size="sm"
+          depth={3}
+          class="ml-auto gap-3 rounded-lg border-0"
+          disabled={!isValid()}
+          onClick={props.onSubmit}
+        >
+          Set reminder
+          <Hotkey shortcut="enter" theme="current" />
+        </Button>
+      </CommandMenuShell.Footer>
     </>
   );
 }

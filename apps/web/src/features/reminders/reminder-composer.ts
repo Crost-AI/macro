@@ -1,5 +1,6 @@
 import { createControlledOpenSignal } from '@core/util/createControlledOpenSignal';
 import type { EntityData } from '@entity';
+import type { ReminderSchedule } from '@service-storage/generated/schemas/reminderSchedule';
 import { batch } from 'solid-js';
 import { createStore, reconcile } from 'solid-js/store';
 
@@ -18,8 +19,16 @@ export interface ReminderDraft {
   id: string;
   /** Its current description, prefilled into the first step. */
   description: string;
-  /** Its current firing, offered as "Keep current time". */
+  /** Its next firing, offered as "Keep current time". */
   remindAt: Date;
+  /**
+   * Its current schedule, which the edit is diffed against.
+   *
+   * Distinct from `remindAt` because a recurring reminder is not its next
+   * firing: two reminders can come due at the same instant and still be
+   * different schedules, and only this says which.
+   */
+  schedule: ReminderSchedule;
   /** Whether the owner has marked it done, which a reschedule has to undo. */
   completed: boolean;
   /**

@@ -3,18 +3,25 @@ import type { EntityData } from '@entity';
 import { describe, expect, it } from 'vitest';
 
 import {
+  defaultRepeatParts,
+  describeReminderSchedule,
   formatReminderWhen,
   futureDateOptions,
+  isRecurring,
   onceSchedule,
   REMINDER_DEFAULT_TIME,
   REMINDER_DESCRIPTION_MAX_LENGTH,
+  recurringSchedule,
   reminderDefaultOptions,
   reminderDescriptionFor,
   reminderDescriptionForReference,
   reminderEditOptions,
   reminderEditPatch,
+  repeatPartsFromDate,
+  repeatPartsFromSchedule,
   resolveEditedDescription,
   resolveReminderDescription,
+  sameSchedule,
 } from './reminder-schedule';
 
 const option = (id: string, date: Date): DateOption => ({
@@ -397,7 +404,7 @@ describe('reminderEditPatch', () => {
   const remindAt = new Date('2026-08-09T09:00:00.000Z');
   const original = {
     description: 'Chase the contract',
-    remindAt,
+    schedule: onceSchedule(remindAt),
     completed: false,
   };
 
@@ -407,7 +414,7 @@ describe('reminderEditPatch', () => {
     expect(
       reminderEditPatch(original, {
         description: 'Chase the contract',
-        remindAt: new Date(remindAt),
+        schedule: onceSchedule(new Date(remindAt)),
       })
     ).toBeUndefined();
   });
@@ -416,7 +423,7 @@ describe('reminderEditPatch', () => {
     expect(
       reminderEditPatch(original, {
         description: 'Chase the signed contract',
-        remindAt: new Date(remindAt),
+        schedule: onceSchedule(new Date(remindAt)),
       })
     ).toEqual({ description: 'Chase the signed contract' });
   });
@@ -427,7 +434,7 @@ describe('reminderEditPatch', () => {
     expect(
       reminderEditPatch(original, {
         description: 'Chase the contract',
-        remindAt: next,
+        schedule: onceSchedule(next),
       })
     ).toEqual({ schedule: { type: 'once', remindAt: next.toISOString() } });
   });
@@ -436,7 +443,10 @@ describe('reminderEditPatch', () => {
     const next = new Date('2026-08-10T09:00:00.000Z');
 
     expect(
-      reminderEditPatch(original, { description: 'Follow up', remindAt: next })
+      reminderEditPatch(original, {
+        description: 'Follow up',
+        schedule: onceSchedule(next),
+      })
     ).toEqual({
       description: 'Follow up',
       schedule: { type: 'once', remindAt: next.toISOString() },
@@ -447,7 +457,7 @@ describe('reminderEditPatch', () => {
     expect(
       reminderEditPatch(original, {
         description: '  Chase the contract  ',
-        remindAt: new Date(remindAt),
+        schedule: onceSchedule(new Date(remindAt)),
       })
     ).toBeUndefined();
   });
@@ -458,7 +468,7 @@ describe('reminderEditPatch', () => {
     expect(
       reminderEditPatch(original, {
         description: '   ',
-        remindAt: new Date(remindAt),
+        schedule: onceSchedule(new Date(remindAt)),
       })
     ).toBeUndefined();
   });
@@ -466,7 +476,7 @@ describe('reminderEditPatch', () => {
   it('caps an over-long description at the API limit', () => {
     const patch = reminderEditPatch(original, {
       description: 'a'.repeat(REMINDER_DESCRIPTION_MAX_LENGTH + 50),
-      remindAt: new Date(remindAt),
+      schedule: onceSchedule(new Date(remindAt)),
     });
 
     expect(patch?.description).toHaveLength(REMINDER_DESCRIPTION_MAX_LENGTH);
@@ -480,7 +490,7 @@ describe('reminderEditPatch', () => {
     expect(
       reminderEditPatch(
         { ...original, completed: true },
-        { description: 'Chase the contract', remindAt: next }
+        { description: 'Chase the contract', schedule: onceSchedule(next) }
       )
     ).toEqual({
       schedule: { type: 'once', remindAt: next.toISOString() },
@@ -493,7 +503,7 @@ describe('reminderEditPatch', () => {
     expect(
       reminderEditPatch(
         { ...original, completed: true },
-        { description: 'Follow up', remindAt: new Date(remindAt) }
+        { description: 'Follow up', schedule: onceSchedule(new Date(remindAt)) }
       )
     ).toEqual({ description: 'Follow up' });
   });
@@ -578,5 +588,218 @@ describe('resolveEditedDescription', () => {
     expect(resolveEditedDescription(long, 'Chase the contract')).toHaveLength(
       REMINDER_DESCRIPTION_MAX_LENGTH
     );
+  });
+});
+
+describe('repeatPartsFromDate', () => {
+  // The backend's `cron` crate numbers day-of-week 1=Sunday, while JS
+  // `Date.getDay()` numbers it 0=Sunday. Every value here is therefore one
+  // higher than the JS one, and getting it wrong lands the reminder a day off —
+  // which nobody notices until a week after it ships.
+  it('maps each weekday to the backend numbering', () => {
+    // 2026-08-09 is a Sunday, so this walks a full week from Sunday.
+    const expected = [
+      ['2026-08-09', '1'], // Sunday
+      ['2026-08-10', '2'], // Monday
+      ['2026-08-11', '3'],
+      ['2026-08-12', '4'],
+      ['2026-08-13', '5'],
+      ['2026-08-14', '6'],
+      ['2026-08-15', '7'], // Saturday
+    ] as const;
+
+    for (const [day, cronDow] of expected) {
+      // Local noon, so the date cannot slide across a day boundary via UTC.
+      const parts = repeatPartsFromDate(new Date(`${day}T12:00:00`));
+      expect(parts.daysOfWeek).toEqual([cronDow]);
+    }
+  });
+
+  it('takes the time of day and day of month from the date', () => {
+    const parts = repeatPartsFromDate(new Date('2026-08-17T14:05:00'));
+
+    expect(parts.time).toBe('14:05');
+    expect(parts.dayOfMonth).toBe('17');
+  });
+
+  it('defaults to weekly, the middle of the three frequencies', () => {
+    expect(repeatPartsFromDate(new Date('2026-08-17T09:00:00')).frequency).toBe(
+      'week'
+    );
+  });
+});
+
+describe('defaultRepeatParts', () => {
+  it('starts a new recurrence at the reminder morning default', () => {
+    // Not the current time: a repeat picked at 4pm should still default to the
+    // morning, the same way a bare date does.
+    const parts = defaultRepeatParts(new Date('2026-08-17T16:42:00'));
+
+    expect(parts.time).toBe(
+      `${String(REMINDER_DEFAULT_TIME.hours).padStart(2, '0')}:${String(REMINDER_DEFAULT_TIME.minutes).padStart(2, '0')}`
+    );
+  });
+});
+
+describe('recurringSchedule', () => {
+  it('builds a cron schedule carrying the timezone it was built in', () => {
+    const schedule = recurringSchedule(
+      repeatPartsFromDate(new Date('2026-08-10T09:00:00'), 'day'),
+      'America/Denver'
+    );
+
+    expect(schedule).toEqual({
+      type: 'recurring',
+      cron: '0 0 9 * * *',
+      timezone: 'America/Denver',
+    });
+  });
+
+  it('builds a weekly cron on the date it was seeded from', () => {
+    // 2026-08-10 is a Monday, which is 2 in the backend's numbering.
+    const schedule = recurringSchedule(
+      repeatPartsFromDate(new Date('2026-08-10T09:00:00'), 'week'),
+      'UTC'
+    );
+
+    expect(isRecurring(schedule) && schedule.cron).toBe('0 0 9 * * 2');
+  });
+});
+
+describe('repeatPartsFromSchedule', () => {
+  it('reads an existing recurrence back into picker parts', () => {
+    const parts = repeatPartsFromSchedule({
+      type: 'recurring',
+      cron: '0 30 14 * * 2-6',
+      timezone: 'UTC',
+    });
+
+    expect(parts.frequency).toBe('week');
+    expect(parts.time).toBe('14:30');
+    expect(parts.daysOfWeek).toEqual(['2', '3', '4', '5', '6']);
+  });
+
+  it('seeds from the firing when the reminder does not repeat yet', () => {
+    // Turning a one-shot into a recurrence should start from the time it was
+    // already set for, not from an unrelated default.
+    const parts = repeatPartsFromSchedule({
+      type: 'once',
+      remindAt: new Date('2026-08-10T07:15:00').toISOString(),
+    });
+
+    expect(parts.time).toBe('07:15');
+  });
+});
+
+describe('describeReminderSchedule', () => {
+  it('describes a recurrence, capitalized for a row', () => {
+    const described = describeReminderSchedule({
+      type: 'recurring',
+      cron: '0 0 9 * * 2-6',
+      timezone: 'UTC',
+    });
+
+    expect(described).toMatch(/^Weekdays at /);
+  });
+
+  it('says nothing for a one-shot, whose date is already shown', () => {
+    expect(
+      describeReminderSchedule(onceSchedule(new Date('2026-08-10T09:00:00')))
+    ).toBeUndefined();
+  });
+});
+
+describe('sameSchedule', () => {
+  const cron = (expr: string, timezone = 'UTC') =>
+    ({ type: 'recurring', cron: expr, timezone }) as const;
+
+  it('matches identical one-shots written differently', () => {
+    // The same instant with a different offset and precision is not a change,
+    // and treating it as one would re-send a schedule the API then rejects for
+    // being in the past.
+    expect(
+      sameSchedule(
+        { type: 'once', remindAt: '2026-08-10T09:00:00.000Z' },
+        { type: 'once', remindAt: '2026-08-10T05:00:00-04:00' }
+      )
+    ).toBe(true);
+  });
+
+  it('separates different instants', () => {
+    expect(
+      sameSchedule(
+        { type: 'once', remindAt: '2026-08-10T09:00:00.000Z' },
+        { type: 'once', remindAt: '2026-08-10T10:00:00.000Z' }
+      )
+    ).toBe(false);
+  });
+
+  it('matches identical recurrences', () => {
+    expect(sameSchedule(cron('0 0 9 * * *'), cron('0 0 9 * * *'))).toBe(true);
+  });
+
+  it('separates recurrences differing only by timezone', () => {
+    // Same wall-clock, different instant — a real change.
+    expect(
+      sameSchedule(cron('0 0 9 * * *'), cron('0 0 9 * * *', 'Asia/Tokyo'))
+    ).toBe(false);
+  });
+
+  it('separates the two kinds of schedule', () => {
+    expect(
+      sameSchedule(cron('0 0 9 * * *'), {
+        type: 'once',
+        remindAt: '2026-08-10T09:00:00.000Z',
+      })
+    ).toBe(false);
+  });
+});
+
+describe('reminderEditPatch with recurrences', () => {
+  const weekdays = {
+    type: 'recurring' as const,
+    cron: '0 0 9 * * 2-6',
+    timezone: 'UTC',
+  };
+  const original = {
+    description: 'Standup',
+    schedule: weekdays,
+    completed: false,
+  };
+
+  it('sends nothing when the recurrence is unchanged', () => {
+    expect(
+      reminderEditPatch(original, {
+        description: 'Standup',
+        schedule: weekdays,
+      })
+    ).toBeUndefined();
+  });
+
+  it('sends the new recurrence when it changes', () => {
+    const daily = { ...weekdays, cron: '0 0 9 * * *' };
+
+    expect(
+      reminderEditPatch(original, { description: 'Standup', schedule: daily })
+    ).toEqual({ schedule: daily });
+  });
+
+  it('turns a recurrence into a one-shot when asked', () => {
+    const once = onceSchedule(new Date('2026-09-01T09:00:00.000Z'));
+
+    expect(
+      reminderEditPatch(original, { description: 'Standup', schedule: once })
+    ).toEqual({ schedule: once });
+  });
+
+  it('clears the done flag when a finished series is given a new schedule', () => {
+    const daily = { ...weekdays, cron: '0 0 9 * * *' };
+
+    expect(
+      reminderEditPatch(
+        { ...original, completed: true },
+        { description: 'Standup', schedule: daily }
+      )
+    ).toEqual({ schedule: daily, completed: false });
   });
 });

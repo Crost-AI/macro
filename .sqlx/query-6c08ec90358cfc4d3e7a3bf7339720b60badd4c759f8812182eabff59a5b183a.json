@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT r.id, r.next_run_at\n            FROM reminder r\n            WHERE r.enabled\n              AND r.completed_at IS NULL\n              AND r.next_run_at <= $1\n              AND NOT EXISTS (\n                  SELECT 1\n                  FROM reminder_occurrence o\n                  WHERE o.reminder_id = r.id\n                    AND o.scheduled_for = r.next_run_at\n                    AND o.sent_at IS NOT NULL\n              )\n            ORDER BY r.next_run_at\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "next_run_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "6c08ec90358cfc4d3e7a3bf7339720b60badd4c759f8812182eabff59a5b183a"
+}
