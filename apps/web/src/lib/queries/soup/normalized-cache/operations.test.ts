@@ -223,13 +223,16 @@ describe('refetchSoupEntity transport', () => {
     await refetchSoupEntity('doc-1', 'document');
 
     expect(fetchGraphqlSoupMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        initial: expect.objectContaining({
-          filters: expect.objectContaining({
-            documentFilter: { literal: { id: 'doc-1' } },
+      expect.anything(),
+      {
+        input: expect.objectContaining({
+          initial: expect.objectContaining({
+            filters: expect.objectContaining({
+              documentFilter: { literal: { id: 'doc-1' } },
+            }),
           }),
         }),
-      }),
+      },
       { allowOfflineFallback: false }
     );
     expect(getSoupItemsMock).not.toHaveBeenCalled();

@@ -7,6 +7,7 @@ import type {
   SoupApiItem,
 } from '@service-storage/generated/schemas';
 import type { SoupPage } from '@service-storage/generated/schemas/soupPage';
+import { SoupDocument } from '@service-storage/graphql/generated/graphql';
 import {
   type InfiniteData,
   partialMatchKey,
@@ -516,7 +517,12 @@ export async function refetchSoupEntity(
         '@service-storage/graphql-soup'
       );
       page = await fetchGraphqlSoup(
-        makeGraphqlEntitySoupInput([{ id: entityId, type: entityType }]),
+        SoupDocument,
+        {
+          input: makeGraphqlEntitySoupInput([
+            { id: entityId, type: entityType },
+          ]),
+        },
         { allowOfflineFallback: false }
       );
     } catch (error) {
