@@ -16,6 +16,7 @@ use crate::domain::{
 use ai_toolset::{
     AsyncTool, AsyncToolCollection, RequestContext, ServiceContext, ToolCallError, ToolResult,
 };
+use ai_toolset::{ToolAnnotated, ToolAnnotations};
 use async_trait::async_trait;
 use cowlike::CowLike;
 use macro_user_id::user_id::MacroUserIdStr;
@@ -152,6 +153,10 @@ pub struct ListNotificationsResponse {
     pub has_more: bool,
 }
 
+impl ToolAnnotated for ListNotifications {
+    const ANNOTATIONS: ToolAnnotations = ToolAnnotations::read_only("List notifications");
+}
+
 #[async_trait]
 impl<T> AsyncTool<NotificationToolContext<T>> for ListNotifications
 where
@@ -225,6 +230,11 @@ pub struct MarkNotificationsSeen {
     pub notification_ids: Vec<Uuid>,
 }
 
+impl ToolAnnotated for MarkNotificationsSeen {
+    const ANNOTATIONS: ToolAnnotations =
+        ToolAnnotations::additive("Mark notifications seen").with_idempotent();
+}
+
 #[async_trait]
 impl<T> AsyncTool<NotificationToolContext<T>> for MarkNotificationsSeen
 where
@@ -277,6 +287,11 @@ pub struct MarkNotificationsDone {
     /// Whether to mark as done (true) or not done (false). Defaults to true.
     #[schemars(description = "Whether to mark as done (true) or not done (false).")]
     pub done: bool,
+}
+
+impl ToolAnnotated for MarkNotificationsDone {
+    const ANNOTATIONS: ToolAnnotations =
+        ToolAnnotations::additive("Mark notifications done").with_idempotent();
 }
 
 #[async_trait]
