@@ -3,10 +3,10 @@
 # Invoked by deploy/docker-compose.selfhost.yml or directly from the repo root.
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="${MACRO_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$REPO_ROOT"
 
-ENV_FILE="${MACRO_ENV_FILE:-deploy/.env}"
+ENV_FILE="${MACRO_ENV_FILE:-${REPO_ROOT}/deploy/.env}"
 if [[ -f "$ENV_FILE" ]]; then
   set -a
   # shellcheck disable=SC1090
@@ -18,9 +18,11 @@ INSTANCE="${MACRO_INSTANCE:-selfhost}"
 PORT_BASE="${MACRO_PORT_BASE:-31000}"
 SEED="${MACRO_SELFHOST_SEED:-true}"
 SEED_FILE="${MACRO_SELFHOST_SEED_FILE:-seed/scenarios/team-perms.json}"
+STACK_PROJECT="${COMPOSE_PROJECT_NAME:-macro-${INSTANCE}}"
 
-export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-macro-${INSTANCE}}"
+export COMPOSE_PROJECT_NAME="$STACK_PROJECT"
 export MACRO_ENV_FILE="${MACRO_ENV_FILE:-${REPO_ROOT}/deploy/.env}"
+export MACRO_REPO_ROOT="$REPO_ROOT"
 
 # W0.1 gate-3: librdkafka needs curl headers on macOS arm64 cross-builds.
 if [[ -z "${CFLAGS:-}" && "$(uname -s)" == "Darwin" && -d /opt/homebrew/opt/curl/include ]]; then
@@ -39,7 +41,7 @@ log() {
   printf '[macro-selfhost] %s\n' "$*"
 }
 
-log "preflight (instance=${INSTANCE}, port-base=${PORT_BASE})"
+log "preflight (repo=${REPO_ROOT}, instance=${INSTANCE}, port-base=${PORT_BASE})"
 run_nix just doctor-local --instance "$INSTANCE" --port-base "$PORT_BASE"
 
 log "installing frontend deps (apps/web)"
@@ -54,9 +56,9 @@ run_nix just stack up --no-doppler --instance "$INSTANCE" --port-base "$PORT_BAS
 
 if [[ "$SEED" == "true" || "$SEED" == "1" ]]; then
   log "seeding first-run admin scenario (${SEED_FILE})"
-  run_nix just seed-scenario --instance "$INSTANCE" --port-base "$PORT_BASE" apply --file "$SEED_FILE" || {
+  if ! run_nix just seed-scenario --instance "$INSTANCE" --port-base "$PORT_BASE" apply --file "$SEED_FILE"; then
     log "warning: seed apply failed (stack may already be seeded)"
-  }
+  fi
 fi
 
 PROXY_PORT=$((PORT_BASE + 9))
@@ -65,8 +67,7 @@ log "  app:      http://localhost:${PROXY_PORT}/app/"
 log "  mailpit:  http://localhost:${PROXY_PORT}/mailpit/"
 log "  status:   just stack status --json --instance ${INSTANCE} --port-base ${PORT_BASE}"
 
-# When run under compose, keep the orchestrator container alive so `docker compose up` stays attached.
 if [[ -n "${MACRO_SELFHOST_KEEPALIVE:-}" ]]; then
   log "keepalive enabled — tailing stack logs (Ctrl+C to detach; containers keep running)"
-  run_nix docker compose -p "macro-${INSTANCE}" logs -f proxy authentication-service document_storage_service || true
+  docker compose -p "$STACK_PROJECT" logs -f proxy authentication-service document_storage_service
 fi

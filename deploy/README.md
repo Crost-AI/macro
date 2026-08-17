@@ -14,7 +14,7 @@ This path closes the W0.1 gate-3 gaps: deterministic ports, bundled env stubs, L
    ```
 3. **Disk & RAM** — allow ~20 GB free disk and 8 GB RAM for the full stack.
 
-The compose runner installs **Nix** inside its container on first boot. You do not need Nix on the host.
+The compose runner image ships Rust, zigbuild, bun, and `just` (no host Nix required). First boot compiles service binaries and can take several minutes.
 
 ### macOS notes
 
@@ -80,14 +80,10 @@ nix develop --command just stack down --instance selfhost --port-base 31000
 
 ```bash
 ./deploy/backup.sh
-# or: ./deploy/backup.sh /path/to/backup-dir
+# or: ./deploy/backup.sh deploy/backups/manual
 ```
 
-Writes:
-
-- `macrodb.sql` — Postgres dump
-- `*.tar.gz` — archives of Postgres, Redis, OpenSearch, Kafka, and FusionAuth volumes
-- `manifest.txt` — instance metadata
+Writes `macrodb.sql` (via the running Postgres container) plus tarballs for the six external volumes xtask creates (`macro_postgres_data_<instance>`, etc.). Requires the stack to be running.
 
 ## Health check
 

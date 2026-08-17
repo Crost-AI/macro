@@ -3,7 +3,11 @@
 # Brings up the full Macro product via the stack orchestrator (`just stack up`).
 # Requires Docker Engine on the host (socket mounted into the runner).
 #
-# Quick start: see deploy/README.md
+# Run from the repository root (see deploy/README.md):
+#   docker compose -f deploy/docker-compose.selfhost.yml up
+#
+# The repo bind-mount uses the host path (${PWD}) so inner `docker compose`
+# invocations from xtask resolve the same checkout on the host daemon.
 
 name: macro-selfhost
 
@@ -18,14 +22,15 @@ services:
     environment:
       MACRO_INSTANCE: ${MACRO_INSTANCE:-selfhost}
       MACRO_PORT_BASE: ${MACRO_PORT_BASE:-31000}
-      MACRO_ENV_FILE: /workspace/deploy/.env
+      MACRO_REPO_ROOT: ${PWD}
+      MACRO_ENV_FILE: ${PWD}/deploy/.env
       MACRO_SELFHOST_KEEPALIVE: ${MACRO_SELFHOST_KEEPALIVE:-true}
       COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-macro-selfhost}
     volumes:
-      - ..:/workspace
+      - ${PWD}:${PWD}
       - /var/run/docker.sock:/var/run/docker.sock
-    working_dir: /workspace
-    restart: unless-stopped
+    working_dir: ${PWD}
+    restart: "no"
 
 networks:
   default:

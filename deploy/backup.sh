@@ -15,9 +15,8 @@ fi
 
 INSTANCE="${MACRO_INSTANCE:-selfhost}"
 PORT_BASE="${MACRO_PORT_BASE:-31000}"
-PROJECT="${COMPOSE_PROJECT_NAME:-macro-${INSTANCE}}"
+STACK_PROJECT="${COMPOSE_PROJECT_NAME:-macro-${INSTANCE}}"
 BACKUP_DIR="${1:-deploy/backups/$(date -u +%Y%m%dT%H%M%SZ)}"
-POSTGRES_PORT=$((PORT_BASE + 0))
 
 mkdir -p "$BACKUP_DIR"
 
@@ -25,55 +24,70 @@ log() {
   printf '[macro-backup] %s\n' "$*"
 }
 
-log "writing backups to ${BACKUP_DIR}"
-
-# --- Postgres (macrodb) ---
-PG_URL="${MACRO_DB_URL:-postgres://user:password@localhost:${POSTGRES_PORT}/macrodb}"
-log "pg_dump -> ${BACKUP_DIR}/macrodb.sql"
-if command -v pg_dump >/dev/null 2>&1; then
-  pg_dump "$PG_URL" > "${BACKUP_DIR}/macrodb.sql"
-else
-  docker run --rm --network host postgres:16-alpine \
-    pg_dump "$PG_URL" > "${BACKUP_DIR}/macrodb.sql"
-fi
-
-# --- Named Docker volumes for this instance ---
-volume_names() {
-  local suffix="$1"
+# xtask creates external volumes named macro_<kind>_<instance> (no compose prefix).
+volume_name() {
+  local base="$1"
   if [[ "$INSTANCE" == "macro" ]]; then
-    echo "$suffix"
+    echo "$base"
   else
-    echo "${suffix}_${INSTANCE}"
+    echo "${base}_${INSTANCE}"
   fi
 }
 
+postgres_container() {
+  local id
+  id="$(docker ps \
+    --filter "label=com.docker.compose.project=${STACK_PROJECT}" \
+    --filter "label=com.docker.compose.service=postgres" \
+    -q | head -1)"
+  if [[ -z "$id" ]]; then
+    id="$(docker ps --filter "name=${STACK_PROJECT}-postgres" -q | head -1)"
+  fi
+  echo "$id"
+}
+
+log "writing backups to ${BACKUP_DIR}"
+
+# --- Postgres (macrodb) via the running instance container ---
+PG_CONTAINER="$(postgres_container)"
+if [[ -z "$PG_CONTAINER" ]]; then
+  echo "error: postgres container not found for project ${STACK_PROJECT}" >&2
+  exit 1
+fi
+
+log "pg_dump via container ${PG_CONTAINER} -> ${BACKUP_DIR}/macrodb.sql"
+docker exec "$PG_CONTAINER" pg_dump -U user macrodb > "${BACKUP_DIR}/macrodb.sql"
+
+# --- External Docker volumes (xtask Instance::volume_*) ---
+ARCHIVED=0
 for vol in \
-  "$(volume_names macro_postgres_data)" \
-  "$(volume_names macro_redis_data)" \
-  "$(volume_names macro_opensearch_data)" \
-  "$(volume_names macro_kafka_data)" \
-  "$(volume_names fusionauth_db_data)" \
-  "$(volume_names fusionauth_config)"; do
-  full="${PROJECT}_${vol}"
-  if docker volume inspect "$full" >/dev/null 2>&1; then
+  "$(volume_name macro_postgres_data)" \
+  "$(volume_name macro_redis_data)" \
+  "$(volume_name macro_opensearch_data)" \
+  "$(volume_name macro_kafka_data)" \
+  "$(volume_name fusionauth_db_data)" \
+  "$(volume_name fusionauth_config)"; do
+  if docker volume inspect "$vol" >/dev/null 2>&1; then
     out="${BACKUP_DIR}/${vol}.tar.gz"
-    log "volume ${full} -> ${out}"
+    log "volume ${vol} -> ${out}"
     docker run --rm \
-      -v "${full}:/data:ro" \
+      -v "${vol}:/data:ro" \
       -v "${BACKUP_DIR}:/backup" \
       alpine:3.20 \
       tar -czf "/backup/${vol}.tar.gz" -C /data .
+    ARCHIVED=$((ARCHIVED + 1))
   else
-    log "skip missing volume ${full}"
+    log "skip missing volume ${vol}"
   fi
 done
 
 cat > "${BACKUP_DIR}/manifest.txt" <<EOF
 instance=${INSTANCE}
 port_base=${PORT_BASE}
-project=${PROJECT}
+stack_project=${STACK_PROJECT}
 timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-postgres_url=${PG_URL}
+postgres_container=${PG_CONTAINER}
+volumes_archived=${ARCHIVED}
 EOF
 
-log "backup complete: ${BACKUP_DIR}"
+log "backup complete: ${BACKUP_DIR} (${ARCHIVED} volume archives + macrodb.sql)"

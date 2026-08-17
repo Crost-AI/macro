@@ -30,7 +30,8 @@ if ! git remote get-url "$UPSTREAM_REMOTE" &>/dev/null; then
   git remote add "$UPSTREAM_REMOTE" "$UPSTREAM_URL"
 fi
 
-git fetch "$UPSTREAM_REMOTE" --tags --force
+# Fetch only the requested tag (avoid pulling every upstream branch).
+git fetch "$UPSTREAM_REMOTE" "refs/tags/${TAG}:refs/tags/${TAG}" --force
 
 resolve_ref() {
   local ref="$1"
@@ -105,8 +106,8 @@ if ! git rebase --onto "$NEW_BASE_COMMIT" "$OLD_BASE_COMMIT"; then
 fi
 
 echo ""
-echo "=== git range-diff ${OLD_BASE_COMMIT}..${NEW_BASE_COMMIT} ${OLD_BASE_COMMIT}..${OLD_HEAD} ==="
-git range-diff "${OLD_BASE_COMMIT}" "${NEW_BASE_COMMIT}" "${OLD_BASE_COMMIT}" "${OLD_HEAD}" || true
+echo "=== git range-diff ${OLD_BASE_COMMIT}..${OLD_HEAD} ${NEW_BASE_COMMIT}..HEAD ==="
+git range-diff "${OLD_BASE_COMMIT}..${OLD_HEAD}" "${NEW_BASE_COMMIT}..HEAD" || true
 
 echo "$TAG" > "$BASE_TAG_FILE"
 echo ""
