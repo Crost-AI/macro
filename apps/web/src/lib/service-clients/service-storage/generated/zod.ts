@@ -7,167 +7,6 @@
 import * as zod from 'zod';
 
 /**
- * @deprecated
- * @summary Gets the users recent activities
- */
-export const getRecentActivityHandlerQueryParams = zod.object({
-  limit: zod
-    .number()
-    .describe('The maximum number of items to retreive. Default 10, max 100.'),
-  offset: zod.number().describe('The offset to start from. Default 0.'),
-});
-
-export const getRecentActivityHandlerResponse = zod.object({
-  data: zod
-    .union([
-      zod.null(),
-      zod.object({
-        next_offset: zod
-          .number()
-          .nullish()
-          .describe('The next offset to be used if there is one'),
-        recent: zod
-          .array(
-            zod.union([
-              zod.object({
-                Document: zod.object({
-                  branchedFromId: zod
-                    .string()
-                    .nullish()
-                    .describe(
-                      'The id of the document this document branched from'
-                    ),
-                  branchedFromVersionId: zod
-                    .number()
-                    .nullish()
-                    .describe(
-                      'The id of the version this document branched from\nThis could be either DocumentInstance or DocumentBom id depending on\nthe file type'
-                    ),
-                  createdAt: zod.iso
-                    .datetime({})
-                    .nullish()
-                    .describe('The time the document was created'),
-                  deletedAt: zod.iso
-                    .datetime({})
-                    .nullish()
-                    .describe('The time the document was deleted'),
-                  documentFamilyId: zod
-                    .number()
-                    .nullish()
-                    .describe(
-                      'The id of the document family this document belongs to'
-                    ),
-                  documentVersionId: zod
-                    .number()
-                    .describe(
-                      'The version of the document\nThis could be the document_instance_id or document_bom_id depending on\nthe file type'
-                    ),
-                  fileType: zod
-                    .string()
-                    .nullish()
-                    .describe('The file type of the document (e.g. pdf, docx)'),
-                  id: zod.string().describe('The document id'),
-                  name: zod.string().describe('The name of the document'),
-                  owner: zod.string().describe('The owner of the document'),
-                  projectId: zod
-                    .string()
-                    .nullish()
-                    .describe(
-                      'The id of the project that this document belongs to'
-                    ),
-                  sha: zod
-                    .string()
-                    .nullish()
-                    .describe(
-                      'If the document is a PDF, this is the SHA of the pdf\nIf the document is a DOCX, this will not be present'
-                    ),
-                  subType: zod
-                    .union([
-                      zod.null(),
-                      zod
-                        .union([
-                          zod
-                            .object({
-                              is_completed: zod
-                                .boolean()
-                                .describe(
-                                  'Whether the task is completed.\nTrue if the Status property is set to \"Completed\".'
-                                ),
-                              type: zod.enum(['task']),
-                            })
-                            .describe(
-                              'A task document with its associated properties'
-                            ),
-                          zod
-                            .object({
-                              type: zod.enum(['snippet']),
-                            })
-                            .describe('A snippet document — reusable markdown'),
-                          zod
-                            .object({
-                              type: zod.enum(['skill']),
-                            })
-                            .describe(
-                              'A skill document — markdown instructions for AI'
-                            ),
-                        ])
-                        .describe(
-                          'Sub type of a document with associated properties encoded in each variant.\nThis ensures type-safety: task properties only exist when the document is a task.'
-                        ),
-                    ])
-                    .optional(),
-                  updatedAt: zod.iso
-                    .datetime({})
-                    .nullish()
-                    .describe(
-                      'The time the document instance \/ document BOM was updated'
-                    ),
-                  type: zod.enum(['document']),
-                }),
-              }),
-              zod.object({
-                Chat: zod.object({
-                  createdAt: zod.iso
-                    .datetime({})
-                    .nullish()
-                    .describe('The time the chat was created'),
-                  deletedAt: zod.iso
-                    .datetime({})
-                    .nullish()
-                    .describe('The time the chat was deleted'),
-                  id: zod.string().describe('The chat uuid'),
-                  isPersistent: zod.boolean(),
-                  model: zod
-                    .string()
-                    .nullish()
-                    .describe('The model used to generate the chat'),
-                  name: zod.string().describe('The name of the chat'),
-                  projectId: zod
-                    .string()
-                    .nullish()
-                    .describe('The project id of the chat'),
-                  tokenCount: zod.number().nullish(),
-                  updatedAt: zod.iso
-                    .datetime({})
-                    .nullish()
-                    .describe('The time the chat was last updated'),
-                  userId: zod.string().describe('Who the chat belongs to'),
-                  type: zod.enum(['chat']),
-                }),
-              }),
-            ])
-          )
-          .describe('The activities returned from the query'),
-        total: zod
-          .number()
-          .describe('The total number of activities the user has'),
-      }),
-    ])
-    .optional(),
-  error: zod.boolean().describe('Indicates if an error occurred'),
-});
-
-/**
  * @summary Deletes a single unthreaded anchor for a document
 If you need to delete a threaded anchor, see the delete comment handler
  */
@@ -928,6 +767,8 @@ export const listOccurrencesQueryParams = zod.object({
     .describe('Opaque continuation cursor returned by the previous page.'),
 });
 
+export const listOccurrencesResponseItemsItemEventRemindersOverridesItemMinutesMin = 0;
+
 export const listOccurrencesResponseItemsItemEventSequenceMin = 0;
 
 export const listOccurrencesResponse = zod
@@ -980,6 +821,16 @@ export const listOccurrencesResponse = zod
                 .describe(
                   'Calendar the canonical source belongs to, when known. Absent only in\nprojections stored before calendars were attributed.'
                 ),
+              conferenceProvider: zod
+                .union([
+                  zod.null(),
+                  zod
+                    .enum(['google_meet', 'other'])
+                    .describe(
+                      "The conferencing system backing an event's join URL.\n\nMacro generates only Google Meet conferences, so this distinguishes one it\ncreated from a third party's — Zoom and friends arriving as `addOn`\nconference data, or a legacy classic Hangout. Clients use it to label the\nconference and to tell whether the Meet toggle reflects a Macro-managed\nconference.\n\nIt does not gate mutation. An explicit request replaces or detaches any\nconference, third-party included, exactly as deleting the event would;\nwhat protects a conference is that omitting the field leaves it untouched,\nso an unrelated edit never disturbs it."
+                    ),
+                ])
+                .optional(),
               conferenceUrl: zod
                 .string()
                 .nullish()
@@ -1019,6 +870,42 @@ export const listOccurrencesResponse = zod
                 .array(zod.string())
                 .describe(
                   'Raw RFC 5545 recurrence properties (`RRULE`, `RDATE`, `EXDATE`).'
+                ),
+              reminders: zod
+                .object({
+                  overrides: zod
+                    .array(
+                      zod
+                        .object({
+                          method: zod
+                            .string()
+                            .describe(
+                              'Provider method, stored verbatim; only `popup` fires Macro\nnotifications.'
+                            ),
+                          minutes: zod
+                            .number()
+                            .min(
+                              listOccurrencesResponseItemsItemEventRemindersOverridesItemMinutesMin
+                            )
+                            .describe('Minutes before the event start.'),
+                        })
+                        .describe(
+                          "One reminder: how it alerts and how many minutes before the event start\n(before midnight in the calendar's zone for all-day events) it fires."
+                        )
+                    )
+                    .optional()
+                    .describe(
+                      'Explicit reminders replacing the defaults when `use_default` is off.'
+                    ),
+                  useDefault: zod
+                    .boolean()
+                    .describe(
+                      "Whether the calendar's default reminders apply."
+                    ),
+                })
+                .optional()
+                .describe(
+                  "Per-user reminder configuration for an event, mirroring Google's model:\neither the calendar's default reminders apply, or the explicit overrides\nreplace them entirely."
                 ),
               sequence: zod
                 .number()
@@ -1417,11 +1304,17 @@ export const editCallRecordBody = zod
             .describe(
               'Any channel share permissions to be created\/updated\/removed'
             ),
-          isPublic: zod
-            .boolean()
-            .nullish()
-            .describe('If the item is publicly accessible'),
-          publicAccessLevel: zod
+          linkShare: zod
+            .union([
+              zod.null(),
+              zod
+                .enum(['PUBLIC', 'TEAM'])
+                .describe(
+                  'Defines who can access an item through its share link.'
+                ),
+            ])
+            .optional(),
+          linkShareAccessLevel: zod
             .union([
               zod.null(),
               zod
@@ -6223,11 +6116,17 @@ export const editDocumentBody = zod
             .describe(
               'Any channel share permissions to be created\/updated\/removed'
             ),
-          isPublic: zod
-            .boolean()
-            .nullish()
-            .describe('If the item is publicly accessible'),
-          publicAccessLevel: zod
+          linkShare: zod
+            .union([
+              zod.null(),
+              zod
+                .enum(['PUBLIC', 'TEAM'])
+                .describe(
+                  'Defines who can access an item through its share link.'
+                ),
+            ])
+            .optional(),
+          linkShareAccessLevel: zod
             .union([
               zod.null(),
               zod
@@ -9804,6 +9703,12 @@ export const getItemsSoupResponse = zod
             .object({
               data: zod
                 .object({
+                  conferenceProvider: zod
+                    .string()
+                    .nullish()
+                    .describe(
+                      'Which conferencing system backs `conference_url`.'
+                    ),
                   conferenceUrl: zod
                     .string()
                     .nullish()
@@ -10070,14 +9975,14 @@ export const getItemsSoupResponse = zod
                     .union([
                       zod
                         .object({
-                          ends_at: zod.iso
+                          endsAt: zod.iso
                             .datetime({})
                             .describe('Exclusive end.'),
                           kind: zod.enum(['timed']),
-                          starts_at: zod.iso
+                          startsAt: zod.iso
                             .datetime({})
                             .describe('Inclusive start.'),
-                          time_zone: zod
+                          timeZone: zod
                             .string()
                             .nullish()
                             .describe('Original IANA time zone.'),
@@ -10085,17 +9990,19 @@ export const getItemsSoupResponse = zod
                         .describe('Absolute timed event.'),
                       zod
                         .object({
-                          end_date: zod.iso
+                          endDate: zod.iso
                             .date()
                             .describe('Exclusive end date.'),
                           kind: zod.enum(['allDay']),
-                          start_date: zod.iso
+                          startDate: zod.iso
                             .date()
                             .describe('Inclusive start date.'),
                         })
                         .describe('All-day event with an exclusive end date.'),
                     ])
-                    .describe('Timed or all-day calendar event span.'),
+                    .describe(
+                      'Timed or all-day calendar event span.\n\nFields are camelCased per variant rather than via `rename_all_fields`,\nwhich utoipa ignores — the generated OpenAPI schema would otherwise\nclaim snake_case fields the wire never carries.'
+                    ),
                   title: zod.string().describe('Display title.'),
                   transparency: zod
                     .string()
@@ -13429,6 +13336,12 @@ export const postItemsSoupResponse = zod
             .object({
               data: zod
                 .object({
+                  conferenceProvider: zod
+                    .string()
+                    .nullish()
+                    .describe(
+                      'Which conferencing system backs `conference_url`.'
+                    ),
                   conferenceUrl: zod
                     .string()
                     .nullish()
@@ -13695,14 +13608,14 @@ export const postItemsSoupResponse = zod
                     .union([
                       zod
                         .object({
-                          ends_at: zod.iso
+                          endsAt: zod.iso
                             .datetime({})
                             .describe('Exclusive end.'),
                           kind: zod.enum(['timed']),
-                          starts_at: zod.iso
+                          startsAt: zod.iso
                             .datetime({})
                             .describe('Inclusive start.'),
-                          time_zone: zod
+                          timeZone: zod
                             .string()
                             .nullish()
                             .describe('Original IANA time zone.'),
@@ -13710,17 +13623,19 @@ export const postItemsSoupResponse = zod
                         .describe('Absolute timed event.'),
                       zod
                         .object({
-                          end_date: zod.iso
+                          endDate: zod.iso
                             .date()
                             .describe('Exclusive end date.'),
                           kind: zod.enum(['allDay']),
-                          start_date: zod.iso
+                          startDate: zod.iso
                             .date()
                             .describe('Inclusive start date.'),
                         })
                         .describe('All-day event with an exclusive end date.'),
                     ])
-                    .describe('Timed or all-day calendar event span.'),
+                    .describe(
+                      'Timed or all-day calendar event span.\n\nFields are camelCased per variant rather than via `rename_all_fields`,\nwhich utoipa ignores — the generated OpenAPI schema would otherwise\nclaim snake_case fields the wire never carries.'
+                    ),
                   title: zod.string().describe('Display title.'),
                   transparency: zod
                     .string()
@@ -16520,6 +16435,12 @@ export const postItemsSoupAstResponse = zod
             .object({
               data: zod
                 .object({
+                  conferenceProvider: zod
+                    .string()
+                    .nullish()
+                    .describe(
+                      'Which conferencing system backs `conference_url`.'
+                    ),
                   conferenceUrl: zod
                     .string()
                     .nullish()
@@ -16786,14 +16707,14 @@ export const postItemsSoupAstResponse = zod
                     .union([
                       zod
                         .object({
-                          ends_at: zod.iso
+                          endsAt: zod.iso
                             .datetime({})
                             .describe('Exclusive end.'),
                           kind: zod.enum(['timed']),
-                          starts_at: zod.iso
+                          startsAt: zod.iso
                             .datetime({})
                             .describe('Inclusive start.'),
-                          time_zone: zod
+                          timeZone: zod
                             .string()
                             .nullish()
                             .describe('Original IANA time zone.'),
@@ -16801,17 +16722,19 @@ export const postItemsSoupAstResponse = zod
                         .describe('Absolute timed event.'),
                       zod
                         .object({
-                          end_date: zod.iso
+                          endDate: zod.iso
                             .date()
                             .describe('Exclusive end date.'),
                           kind: zod.enum(['allDay']),
-                          start_date: zod.iso
+                          startDate: zod.iso
                             .date()
                             .describe('Inclusive start date.'),
                         })
                         .describe('All-day event with an exclusive end date.'),
                     ])
-                    .describe('Timed or all-day calendar event span.'),
+                    .describe(
+                      'Timed or all-day calendar event span.\n\nFields are camelCased per variant rather than via `rename_all_fields`,\nwhich utoipa ignores — the generated OpenAPI schema would otherwise\nclaim snake_case fields the wire never carries.'
+                    ),
                   title: zod.string().describe('Display title.'),
                   transparency: zod
                     .string()
@@ -19937,6 +19860,12 @@ export const postItemsSoupAstGroupedResponse = zod
                   .object({
                     data: zod
                       .object({
+                        conferenceProvider: zod
+                          .string()
+                          .nullish()
+                          .describe(
+                            'Which conferencing system backs `conference_url`.'
+                          ),
                         conferenceUrl: zod
                           .string()
                           .nullish()
@@ -20213,14 +20142,14 @@ export const postItemsSoupAstGroupedResponse = zod
                           .union([
                             zod
                               .object({
-                                ends_at: zod.iso
+                                endsAt: zod.iso
                                   .datetime({})
                                   .describe('Exclusive end.'),
                                 kind: zod.enum(['timed']),
-                                starts_at: zod.iso
+                                startsAt: zod.iso
                                   .datetime({})
                                   .describe('Inclusive start.'),
-                                time_zone: zod
+                                timeZone: zod
                                   .string()
                                   .nullish()
                                   .describe('Original IANA time zone.'),
@@ -20228,11 +20157,11 @@ export const postItemsSoupAstGroupedResponse = zod
                               .describe('Absolute timed event.'),
                             zod
                               .object({
-                                end_date: zod.iso
+                                endDate: zod.iso
                                   .date()
                                   .describe('Exclusive end date.'),
                                 kind: zod.enum(['allDay']),
-                                start_date: zod.iso
+                                startDate: zod.iso
                                   .date()
                                   .describe('Inclusive start date.'),
                               })
@@ -20240,7 +20169,9 @@ export const postItemsSoupAstGroupedResponse = zod
                                 'All-day event with an exclusive end date.'
                               ),
                           ])
-                          .describe('Timed or all-day calendar event span.'),
+                          .describe(
+                            'Timed or all-day calendar event span.\n\nFields are camelCased per variant rather than via `rename_all_fields`,\nwhich utoipa ignores — the generated OpenAPI schema would otherwise\nclaim snake_case fields the wire never carries.'
+                          ),
                         title: zod.string().describe('Display title.'),
                         transparency: zod
                           .string()
@@ -23032,6 +22963,12 @@ export const postItemsSoupAstGroupedResponse = zod
                   .object({
                     data: zod
                       .object({
+                        conferenceProvider: zod
+                          .string()
+                          .nullish()
+                          .describe(
+                            'Which conferencing system backs `conference_url`.'
+                          ),
                         conferenceUrl: zod
                           .string()
                           .nullish()
@@ -23308,14 +23245,14 @@ export const postItemsSoupAstGroupedResponse = zod
                           .union([
                             zod
                               .object({
-                                ends_at: zod.iso
+                                endsAt: zod.iso
                                   .datetime({})
                                   .describe('Exclusive end.'),
                                 kind: zod.enum(['timed']),
-                                starts_at: zod.iso
+                                startsAt: zod.iso
                                   .datetime({})
                                   .describe('Inclusive start.'),
-                                time_zone: zod
+                                timeZone: zod
                                   .string()
                                   .nullish()
                                   .describe('Original IANA time zone.'),
@@ -23323,11 +23260,11 @@ export const postItemsSoupAstGroupedResponse = zod
                               .describe('Absolute timed event.'),
                             zod
                               .object({
-                                end_date: zod.iso
+                                endDate: zod.iso
                                   .date()
                                   .describe('Exclusive end date.'),
                                 kind: zod.enum(['allDay']),
-                                start_date: zod.iso
+                                startDate: zod.iso
                                   .date()
                                   .describe('Inclusive start date.'),
                               })
@@ -23335,7 +23272,9 @@ export const postItemsSoupAstGroupedResponse = zod
                                 'All-day event with an exclusive end date.'
                               ),
                           ])
-                          .describe('Timed or all-day calendar event span.'),
+                          .describe(
+                            'Timed or all-day calendar event span.\n\nFields are camelCased per variant rather than via `rename_all_fields`,\nwhich utoipa ignores — the generated OpenAPI schema would otherwise\nclaim snake_case fields the wire never carries.'
+                          ),
                         title: zod.string().describe('Display title.'),
                         transparency: zod
                           .string()
@@ -25835,9 +25774,15 @@ export const getProjectPermissionsV2Response = zod.object({
     .nullish()
     .describe('The channel share permissions for the item'),
   id: zod.string().describe('The share permission id'),
-  isPublic: zod.boolean().describe('If the item is publicly accessible'),
-  owner: zod.string().describe('The owner of the item'),
-  publicAccessLevel: zod
+  linkShare: zod
+    .union([
+      zod.null(),
+      zod
+        .enum(['PUBLIC', 'TEAM'])
+        .describe('Defines who can access an item through its share link.'),
+    ])
+    .optional(),
+  linkShareAccessLevel: zod
     .union([
       zod.null(),
       zod
@@ -25845,6 +25790,7 @@ export const getProjectPermissionsV2Response = zod.object({
         .describe('Ordered from least to most access top -> bottom'),
     ])
     .optional(),
+  owner: zod.string().describe('The owner of the item'),
 });
 
 /**
@@ -26582,11 +26528,17 @@ export const editThreadV2Body = zod.object({
           .describe(
             'Any channel share permissions to be created\/updated\/removed'
           ),
-        isPublic: zod
-          .boolean()
-          .nullish()
-          .describe('If the item is publicly accessible'),
-        publicAccessLevel: zod
+        linkShare: zod
+          .union([
+            zod.null(),
+            zod
+              .enum(['PUBLIC', 'TEAM'])
+              .describe(
+                'Defines who can access an item through its share link.'
+              ),
+          ])
+          .optional(),
+        linkShareAccessLevel: zod
           .union([
             zod.null(),
             zod
@@ -26667,9 +26619,15 @@ export const getDocumentPermissionsV2Response = zod.object({
       .nullish()
       .describe('The channel share permissions for the item'),
     id: zod.string().describe('The share permission id'),
-    isPublic: zod.boolean().describe('If the item is publicly accessible'),
-    owner: zod.string().describe('The owner of the item'),
-    publicAccessLevel: zod
+    linkShare: zod
+      .union([
+        zod.null(),
+        zod
+          .enum(['PUBLIC', 'TEAM'])
+          .describe('Defines who can access an item through its share link.'),
+      ])
+      .optional(),
+    linkShareAccessLevel: zod
       .union([
         zod.null(),
         zod
@@ -26677,6 +26635,7 @@ export const getDocumentPermissionsV2Response = zod.object({
           .describe('Ordered from least to most access top -> bottom'),
       ])
       .optional(),
+    owner: zod.string().describe('The owner of the item'),
   }),
 });
 
@@ -26718,11 +26677,17 @@ export const editProjectV2Body = zod.object({
           .describe(
             'Any channel share permissions to be created\/updated\/removed'
           ),
-        isPublic: zod
-          .boolean()
-          .nullish()
-          .describe('If the item is publicly accessible'),
-        publicAccessLevel: zod
+        linkShare: zod
+          .union([
+            zod.null(),
+            zod
+              .enum(['PUBLIC', 'TEAM'])
+              .describe(
+                'Defines who can access an item through its share link.'
+              ),
+          ])
+          .optional(),
+        linkShareAccessLevel: zod
           .union([
             zod.null(),
             zod

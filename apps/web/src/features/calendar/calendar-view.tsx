@@ -41,7 +41,7 @@ import {
   useCalendarView,
 } from './CalendarViewContext';
 import { SelectedEventDetails } from './events/EventDetailsPopover';
-import { EventEditorDialog } from './events/EventEditorDialog';
+import { useOpenEventComposer } from './events/useOpenEventComposer';
 import { useCalendarHotkeys } from './use-calendar-hotkeys';
 import './calendar.css';
 
@@ -129,7 +129,7 @@ function CalendarPages() {
                 !(
                   event.target instanceof Element &&
                   event.target.closest(
-                    'button, input, select, textarea, [role="button"]'
+                    'button, input, select, textarea, [role="button"], .fc-event'
                   )
                 )
               }
@@ -175,9 +175,9 @@ function CalendarWorkspace() {
   const calendarPager = useCalendarPager();
   const pager = usePager<CalendarPageId>();
   const calendarView = useCalendarView();
+  const openEventComposer = useOpenEventComposer();
   const initialDate = new Date();
   const today = createLocalToday();
-  const [createEventOpen, setCreateEventOpen] = createSignal(false);
 
   useCalendarHotkeys({
     scopeId: panel.splitHotkeyScope,
@@ -266,7 +266,7 @@ function CalendarWorkspace() {
                 size="sm"
                 class="rounded-lg px-2"
                 label="New event"
-                onClick={() => setCreateEventOpen(true)}
+                onClick={() => openEventComposer()}
               >
                 <PlusIcon class="size-3.5" />
                 New event
@@ -308,10 +308,6 @@ function CalendarWorkspace() {
         timeFormat={() => calendarView.displaySettings.timeFormat}
         onClose={calendarView.closeEventDetails}
       />
-
-      <Show when={createEventOpen()}>
-        <EventEditorDialog open onClose={() => setCreateEventOpen(false)} />
-      </Show>
 
       <main class="calendar-view flex size-full min-h-0">
         <div class="calendar-view-content flex min-w-0 min-h-0 flex-1 flex-col">

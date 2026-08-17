@@ -25,7 +25,7 @@ import {
 import { MacroMcpSetupModal } from '@app/features/integrations/mcp-setup/MacroMcpSetupModal';
 import { Paywall } from '@app/features/paywall/Paywall';
 import { PropertyEditorModal } from '@app/features/property/editor/PropertyEditorModal';
-import { CreateReminderModal } from '@app/features/reminders/CreateReminderModal';
+import { ReminderComposerModal } from '@app/features/reminders/ReminderComposerModal';
 import { useOnboardingV4Flag } from '@app/features/setup/flow/useOnboardingV4Flag';
 import { GlobalShareModal } from '@app/features/sharing/global-share-modal/GlobalShareModal';
 import { IosShareSheet } from '@app/features/sharing/ios-share-sheet/IosShareSheet';
@@ -56,6 +56,7 @@ import { isSoloSettings } from '@core/constant/SettingsState';
 import { attachGlobalDOMScope } from '@core/hotkey/hotkeys';
 import { isMobile } from '@core/mobile/isMobile';
 import { isNativeMobilePlatform } from '@core/mobile/isNativeMobilePlatform';
+import { isTouchDevice } from '@core/mobile/isTouchDevice';
 import { virtualKeyboardVisible } from '@core/mobile/virtualKeyboard';
 import { updateCookie } from '@core/util/cookies';
 import { useUserInfoQuery } from '@queries/auth/user-info';
@@ -65,7 +66,7 @@ import {
   useLocation,
   useNavigate,
 } from '@solidjs/router';
-import { cn } from '@ui';
+import { cn, ImperativeDialogHost } from '@ui';
 import { ScreencastHotkeys } from '@ui/components/ScreencastHotkeys';
 import {
   createEffect,
@@ -101,7 +102,7 @@ const AUTH_URLS = [
 ];
 
 const [sidebarState, setSidebarState] = makePersisted(
-  createSignal<SidebarState>(!isMobile() ? 'expanded' : 'hidden'),
+  createSignal<SidebarState>(!isTouchDevice() ? 'expanded' : 'hidden'),
   {
     name: 'sidebar-state',
   }
@@ -112,7 +113,7 @@ export function Layout(props: RouteSectionProps) {
   const location = useLocation();
   const sidebarVisible = createMemo(
     () =>
-      !isMobile() &&
+      !isTouchDevice() &&
       isAuthenticated() === true &&
       !AUTH_URLS.includes(location.pathname) &&
       // Settings-as-the-sole-split has its own tab nav — hide app chrome.
@@ -428,6 +429,7 @@ function LayoutInner(props: RouteSectionProps) {
         'relative flex flex-col justify-between w-dvw h-[calc(var(--dvh,1dvh)*100)] pl-(--safe-left) pr-(--safe-right)'
       )}
     >
+      <ImperativeDialogHost />
       <BundleUpdateProgressBar />
       <Suspense>
         <Show when={isAuthenticated()}>
@@ -438,7 +440,7 @@ function LayoutInner(props: RouteSectionProps) {
             <CalendarPermissionPrompt />
           </Show>
           <GlobalShortcuts />
-          <Show when={!isMobile()}>
+          <Show when={!isTouchDevice()}>
             <GoToHotkeys />
             <Suspense>
               <FavoritesCommands />
@@ -462,7 +464,7 @@ function LayoutInner(props: RouteSectionProps) {
             key={ENABLE_REMINDERS_FLAG}
             enabledOverride={ENABLE_REMINDERS_OVERRIDE}
           >
-            <CreateReminderModal />
+            <ReminderComposerModal />
           </ShowFeatureFlag>
           <Show when={isAddInboxDialogOpen()}>
             <AddInboxDialog />
@@ -495,7 +497,7 @@ function LayoutInner(props: RouteSectionProps) {
               onOverlayOpenChange={setSidebarOverlayOpenGuarded}
               onOpenChange={(open) => {
                 if (!open) {
-                  setSidebarState(isMobile() ? 'hidden' : 'slim');
+                  setSidebarState(isTouchDevice() ? 'hidden' : 'slim');
                   return;
                 }
 
@@ -533,7 +535,7 @@ function LayoutInner(props: RouteSectionProps) {
       <CollapsedSidebarCallWidget visible={activeCallWidgetVisible()} />
       <Show
         when={
-          isMobile() &&
+          isTouchDevice() &&
           isAuthenticated() &&
           !AUTH_URLS.includes(location.pathname)
         }
@@ -544,7 +546,7 @@ function LayoutInner(props: RouteSectionProps) {
           <MobileDock />
         </FloatRegion>
       </Show>
-      <Show when={isMobile()}>
+      <Show when={isTouchDevice()}>
         <MobileSearchOuter />
       </Show>
       <SwipeDownDismissKeyboard />

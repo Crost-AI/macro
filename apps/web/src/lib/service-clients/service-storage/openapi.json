@@ -10,78 +10,6 @@
     "version": "0.1.0"
   },
   "paths": {
-    "/activity": {
-      "get": {
-        "tags": ["activity::get_recent_activity"],
-        "summary": "Gets the users recent activities",
-        "operationId": "get_recent_activity_handler",
-        "parameters": [
-          {
-            "name": "limit",
-            "in": "query",
-            "description": "The maximum number of items to retreive. Default 10, max 100.",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64"
-            }
-          },
-          {
-            "name": "offset",
-            "in": "query",
-            "description": "The offset to start from. Default 0.",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GetActivitiesResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GenericErrorResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GenericErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GenericErrorResponse"
-                }
-              }
-            }
-          }
-        },
-        "deprecated": true
-      }
-    },
     "/annotations/anchors": {
       "delete": {
         "tags": ["annotations::delete_anchor"],
@@ -11068,28 +10996,6 @@
         "description": "Ordered from least to most access top -> bottom",
         "enum": ["view", "comment", "edit", "owner"]
       },
-      "Activity": {
-        "oneOf": [
-          {
-            "type": "object",
-            "required": ["Document"],
-            "properties": {
-              "Document": {
-                "$ref": "#/components/schemas/BasicDocument"
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": ["Chat"],
-            "properties": {
-              "Chat": {
-                "$ref": "#/components/schemas/Chat"
-              }
-            }
-          }
-        ]
-      },
       "ActivityType": {
         "type": "string",
         "description": "The kind of activity a user performs in a channel.",
@@ -12892,6 +12798,17 @@
             "format": "uuid",
             "description": "Calendar the canonical source belongs to, when known. Absent only in\nprojections stored before calendars were attributed."
           },
+          "conferenceProvider": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ConferenceProvider",
+                "description": "Which conferencing system backs `conference_url`. `None` whenever no\nconference is attached."
+              }
+            ]
+          },
           "conferenceUrl": {
             "type": ["string", "null"],
             "description": "Direct join URL when known."
@@ -12940,6 +12857,10 @@
               "type": "string"
             },
             "description": "Raw RFC 5545 recurrence properties (`RRULE`, `RDATE`, `EXDATE`)."
+          },
+          "reminders": {
+            "$ref": "#/components/schemas/EventReminders",
+            "description": "Per-user reminder configuration. Skipped when it is the provider\ndefault so projections stored before reminders were modeled still\ncompare equal."
           },
           "sequence": {
             "type": "integer",
@@ -14622,6 +14543,11 @@
             "$ref": "#/components/schemas/Thread"
           }
         }
+      },
+      "ConferenceProvider": {
+        "type": "string",
+        "description": "The conferencing system backing an event's join URL.\n\nMacro generates only Google Meet conferences, so this distinguishes one it\ncreated from a third party's — Zoom and friends arriving as `addOn`\nconference data, or a legacy classic Hangout. Clients use it to label the\nconference and to tell whether the Meet toggle reflects a Macro-managed\nconference.\n\nIt does not gate mutation. An explicit request replaces or detaches any\nconference, third-party included, exactly as deleting the event would;\nwhat protects a conference is that omitting the field leaves it untouched,\nso an unrelated edit never disturbs it.",
+        "enum": ["google_meet", "other"]
       },
       "CopyDocumentQueryParams": {
         "type": "object",
@@ -17643,6 +17569,41 @@
           }
         }
       },
+      "EventReminderOverride": {
+        "type": "object",
+        "description": "One reminder: how it alerts and how many minutes before the event start\n(before midnight in the calendar's zone for all-day events) it fires.",
+        "required": ["method", "minutes"],
+        "properties": {
+          "method": {
+            "type": "string",
+            "description": "Provider method, stored verbatim; only `popup` fires Macro\nnotifications."
+          },
+          "minutes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Minutes before the event start.",
+            "minimum": 0
+          }
+        }
+      },
+      "EventReminders": {
+        "type": "object",
+        "description": "Per-user reminder configuration for an event, mirroring Google's model:\neither the calendar's default reminders apply, or the explicit overrides\nreplace them entirely.",
+        "required": ["useDefault"],
+        "properties": {
+          "overrides": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventReminderOverride"
+            },
+            "description": "Explicit reminders replacing the defaults when `use_default` is off."
+          },
+          "useDefault": {
+            "type": "boolean",
+            "description": "Whether the calendar's default reminders apply."
+          }
+        }
+      },
       "EventStatus": {
         "type": "string",
         "description": "Canonical event status.",
@@ -18510,28 +18471,6 @@
             "description": "Indicates if the request was successful"
           }
         }
-      },
-      "GetActivitiesResponse": {
-        "type": "object",
-        "required": ["error"],
-        "properties": {
-          "data": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/UserActivitiesResponse",
-                "description": "Data to be returned"
-              }
-            ]
-          },
-          "error": {
-            "type": "boolean",
-            "description": "Indicates if an error occurred"
-          }
-        },
-        "deprecated": true
       },
       "GetAttachmentReferencesResponse": {
         "type": "object",
@@ -19502,6 +19441,11 @@
             "description": "Whether the entire call was ended (room deleted)."
           }
         }
+      },
+      "LinkShare": {
+        "type": "string",
+        "description": "Defines who can access an item through its share link.",
+        "enum": ["PUBLIC", "TEAM"]
       },
       "ListWebhooksResponse": {
         "type": "object",
@@ -21637,7 +21581,7 @@
       },
       "SharePermissionV2": {
         "type": "object",
-        "required": ["id", "isPublic", "owner"],
+        "required": ["id", "owner"],
         "properties": {
           "channelSharePermissions": {
             "type": ["array", "null"],
@@ -21650,24 +21594,31 @@
             "type": "string",
             "description": "The share permission id"
           },
-          "isPublic": {
-            "type": "boolean",
-            "description": "If the item is publicly accessible"
+          "linkShare": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LinkShare",
+                "description": "Who can access the item through its share link"
+              }
+            ]
           },
-          "owner": {
-            "type": "string",
-            "description": "The owner of the item"
-          },
-          "publicAccessLevel": {
+          "linkShareAccessLevel": {
             "oneOf": [
               {
                 "type": "null"
               },
               {
                 "$ref": "#/components/schemas/AccessLevel",
-                "description": "The level of public access"
+                "description": "The level of access granted through the share link"
               }
             ]
+          },
+          "owner": {
+            "type": "string",
+            "description": "The owner of the item"
           }
         }
       },
@@ -21788,9 +21739,9 @@
           {
             "type": "object",
             "description": "Absolute timed event.",
-            "required": ["starts_at", "ends_at", "kind"],
+            "required": ["startsAt", "endsAt", "kind"],
             "properties": {
-              "ends_at": {
+              "endsAt": {
                 "type": "string",
                 "format": "date-time",
                 "description": "Exclusive end."
@@ -21799,12 +21750,12 @@
                 "type": "string",
                 "enum": ["timed"]
               },
-              "starts_at": {
+              "startsAt": {
                 "type": "string",
                 "format": "date-time",
                 "description": "Inclusive start."
               },
-              "time_zone": {
+              "timeZone": {
                 "type": ["string", "null"],
                 "description": "Original IANA time zone."
               }
@@ -21813,9 +21764,9 @@
           {
             "type": "object",
             "description": "All-day event with an exclusive end date.",
-            "required": ["start_date", "end_date", "kind"],
+            "required": ["startDate", "endDate", "kind"],
             "properties": {
-              "end_date": {
+              "endDate": {
                 "type": "string",
                 "format": "date",
                 "description": "Exclusive end date."
@@ -21824,7 +21775,7 @@
                 "type": "string",
                 "enum": ["allDay"]
               },
-              "start_date": {
+              "startDate": {
                 "type": "string",
                 "format": "date",
                 "description": "Inclusive start date."
@@ -21832,7 +21783,7 @@
             }
           }
         ],
-        "description": "Timed or all-day calendar event span."
+        "description": "Timed or all-day calendar event span.\n\nFields are camelCased per variant rather than via `rename_all_fields`,\nwhich utoipa ignores — the generated OpenAPI schema would otherwise\nclaim snake_case fields the wire never carries."
       },
       "SoupCalendarEvent_SoupPropertiesField": {
         "type": "object",
@@ -21852,6 +21803,10 @@
           "extra"
         ],
         "properties": {
+          "conferenceProvider": {
+            "type": ["string", "null"],
+            "description": "Which conferencing system backs `conference_url`."
+          },
           "conferenceUrl": {
             "type": ["string", "null"],
             "description": "Direct conference join URL."
@@ -23775,18 +23730,25 @@
             },
             "description": "Any channel share permissions to be created/updated/removed"
           },
-          "isPublic": {
-            "type": ["boolean", "null"],
-            "description": "If the item is publicly accessible"
+          "linkShare": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LinkShare",
+                "description": "Who can access the item through its share link. Omit to leave unchanged or pass `null` to\ndisable link sharing."
+              }
+            ]
           },
-          "publicAccessLevel": {
+          "linkShareAccessLevel": {
             "oneOf": [
               {
                 "type": "null"
               },
               {
                 "$ref": "#/components/schemas/AccessLevel",
-                "description": "The level of public access"
+                "description": "The link access level. Omit to leave unchanged or pass `null` to reset it to the default\nlevel when a link share exists."
               }
             ]
           }
@@ -23845,30 +23807,6 @@
             "type": "string"
           }
         }
-      },
-      "UserActivitiesResponse": {
-        "type": "object",
-        "required": ["recent", "total"],
-        "properties": {
-          "next_offset": {
-            "type": ["integer", "null"],
-            "format": "int64",
-            "description": "The next offset to be used if there is one"
-          },
-          "recent": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Activity"
-            },
-            "description": "The activities returned from the query"
-          },
-          "total": {
-            "type": "integer",
-            "format": "int64",
-            "description": "The total number of activities the user has"
-          }
-        },
-        "deprecated": true
       },
       "UserDocumentViewLocation": {
         "type": "object",

@@ -1,5 +1,6 @@
 import { GO_TO_COMMAND_SCOPE, GO_TO_LEADER_KEY } from '@app/constants/hotkeys';
 import { LIST_VIEW_PATHS, type ListView } from '@app/constants/list-views';
+import { useActivityFeedFlag } from '@app/features/activity/use-activity-feed-flag';
 import { SidebarActiveCallWidget } from '@app/features/block-call/sidebar/active-call-widget';
 import { useCalendarUiFlag } from '@app/features/calendar/use-calendar-ui-flag';
 import { ChannelsRecentWidget } from '@app/features/channel/sidebar/channels-recent-widget';
@@ -47,7 +48,6 @@ import { inboxIconProps } from '@core/component/inboxIcon';
 import { toast } from '@core/component/Toast/Toast';
 import { UserIcon } from '@core/component/UserIcon';
 import {
-  ENABLE_ACTIVITY,
   ENABLE_CALLS,
   ENABLE_CRM,
   ENABLE_NEW_PRICING_OVERRIDE,
@@ -67,7 +67,7 @@ import { clearPressedKeys } from '@core/hotkey/state';
 import { type HotkeyToken, TOKENS } from '@core/hotkey/tokens';
 import type { ValidHotkey } from '@core/hotkey/types';
 import { activateClosestDOMScope } from '@core/hotkey/utils';
-import { tryMacroId, useDisplayName } from '@core/user';
+import { getDisplayName, tryMacroId } from '@core/user';
 import LogoIcon from '@icon/macro-logo.svg';
 import { AnimatedActivityIcon } from '@icon/wide-activity';
 import WideCalendarIcon from '@icon/wide-calendar.svg';
@@ -405,8 +405,13 @@ export const GoToHotkeys = () => {
 
   const gettingStartedEnabled = useGettingStartedEnabled();
   const calendarUiEnabled = useCalendarUiFlag();
+  const activityFeedEnabled = useActivityFeedFlag();
   const links = createMemo((): SidebarItem[] =>
-    buildSidebarLinks(gettingStartedEnabled(), calendarUiEnabled())
+    buildSidebarLinks(
+      gettingStartedEnabled(),
+      calendarUiEnabled(),
+      activityFeedEnabled()
+    )
   );
 
   const debounceResetHotkeysState = debounce(resetGoToHotkeysState, 2000);
@@ -877,7 +882,11 @@ const SidebarSettingsWidget = (props: SidebarSettingsWidgetProps) => {
         </span>
         <CaretUpIcon class="size-3 text-ink-extra-muted shrink-0 group-data-[slim=true]/sidebar:hidden" />
       </Dropdown.Trigger>
-      <Dropdown.Content class="min-w-64 shadow-menu">
+      {/*
+        The menu is shrink-to-fit, so without a cap a long name or email
+        stretches it instead of engaging the `truncate` below.
+      */}
+      <Dropdown.Content class="min-w-[min(16rem,calc(100vw-1rem))] max-w-[min(20rem,calc(100vw-1rem))] shadow-menu">
         <Dropdown.Group class="p-1.5 gap-0">
           <div class="flex items-center gap-3 px-1 py-1">
             <Show
@@ -1039,7 +1048,8 @@ const REMINDERS_LINK: SidebarItem = {
  */
 const buildSidebarLinks = (
   showGettingStarted: boolean,
-  showCalendar: boolean
+  showCalendar: boolean,
+  showActivity: boolean
 ): SidebarItem[] => {
   let links: SidebarItem[] = [
     DASHBOARD_LINK,
@@ -1047,7 +1057,7 @@ const buildSidebarLinks = (
     ...SIDEBAR_LINKS.filter((link) => showCalendar || link.id !== 'calendar'),
   ];
 
-  if (ENABLE_ACTIVITY) {
+  if (showActivity) {
     const idx = links.findIndex((link) => link.id === 'inbox');
     links = [
       ...links.slice(0, idx + 1),
@@ -1058,7 +1068,7 @@ const buildSidebarLinks = (
 
   if (ENABLE_REMINDERS()) {
     // Directly below Activity, or below Inbox when Activity is off.
-    const anchorId = ENABLE_ACTIVITY ? 'activity' : 'inbox';
+    const anchorId = showActivity ? 'activity' : 'inbox';
     const idx = links.findIndex((l) => l.id === anchorId);
     links = [
       ...links.slice(0, idx + 1),
@@ -1087,7 +1097,7 @@ const buildSidebarLinks = (
 };
 
 const TeamInviteSidebarPromo = (props: { invite: TeamInviteDetails }) => {
-  const [inviterName] = useDisplayName(tryMacroId(props.invite.invited_by));
+  const inviterName = () => getDisplayName(tryMacroId(props.invite.invited_by));
   const joinTeamMutation = useJoinTeamMutation();
   const rejectInvitationMutation = useRejectInvitationMutation();
   const mutationPending = () =>
@@ -1143,8 +1153,13 @@ export const AppSidebar = (props: AppSidebarProps) => {
 
   const gettingStartedEnabled = useGettingStartedEnabled();
   const calendarUiEnabled = useCalendarUiFlag();
+  const activityFeedEnabled = useActivityFeedFlag();
   const allLinks = createMemo((): SidebarItem[] =>
-    buildSidebarLinks(gettingStartedEnabled(), calendarUiEnabled())
+    buildSidebarLinks(
+      gettingStartedEnabled(),
+      calendarUiEnabled(),
+      activityFeedEnabled()
+    )
   );
 
   // Hides only the rendered row: the g+s hotkey and command menu entry keep
