@@ -7,6 +7,7 @@ use super::*;
 
 use macro_db_migrator::MACRO_DB_MIGRATIONS;
 use model_entity::EntityType;
+use model_notifications::{AiResponseMetadata, NotificationDocumentSubType, TaskAssignedMetadata};
 use models_pagination::CreatedAt;
 use serde::{Deserialize, Serialize};
 use sqlx::{Pool, Postgres};
@@ -73,6 +74,92 @@ async fn create_message_notification(
     pool.create_notification(request, notification_id, "test_service", None)
         .await
         .unwrap();
+}
+
+async fn create_ai_chat_notification(
+    pool: &Pool<Postgres>,
+    recipient: &MacroUserIdStr<'static>,
+    notification_id: Uuid,
+    message_id: &str,
+) {
+    let request = SendNotificationRequestBuilder {
+        notification_entity: EntityType::Chat.with_entity_str("chat-1"),
+        secondary_notification_entity: None,
+        notification: TaggedContent::new(TestNotification {
+            message: "AI response".to_string(),
+        }),
+        sender_id: None,
+        recipient_ids: HashSet::from([recipient.clone()]),
+    };
+
+    pool.create_notification(request, notification_id, "test_service", None)
+        .await
+        .unwrap();
+    let metadata = serde_json::to_value(AiResponseMetadata {
+        summary: "AI response".to_string(),
+        message_id: message_id.to_string(),
+    })
+    .unwrap();
+    sqlx::query!(
+        "UPDATE notification SET metadata = $1 WHERE id = $2",
+        metadata,
+        notification_id,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[test]
+fn task_metadata_classification_supports_canonical_and_legacy_shapes() {
+    for metadata in [
+        serde_json::json!({ "subType": { "type": "task" } }),
+        serde_json::json!({ "sub_type": { "type": "task" } }),
+        serde_json::json!({ "subType": "task" }),
+        serde_json::json!({ "sub_type": "task" }),
+    ] {
+        assert!(notification_metadata_is_task(&metadata));
+    }
+    assert!(!notification_metadata_is_task(
+        &serde_json::json!({ "subType": { "type": "snippet" } })
+    ));
+    assert!(!notification_metadata_is_task(&serde_json::json!({})));
+}
+
+#[test]
+fn notification_item_id_groups_preserve_first_seen_type_order_and_deduplicate_ids() {
+    let refs = vec![
+        NotificationEntityRef {
+            entity_type: NotificationItemType::Message,
+            id: "message-1".to_string(),
+        },
+        NotificationEntityRef {
+            entity_type: NotificationItemType::Document,
+            id: "document-1".to_string(),
+        },
+        NotificationEntityRef {
+            entity_type: NotificationItemType::Message,
+            id: "message-1".to_string(),
+        },
+        NotificationEntityRef {
+            entity_type: NotificationItemType::Message,
+            id: "message-2".to_string(),
+        },
+    ];
+
+    assert_eq!(
+        group_notification_item_ids(&refs),
+        vec![
+            (
+                NotificationItemType::Message,
+                vec!["message-1".to_string(), "message-2".to_string()],
+            ),
+            (
+                NotificationItemType::Document,
+                vec!["document-1".to_string()],
+            ),
+        ]
+    );
 }
 
 #[sqlx::test(
@@ -713,6 +800,7 @@ async fn test_get_entity_notifications_batch_matches_channel_thread_secondary_en
     let direct_notification_id = Uuid::new_v4();
     let reply_notification_id = Uuid::new_v4();
     let other_thread_notification_id = Uuid::new_v4();
+    let ai_chat_notification_id = Uuid::new_v4();
 
     create_message_notification(&pool, &user, direct_notification_id, &thread_id, None).await;
     create_message_notification(
@@ -731,6 +819,7 @@ async fn test_get_entity_notifications_batch_matches_channel_thread_secondary_en
         Some(&other_thread_id),
     )
     .await;
+    create_ai_chat_notification(&pool, &user, ai_chat_notification_id, &thread_id).await;
 
     let thread_ref = NotificationEntityRef {
         entity_type: NotificationItemType::Message,
@@ -761,6 +850,310 @@ async fn test_get_entity_notifications_batch_matches_channel_thread_secondary_en
     assert_eq!(
         other_thread_notification_ids,
         HashSet::from([other_thread_notification_id])
+    );
+}
+
+#[sqlx::test(migrator = "MACRO_DB_MIGRATIONS")]
+async fn test_get_notification_ids_for_entities_enforces_exact_type_status_and_ownership(
+    pool: Pool<Postgres>,
+) {
+    let user = test_user("item-recipient@test.com");
+    let other_user = test_user("other-item-recipient@test.com");
+    let item_id = "shared-document-id";
+    let document_id = Uuid::new_v4();
+    let seen_document_id = Uuid::new_v4();
+    let done_document_id = Uuid::new_v4();
+    let deleted_document_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let legacy_task_id = Uuid::new_v4();
+    let other_user_document_id = Uuid::new_v4();
+
+    for (notification_id, recipient) in [
+        (document_id, user.clone()),
+        (seen_document_id, user.clone()),
+        (done_document_id, user.clone()),
+        (deleted_document_id, user.clone()),
+        (other_user_document_id, other_user),
+    ] {
+        pool.create_notification(
+            SendNotificationRequestBuilder {
+                notification_entity: EntityType::Document.with_entity_str(item_id),
+                secondary_notification_entity: None,
+                notification: TaggedContent::new(TestNotification {
+                    message: "document".to_string(),
+                }),
+                sender_id: None,
+                recipient_ids: HashSet::from([recipient]),
+            },
+            notification_id,
+            "test_service",
+            None,
+        )
+        .await
+        .unwrap();
+    }
+    pool.create_notification(
+        SendNotificationRequestBuilder {
+            notification_entity: EntityType::Document.with_entity_str(item_id),
+            secondary_notification_entity: None,
+            notification: TaggedContent::new(TestNotification {
+                message: "canonical task".to_string(),
+            }),
+            sender_id: None,
+            recipient_ids: HashSet::from([user.clone()]),
+        },
+        task_id,
+        "test_service",
+        None,
+    )
+    .await
+    .unwrap();
+    let task_metadata = serde_json::to_value(TaskAssignedMetadata {
+        task_id: item_id.to_string(),
+        task_name: Some("Canonical task".to_string()),
+        sub_type: Some(NotificationDocumentSubType::Task),
+        assigned_by: test_user("assigner@test.com"),
+        sender_profile_picture_url: None,
+    })
+    .unwrap();
+    sqlx::query!(
+        "UPDATE notification SET metadata = $1 WHERE id = $2",
+        task_metadata,
+        task_id,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.create_notification(
+        SendNotificationRequestBuilder {
+            notification_entity: EntityType::Document.with_entity_str(item_id),
+            secondary_notification_entity: None,
+            notification: TaggedContent::new(TestNotification {
+                message: "legacy task".to_string(),
+            }),
+            sender_id: None,
+            recipient_ids: HashSet::from([user.clone()]),
+        },
+        legacy_task_id,
+        "test_service",
+        None,
+    )
+    .await
+    .unwrap();
+    let legacy_task_metadata = serde_json::json!({ "subType": "task" });
+    sqlx::query!(
+        "UPDATE notification SET metadata = $1 WHERE id = $2",
+        legacy_task_metadata,
+        legacy_task_id,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    pool.mark_notifications_seen(&user, &[seen_document_id])
+        .await
+        .unwrap();
+    pool.mark_notifications_done(&user, &[done_document_id], true)
+        .await
+        .unwrap();
+    sqlx::query!(
+        "UPDATE user_notification SET deleted_at = NOW() WHERE user_id = $1 AND notification_id = $2",
+        user.as_ref(),
+        deleted_document_id,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let document_ref = NotificationEntityRef {
+        entity_type: NotificationItemType::Document,
+        id: item_id.to_string(),
+    };
+    let active_document_ids = pool
+        .get_notification_ids_for_entities(
+            user.clone(),
+            NotificationListFilters {
+                entities: vec![document_ref.clone()],
+                ..NotificationListFilters::active()
+            },
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .collect::<HashSet<_>>();
+    assert_eq!(
+        active_document_ids,
+        HashSet::from([document_id, seen_document_id])
+    );
+
+    let unseen_document_ids = pool
+        .get_notification_ids_for_entities(
+            user.clone(),
+            NotificationListFilters {
+                done: Some(false),
+                seen: Some(false),
+                include_types: Vec::new(),
+                entities: vec![document_ref.clone()],
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(unseen_document_ids, vec![document_id]);
+
+    let task_ref = NotificationEntityRef {
+        entity_type: NotificationItemType::Task,
+        id: item_id.to_string(),
+    };
+    let task_ids = pool
+        .get_notification_ids_for_entities(
+            user.clone(),
+            NotificationListFilters {
+                entities: vec![task_ref.clone()],
+                ..NotificationListFilters::active()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        task_ids.into_iter().collect::<HashSet<_>>(),
+        HashSet::from([task_id, legacy_task_id])
+    );
+
+    let task_type_results: Vec<UserNotificationRow<serde_json::Value>> = pool
+        .get_user_notifications(
+            user.clone(),
+            10,
+            Query::Sort(CreatedAt, ()),
+            NotificationListFilters {
+                done: Some(false),
+                seen: None,
+                include_types: vec![NotificationItemType::Task],
+                entities: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        task_type_results
+            .iter()
+            .map(|notification| notification.notification_id)
+            .collect::<HashSet<_>>(),
+        HashSet::from([task_id, legacy_task_id])
+    );
+
+    let document_type_results: Vec<UserNotificationRow<serde_json::Value>> = pool
+        .get_user_notifications(
+            user.clone(),
+            10,
+            Query::Sort(CreatedAt, ()),
+            NotificationListFilters {
+                done: Some(false),
+                seen: None,
+                include_types: vec![NotificationItemType::Document],
+                entities: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        document_type_results
+            .iter()
+            .map(|notification| notification.notification_id)
+            .collect::<HashSet<_>>(),
+        HashSet::from([document_id, seen_document_id])
+    );
+
+    let grouped = pool
+        .get_entity_notifications_batch(user, vec![document_ref.clone(), task_ref.clone()])
+        .await
+        .unwrap();
+    assert_eq!(
+        grouped[&document_ref]
+            .iter()
+            .map(|notification| notification.notification_id)
+            .collect::<HashSet<_>>(),
+        HashSet::from([document_id, seen_document_id])
+    );
+    assert_eq!(
+        grouped[&task_ref]
+            .iter()
+            .map(|notification| notification.notification_id)
+            .collect::<HashSet<_>>(),
+        HashSet::from([task_id, legacy_task_id])
+    );
+}
+
+#[sqlx::test(migrator = "MACRO_DB_MIGRATIONS")]
+async fn test_get_notification_ids_for_entities_deduplicates_channel_message_overlap(
+    pool: Pool<Postgres>,
+) {
+    let user = test_user("item-message-recipient@test.com");
+    let channel_id = "channel-1";
+    let thread_id = Uuid::new_v4().to_string();
+    let direct_id = Uuid::new_v4();
+    let reply_id = Uuid::new_v4();
+    let ai_chat_id = Uuid::new_v4();
+    create_message_notification(&pool, &user, direct_id, &thread_id, None).await;
+    create_message_notification(
+        &pool,
+        &user,
+        reply_id,
+        &Uuid::new_v4().to_string(),
+        Some(&thread_id),
+    )
+    .await;
+    create_ai_chat_notification(&pool, &user, ai_chat_id, &thread_id).await;
+
+    let ids = pool
+        .get_notification_ids_for_entities(
+            user.clone(),
+            NotificationListFilters {
+                entities: vec![
+                    NotificationEntityRef {
+                        entity_type: NotificationItemType::Channel,
+                        id: channel_id.to_string(),
+                    },
+                    NotificationEntityRef {
+                        entity_type: NotificationItemType::Message,
+                        id: thread_id,
+                    },
+                ],
+                ..NotificationListFilters::active()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        ids.iter().copied().collect::<HashSet<_>>(),
+        HashSet::from([direct_id, reply_id])
+    );
+    assert_eq!(
+        ids.len(),
+        2,
+        "overlapping item matches must return each id once"
+    );
+
+    let message_type_results: Vec<UserNotificationRow<serde_json::Value>> = pool
+        .get_user_notifications(
+            user,
+            10,
+            Query::Sort(CreatedAt, ()),
+            NotificationListFilters {
+                done: Some(false),
+                seen: None,
+                include_types: vec![NotificationItemType::Message],
+                entities: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        message_type_results
+            .iter()
+            .map(|notification| notification.notification_id)
+            .collect::<HashSet<_>>(),
+        HashSet::from([direct_id, reply_id])
     );
 }
 

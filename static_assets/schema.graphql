@@ -94,6 +94,10 @@ type CompleteMutationRoot {
 	"""
 	updateNotifications(input: UpdateNotificationsInput!): [GraphqlNotification!]!
 	"""
+	Update every matching active notification owned by the authenticated user.
+	"""
+	updateItemNotifications(input: UpdateItemNotificationsInput!): [GraphqlNotification!]!
+	"""
 	Mark an accessible email thread as seen and return its authoritative cache record.
 	"""
 	markEmailThreadSeen(input: MarkEmailThreadSeenInput!): GraphqlSoupEmailThread!
@@ -5271,6 +5275,84 @@ input MoveEntityInput {
 }
 
 """
+One item whose notifications should be updated.
+"""
+input NotificationItemRefInput {
+	"""
+	User-facing item category.
+	"""
+	itemType: NotificationItemType!
+	"""
+	Item identifier.
+	"""
+	itemId: ID!
+}
+
+"""
+User-facing notification item type accepted by item-scoped mutations.
+"""
+enum NotificationItemType {
+	"""
+	Email thread.
+	"""
+	EMAIL
+	"""
+	Channel message or thread.
+	"""
+	MESSAGE
+	"""
+	Channel.
+	"""
+	CHANNEL
+	"""
+	Non-task document.
+	"""
+	DOCUMENT
+	"""
+	Project.
+	"""
+	PROJECT
+	"""
+	Chat.
+	"""
+	CHAT
+	"""
+	Call.
+	"""
+	CALL
+	"""
+	Task-backed document.
+	"""
+	TASK
+	"""
+	GitHub foreign entity.
+	"""
+	GITHUB
+	"""
+	Reminder.
+	"""
+	REMINDER
+	"""
+	Calendar event.
+	"""
+	CALENDAR
+}
+
+"""
+Status operations supported by item-scoped mutations.
+"""
+enum NotificationItemUpdateOperation {
+	"""
+	Mark matching active unseen notifications as seen.
+	"""
+	MARK_SEEN
+	"""
+	Mark matching active notifications as done.
+	"""
+	MARK_DONE
+}
+
+"""
 Explicit notification status operation exposed by GraphQL.
 """
 enum NotificationUpdateOperation {
@@ -5477,6 +5559,20 @@ input UpdateEntitySharePolicyInput {
 	New link/channel policy values.
 	"""
 	policy: EntitySharePolicyInput!
+}
+
+"""
+Input for updating every active notification matching one or more items.
+"""
+input UpdateItemNotificationsInput {
+	"""
+	Items whose matching notifications should be updated.
+	"""
+	items: [NotificationItemRefInput!]!
+	"""
+	Status operation applied to matching notifications.
+	"""
+	operation: NotificationItemUpdateOperation!
 }
 
 """

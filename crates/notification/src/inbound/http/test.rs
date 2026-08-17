@@ -26,7 +26,7 @@ use crate::domain::{
         device::DeviceType,
         request::{
             GetNotificationsByEventItemIdsRequest, NotificationEntityRef,
-            UpdateNotificationsRequest,
+            UpdateNotificationsForItemsRequest, UpdateNotificationsRequest,
         },
         signing::SignedUrl,
     },
@@ -97,6 +97,26 @@ impl NotificationReader for AuthenticationTestService {
     ) -> impl Future<Output = Result<Vec<UserNotificationRow<serde_json::Value>>, Report>> + Send
     {
         async { unreachable!("should not be called") }
+    }
+
+    fn update_notifications_for_items(
+        &self,
+        req: UpdateNotificationsForItemsRequest,
+    ) -> impl Future<Output = Result<Vec<UserNotificationRow<serde_json::Value>>, Report>> + Send
+    {
+        async move {
+            use crate::domain::models::request::{NotificationItemType, NotificationItemUpdate};
+
+            assert_eq!(req.user_id.to_string(), VALID_USER_ID);
+            assert!(matches!(
+                req.operation,
+                NotificationItemUpdate::Seen | NotificationItemUpdate::Done
+            ));
+            assert_eq!(req.items.len(), 1);
+            assert_eq!(req.items[0].entity_type, NotificationItemType::Document);
+            assert_eq!(req.items[0].id, "doc-1");
+            Ok(Vec::new())
+        }
     }
 
     fn get_user_notifications<T: DeserializeOwned + Send>(
@@ -212,12 +232,25 @@ fn test_router() -> Router {
 
     let device_router =
         super::device::device_router::<AuthenticationTestService, FakeAuthorizationService>();
+    let user_notification_router = super::router::<
+        AuthenticationTestService,
+        FakeAuthorizationService,
+        serde_json::Value,
+    >()
+    .route(
+        "/item/bulk/seen",
+        axum::routing::patch(
+            super::bulk_mark_items_seen::<AuthenticationTestService, FakeAuthorizationService>,
+        ),
+    )
+    .route(
+        "/item/bulk/done",
+        axum::routing::patch(
+            super::bulk_mark_items_done::<AuthenticationTestService, FakeAuthorizationService>,
+        ),
+    );
     Router::new()
-        .nest(
-            "/user_notifications",
-            super::router::<AuthenticationTestService, FakeAuthorizationService, serde_json::Value>(
-            ),
-        )
+        .nest("/user_notifications", user_notification_router)
         .nest("/device", device_router)
         .with_state(state)
 }
@@ -280,6 +313,98 @@ async fn no_token_bulk_mark_seen() {
         )
         .await,
         StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn no_token_bulk_mark_items_seen() {
+    let router = test_router();
+    let body = r#"{"items":[{"itemType":"document","itemId":"doc-1"}]}"#;
+    assert_eq!(
+        status(
+            &router,
+            "PATCH",
+            "/user_notifications/item/bulk/seen",
+            Some(body)
+        )
+        .await,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn authenticated_bulk_mark_items_seen_maps_item_request() {
+    let router = test_router();
+    let body = r#"{"items":[{"itemType":"document","itemId":"doc-1"}]}"#;
+    assert_eq!(
+        status_with_headers(
+            &router,
+            "PATCH",
+            "/user_notifications/item/bulk/seen",
+            Some(body),
+            &[("authorization", VALID_AUTHORIZATION_HEADER)],
+        )
+        .await,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn authenticated_bulk_mark_items_done_maps_item_request() {
+    let router = test_router();
+    let body = r#"{"items":[{"itemType":"document","itemId":"doc-1"}]}"#;
+    assert_eq!(
+        status_with_headers(
+            &router,
+            "PATCH",
+            "/user_notifications/item/bulk/done",
+            Some(body),
+            &[("authorization", VALID_AUTHORIZATION_HEADER)],
+        )
+        .await,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn authenticated_bulk_mark_items_rejects_empty_item_id() {
+    let router = test_router();
+    let body = r#"{"items":[{"itemType":"document","itemId":"   "}]}"#;
+    assert_eq!(
+        status_with_headers(
+            &router,
+            "PATCH",
+            "/user_notifications/item/bulk/seen",
+            Some(body),
+            &[("authorization", VALID_AUTHORIZATION_HEADER)],
+        )
+        .await,
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn authenticated_bulk_mark_items_rejects_oversized_batch() {
+    let router = test_router();
+    let body = serde_json::json!({
+        "items": (0..101)
+            .map(|index| serde_json::json!({
+                "itemType": "document",
+                "itemId": format!("doc-{index}"),
+            }))
+            .collect::<Vec<_>>(),
+    })
+    .to_string();
+    assert_eq!(
+        status_with_headers(
+            &router,
+            "PATCH",
+            "/user_notifications/item/bulk/done",
+            Some(&body),
+            &[("authorization", VALID_AUTHORIZATION_HEADER)],
+        )
+        .await,
+        StatusCode::BAD_REQUEST
     );
 }
 
@@ -573,6 +698,14 @@ impl NotificationReader for PresignedTestService {
     fn update_notifications_and_return(
         &self,
         _req: UpdateNotificationsRequest,
+    ) -> impl Future<Output = Result<Vec<UserNotificationRow<serde_json::Value>>, Report>> + Send
+    {
+        async { unreachable!() }
+    }
+
+    fn update_notifications_for_items(
+        &self,
+        _req: UpdateNotificationsForItemsRequest,
     ) -> impl Future<Output = Result<Vec<UserNotificationRow<serde_json::Value>>, Report>> + Send
     {
         async { unreachable!() }

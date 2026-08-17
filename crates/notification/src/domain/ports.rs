@@ -158,6 +158,15 @@ pub trait NotificationRepository: Send + Sync + 'static {
         >,
     > + Send;
 
+    /// Resolve every user-owned notification ID matching `filters.entities`.
+    ///
+    /// Returns an empty list when no entity filters are provided.
+    fn get_notification_ids_for_entities(
+        &self,
+        user_id: MacroUserIdStr<'_>,
+        filters: NotificationListFilters,
+    ) -> impl Future<Output = Result<Vec<Uuid>, Report>> + Send;
+
     /// Get a single user notification by ID.
     ///
     /// Returns `None` if no active (non-deleted) notification exists for the given user and ID.

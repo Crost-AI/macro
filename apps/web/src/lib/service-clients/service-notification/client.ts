@@ -10,6 +10,7 @@ import { z } from 'zod';
 import type {
   BulkGetByEventItemIdsRequest,
   GetAllUserNotificationsResponse,
+  NotificationItemBulkRequest,
 } from './generated/schemas';
 import type { ApiUserNotification } from './generated/schemas/apiUserNotification';
 import type { DeviceRequest } from './generated/schemas/deviceRequest';
@@ -21,7 +22,6 @@ const notificationHost: string = SERVER_HOSTS['notification-service'];
 
 const _NOTIFICATION_WEBSOCKET_EVENT = 'notification';
 
-type WithEventItemId = { event_item_id: string };
 type WithItem = { item_id: string; item_type: string };
 
 function notificationFetch(
@@ -165,24 +165,26 @@ export const notificationServiceClient = {
       })
     ).map((result) => result);
   },
-  async markNotificationEntityAsSeen(args: WithEventItemId) {
-    const { event_item_id } = args;
+  async bulkMarkItemNotificationsAsSeen(args: NotificationItemBulkRequest) {
     return (
-      await notificationFetch<{}>(
-        `/user_notifications/item/${event_item_id}/seen`,
+      await notificationFetch<ApiUserNotification[]>(
+        '/user_notifications/item/bulk/seen',
         {
           method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(args),
         }
       )
     ).map((result) => result);
   },
-  async markNotificationEntityAsDone(args: WithEventItemId) {
-    const { event_item_id } = args;
+  async bulkMarkItemNotificationsAsDone(args: NotificationItemBulkRequest) {
     return (
-      await notificationFetch<{}>(
-        `/user_notifications/item/${event_item_id}/done`,
+      await notificationFetch<ApiUserNotification[]>(
+        '/user_notifications/item/bulk/done',
         {
           method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(args),
         }
       )
     ).map((result) => result);

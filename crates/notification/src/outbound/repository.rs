@@ -117,8 +117,6 @@ struct UserNotificationsQueryArgs<'a> {
     cursor_id: Option<Uuid>,
     cursor_timestamp: Option<DateTime<Utc>>,
     filters: &'a NotificationListFilters,
-    include_types: &'a [String],
-    entity_tokens: &'a [String],
 }
 
 fn build_user_notifications_query<'a>(
@@ -131,8 +129,6 @@ fn build_user_notifications_query<'a>(
         cursor_id,
         cursor_timestamp,
         filters,
-        include_types,
-        entity_tokens,
     } = args;
 
     let mut builder = QueryBuilder::new(
@@ -159,8 +155,8 @@ fn build_user_notifications_query<'a>(
 
     push_event_item_ids_filter(&mut builder, event_item_ids);
     push_notification_status_filters(&mut builder, filters);
-    push_include_types_filter(&mut builder, include_types);
-    push_entities_filter(&mut builder, entity_tokens);
+    push_include_types_filter(&mut builder, &filters.include_types);
+    push_exact_entity_refs_filter(&mut builder, &filters.entities);
     push_cursor_filter(&mut builder, cursor_timestamp, cursor_id);
 
     builder.push(" ORDER BY un.created_at DESC, un.notification_id DESC LIMIT ");
@@ -211,55 +207,73 @@ const GITHUB_EVENT_TYPES_SQL: &str = concat!(
     ")",
 );
 
-fn push_include_types_filter(builder: &mut QueryBuilder<'_, Postgres>, include_types: &[String]) {
+/// SQL expression recognizing canonical nested and legacy scalar task subtypes.
+const TASK_METADATA_IS_TASK_SQL: &str = concat!(
+    "COALESCE(",
+    "n.metadata->'subType'->>'type', ",
+    "n.metadata->'sub_type'->>'type', ",
+    "n.metadata->>'subType', ",
+    "n.metadata->>'sub_type', ",
+    "''",
+    ") = 'task'",
+);
+
+fn push_include_types_filter(
+    builder: &mut QueryBuilder<'_, Postgres>,
+    include_types: &[NotificationItemType],
+) {
     if !include_types.is_empty() {
         builder.push(" AND (");
         let mut needs_or = false;
         for clause in [
             include_types
-                .iter()
-                .any(|t| t == "email")
+                .contains(&NotificationItemType::Email)
                 .then_some("n.event_item_type = 'email_thread'"),
-            include_types.iter().any(|t| t == "message").then_some(
+            include_types
+                .contains(&NotificationItemType::Message)
+                .then_some(
                 r#"(
-                    n.notification_event_type IN ('channel_mention', 'channel_message_reply', 'channel_message_send')
-                    OR n.metadata ? 'messageId'
-                    OR n.metadata ? 'message_id'
+                    (
+                        n.event_item_type = 'channel'
+                        AND (
+                            n.notification_event_type IN ('channel_mention', 'channel_message_reply', 'channel_message_send')
+                            OR n.metadata ? 'messageId'
+                            OR n.metadata ? 'message_id'
+                        )
+                    )
+                    OR n.secondary_event_item_type = 'channel_message'
                 )"#,
             ),
             include_types
-                .iter()
-                .any(|t| t == "channel")
+                .contains(&NotificationItemType::Channel)
                 .then_some("n.event_item_type = 'channel'"),
-            include_types.iter().any(|t| t == "document").then_some(
-                "n.event_item_type = 'document' AND COALESCE(n.metadata->>'subType', n.metadata->>'sub_type', '') <> 'task'",
-            ),
-            include_types.iter().any(|t| t == "task").then_some(
-                "n.event_item_type = 'document' AND COALESCE(n.metadata->>'subType', n.metadata->>'sub_type', '') = 'task'",
+            include_types
+                .contains(&NotificationItemType::Document)
+                .then_some(
+                "n.event_item_type = 'document' AND NOT (COALESCE(n.metadata->'subType'->>'type', n.metadata->'sub_type'->>'type', n.metadata->>'subType', n.metadata->>'sub_type', '') = 'task')",
             ),
             include_types
-                .iter()
-                .any(|t| t == "project")
+                .contains(&NotificationItemType::Task)
+                .then_some(
+                "n.event_item_type = 'document' AND COALESCE(n.metadata->'subType'->>'type', n.metadata->'sub_type'->>'type', n.metadata->>'subType', n.metadata->>'sub_type', '') = 'task'",
+            ),
+            include_types
+                .contains(&NotificationItemType::Project)
                 .then_some("n.event_item_type = 'project'"),
             include_types
-                .iter()
-                .any(|t| t == "chat")
+                .contains(&NotificationItemType::Chat)
                 .then_some("n.event_item_type = 'chat'"),
             include_types
-                .iter()
-                .any(|t| t == "call")
+                .contains(&NotificationItemType::Call)
                 .then_some("n.event_item_type = 'call'"),
             include_types
-                .iter()
-                .any(|t| t == "github")
+                .contains(&NotificationItemType::Github)
                 .then_some(GITHUB_EVENT_TYPES_SQL),
             include_types
-                .iter()
-                .any(|t| t == "reminder")
+                .contains(&NotificationItemType::Reminder)
                 .then_some("n.event_item_type = 'reminder'"),
             include_types
-                .iter()
-                .any(|t| t == "calendar")
+                .contains(&NotificationItemType::Calendar)
                 .then_some("n.event_item_type = 'calendar_event'"),
         ]
         .into_iter()
@@ -277,64 +291,109 @@ fn push_include_types_filter(builder: &mut QueryBuilder<'_, Postgres>, include_t
     }
 }
 
-fn push_entities_filter<'a>(builder: &mut QueryBuilder<'a, Postgres>, entity_tokens: &'a [String]) {
-    if !entity_tokens.is_empty() {
-        builder.push(" AND (");
+fn group_notification_item_ids(
+    entity_refs: &[NotificationEntityRef],
+) -> Vec<(NotificationItemType, Vec<String>)> {
+    let mut groups = Vec::<(NotificationItemType, Vec<String>)>::new();
 
-        builder.push("(n.event_item_type = 'email_thread' AND 'email:' || n.event_item_id = ANY(");
-        builder.push_bind(entity_tokens);
-        builder.push(")) OR ");
-
-        builder.push("(n.event_item_type = 'channel' AND 'channel:' || n.event_item_id = ANY(");
-        builder.push_bind(entity_tokens);
-        builder.push(")) OR ");
-
-        builder.push("(n.event_item_type = 'document' AND 'document:' || n.event_item_id = ANY(");
-        builder.push_bind(entity_tokens);
-        builder.push(")) OR ");
-
-        builder.push("(n.event_item_type = 'document' AND COALESCE(n.metadata->>'subType', n.metadata->>'sub_type', '') = 'task' AND 'task:' || n.event_item_id = ANY(");
-        builder.push_bind(entity_tokens);
-        builder.push(")) OR ");
-
-        builder.push("(n.event_item_type = 'project' AND 'project:' || n.event_item_id = ANY(");
-        builder.push_bind(entity_tokens);
-        builder.push(")) OR ");
-
-        builder.push("(n.event_item_type = 'chat' AND 'chat:' || n.event_item_id = ANY(");
-        builder.push_bind(entity_tokens);
-        builder.push(")) OR ");
-
-        builder.push("(n.event_item_type = 'call' AND 'call:' || n.event_item_id = ANY(");
-        builder.push_bind(entity_tokens);
-        builder.push(")) OR ");
-
-        builder.push("(n.event_item_type = 'reminder' AND 'reminder:' || n.event_item_id = ANY(");
-        builder.push_bind(entity_tokens);
-        builder.push(")) OR ");
-
-        builder.push(
-            "(n.event_item_type = 'calendar_event' AND 'calendar:' || n.event_item_id = ANY(",
-        );
-        builder.push_bind(entity_tokens);
-        builder.push(")) OR ");
-
-        builder.push("(n.event_item_type = 'foreign_entity' AND ");
-        builder.push(GITHUB_EVENT_TYPES_SQL);
-        builder.push(" AND 'github:' || n.event_item_id = ANY(");
-        builder.push_bind(entity_tokens);
-        builder.push(")) OR ");
-
-        builder.push("('message:' || COALESCE(n.metadata->>'messageId', n.metadata->>'message_id', '') = ANY(");
-        builder.push_bind(entity_tokens);
-        builder.push(")) OR ");
-
-        builder.push("(n.secondary_event_item_type = 'channel_message' AND 'message:' || n.secondary_event_item_id = ANY(");
-        builder.push_bind(entity_tokens);
-        builder.push("))");
-
-        builder.push(")");
+    for entity_ref in entity_refs {
+        if let Some((_, ids)) = groups
+            .iter_mut()
+            .find(|(item_type, _)| *item_type == entity_ref.entity_type)
+        {
+            if !ids.contains(&entity_ref.id) {
+                ids.push(entity_ref.id.clone());
+            }
+        } else {
+            groups.push((entity_ref.entity_type, vec![entity_ref.id.clone()]));
+        }
     }
+
+    groups
+}
+
+fn push_exact_entity_refs_filter(
+    builder: &mut QueryBuilder<'_, Postgres>,
+    entity_refs: &[NotificationEntityRef],
+) {
+    if entity_refs.is_empty() {
+        return;
+    }
+
+    let entity_groups = group_notification_item_ids(entity_refs);
+    builder.push(" AND (");
+    for (index, (item_type, item_ids)) in entity_groups.into_iter().enumerate() {
+        if index > 0 {
+            builder.push(" OR ");
+        }
+
+        match item_type {
+            NotificationItemType::Email => {
+                builder.push("(n.event_item_type = 'email_thread' AND n.event_item_id = ANY(");
+                builder.push_bind(item_ids);
+                builder.push("))");
+            }
+            NotificationItemType::Message => {
+                builder.push("((n.event_item_type = 'channel' AND COALESCE(n.metadata->>'messageId', n.metadata->>'message_id', '') <> '' AND COALESCE(n.metadata->>'messageId', n.metadata->>'message_id', '') = ANY(");
+                builder.push_bind(item_ids.clone());
+                builder.push(")) OR (n.secondary_event_item_type = 'channel_message' AND n.secondary_event_item_id = ANY(");
+                builder.push_bind(item_ids);
+                builder.push(")))");
+            }
+            NotificationItemType::Channel => {
+                builder.push("(n.event_item_type = 'channel' AND n.event_item_id = ANY(");
+                builder.push_bind(item_ids);
+                builder.push("))");
+            }
+            NotificationItemType::Document => {
+                builder.push("(n.event_item_type = 'document' AND n.event_item_id = ANY(");
+                builder.push_bind(item_ids);
+                builder.push(") AND NOT (");
+                builder.push(TASK_METADATA_IS_TASK_SQL);
+                builder.push("))");
+            }
+            NotificationItemType::Project => {
+                builder.push("(n.event_item_type = 'project' AND n.event_item_id = ANY(");
+                builder.push_bind(item_ids);
+                builder.push("))");
+            }
+            NotificationItemType::Chat => {
+                builder.push("(n.event_item_type = 'chat' AND n.event_item_id = ANY(");
+                builder.push_bind(item_ids);
+                builder.push("))");
+            }
+            NotificationItemType::Call => {
+                builder.push("(n.event_item_type = 'call' AND n.event_item_id = ANY(");
+                builder.push_bind(item_ids);
+                builder.push("))");
+            }
+            NotificationItemType::Task => {
+                builder.push("(n.event_item_type = 'document' AND n.event_item_id = ANY(");
+                builder.push_bind(item_ids);
+                builder.push(") AND ");
+                builder.push(TASK_METADATA_IS_TASK_SQL);
+                builder.push(")");
+            }
+            NotificationItemType::Github => {
+                builder.push("(n.event_item_type = 'foreign_entity' AND n.event_item_id = ANY(");
+                builder.push_bind(item_ids);
+                builder.push(") AND ");
+                builder.push(GITHUB_EVENT_TYPES_SQL);
+                builder.push(")");
+            }
+            NotificationItemType::Reminder => {
+                builder.push("(n.event_item_type = 'reminder' AND n.event_item_id = ANY(");
+                builder.push_bind(item_ids);
+                builder.push("))");
+            }
+            NotificationItemType::Calendar => {
+                builder.push("(n.event_item_type = 'calendar_event' AND n.event_item_id = ANY(");
+                builder.push_bind(item_ids);
+                builder.push("))");
+            }
+        }
+    }
+    builder.push(")");
 }
 
 fn notification_ref_matches_row(
@@ -347,11 +406,12 @@ fn notification_ref_matches_row(
     metadata: &serde_json::Value,
 ) -> bool {
     if entity_ref.entity_type == NotificationItemType::Message {
-        let directly_targets_message = metadata
-            .get("messageId")
-            .or_else(|| metadata.get("message_id"))
-            .and_then(|value| value.as_str())
-            .is_some_and(|message_id| message_id == entity_ref.id);
+        let directly_targets_message = event_item_type == "channel"
+            && metadata
+                .get("messageId")
+                .or_else(|| metadata.get("message_id"))
+                .and_then(|value| value.as_str())
+                .is_some_and(|message_id| message_id == entity_ref.id);
         let targets_message_as_thread = secondary_event_item_type == Some("channel_message")
             && secondary_event_item_id == Some(entity_ref.id.as_str());
 
@@ -388,7 +448,12 @@ fn notification_metadata_is_task(metadata: &serde_json::Value) -> bool {
     metadata
         .get("subType")
         .or_else(|| metadata.get("sub_type"))
-        .and_then(|value| value.as_str())
+        .and_then(|value| {
+            value
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| value.as_str())
+        })
         == Some("task")
 }
 
@@ -556,6 +621,15 @@ pub trait NotificationDbOps: DeviceRegistrationDbOps + Send + Sync + 'static {
             Report,
         >,
     > + Send;
+
+    /// Resolve every user-owned notification ID matching `filters.entities`.
+    ///
+    /// Returns an empty list when no entity filters are provided.
+    fn get_notification_ids_for_entities(
+        &self,
+        user_id: MacroUserIdStr<'_>,
+        filters: NotificationListFilters,
+    ) -> impl std::future::Future<Output = Result<Vec<Uuid>, Report>> + Send;
 
     /// Get a single user notification by ID.
     fn get_user_notification_by_id<T: DeserializeOwned + Send>(
@@ -1004,8 +1078,6 @@ impl NotificationDbOps for PgPool {
     ) -> Result<Vec<UserNotificationRow<T>>, Report> {
         let query_limit = limit as i64;
         let (cursor_id, cursor_timestamp) = cursor.vals();
-        let include_types = filters.include_type_tokens();
-        let entity_tokens = filters.entity_tokens();
 
         let rows = build_user_notifications_query(UserNotificationsQueryArgs {
             user_id: user_id.as_ref(),
@@ -1014,8 +1086,6 @@ impl NotificationDbOps for PgPool {
             cursor_id: cursor_id.copied(),
             cursor_timestamp: cursor_timestamp.copied(),
             filters: &filters,
-            include_types: &include_types,
-            entity_tokens: &entity_tokens,
         })
         .build_query_as::<UserNotificationListRow>()
         .fetch_all(self)
@@ -1102,8 +1172,6 @@ impl NotificationDbOps for PgPool {
         let query_limit = limit as i64;
         let (cursor_id, cursor_timestamp) = cursor.vals();
         let event_item_ids: Vec<String> = event_item_ids.iter().map(|id| id.to_string()).collect();
-        let include_types = filters.include_type_tokens();
-        let entity_tokens = filters.entity_tokens();
 
         let rows = build_user_notifications_query(UserNotificationsQueryArgs {
             user_id: user_id.as_ref(),
@@ -1112,8 +1180,6 @@ impl NotificationDbOps for PgPool {
             cursor_id: cursor_id.copied(),
             cursor_timestamp: cursor_timestamp.copied(),
             filters: &filters,
-            include_types: &include_types,
-            entity_tokens: &entity_tokens,
         })
         .build_query_as::<UserNotificationListRow>()
         .fetch_all(self)
@@ -1217,7 +1283,6 @@ impl NotificationDbOps for PgPool {
             include_types: Vec::new(),
             entities: entity_refs.clone(),
         };
-        let entity_tokens = filters.entity_tokens();
 
         let mut builder = QueryBuilder::new(
             r#"
@@ -1243,7 +1308,7 @@ impl NotificationDbOps for PgPool {
         );
         builder.push_bind(user_id.as_ref());
         push_notification_status_filters(&mut builder, &filters);
-        push_entities_filter(&mut builder, &entity_tokens);
+        push_exact_entity_refs_filter(&mut builder, &filters.entities);
         builder.push(" ORDER BY un.created_at DESC, un.notification_id DESC");
 
         let rows = builder
@@ -1330,6 +1395,31 @@ impl NotificationDbOps for PgPool {
         }
 
         Ok(result)
+    }
+
+    async fn get_notification_ids_for_entities(
+        &self,
+        user_id: MacroUserIdStr<'_>,
+        filters: NotificationListFilters,
+    ) -> Result<Vec<Uuid>, Report> {
+        if filters.entities.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut builder = QueryBuilder::new(
+            r#"
+            SELECT un.notification_id
+            FROM user_notification un
+            JOIN notification n ON n.id = un.notification_id
+            WHERE un.user_id = "#,
+        );
+        builder.push_bind(user_id.as_ref());
+        push_notification_status_filters(&mut builder, &filters);
+        push_include_types_filter(&mut builder, &filters.include_types);
+        push_exact_entity_refs_filter(&mut builder, &filters.entities);
+        builder.push(" ORDER BY un.created_at DESC, un.notification_id DESC");
+
+        Ok(builder.build_query_scalar::<Uuid>().fetch_all(self).await?)
     }
 
     async fn get_user_notification_by_id<T: DeserializeOwned + Send>(
@@ -1682,6 +1772,16 @@ impl<D: NotificationDbOps + Send + Sync> NotificationRepository for DbNotificati
     {
         self.db
             .get_entity_notifications_batch(user_id, entity_refs)
+            .await
+    }
+
+    async fn get_notification_ids_for_entities(
+        &self,
+        user_id: MacroUserIdStr<'_>,
+        filters: NotificationListFilters,
+    ) -> Result<Vec<Uuid>, Report> {
+        self.db
+            .get_notification_ids_for_entities(user_id, filters)
             .await
     }
 

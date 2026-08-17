@@ -16,40 +16,33 @@ use std::collections::HashSet;
 use uuid::Uuid;
 
 /// User-facing notification categories used for list filtering.
-#[allow(missing_docs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "ai_tool", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum NotificationItemType {
+    /// Email thread.
     Email,
+    /// Channel message or thread.
     Message,
+    /// Channel.
     Channel,
+    /// Non-task document.
     Document,
+    /// Project.
     Project,
+    /// Chat.
     Chat,
+    /// Call.
     Call,
+    /// Task-backed document.
     Task,
+    /// GitHub foreign entity.
     Github,
+    /// Reminder.
     Reminder,
+    /// Calendar event.
     Calendar,
-}
-
-impl NotificationItemType {
-    pub(crate) fn filter_token(self) -> &'static str {
-        match self {
-            Self::Email => "email",
-            Self::Message => "message",
-            Self::Channel => "channel",
-            Self::Document => "document",
-            Self::Project => "project",
-            Self::Chat => "chat",
-            Self::Call => "call",
-            Self::Task => "task",
-            Self::Github => "github",
-            Self::Reminder => "reminder",
-            Self::Calendar => "calendar",
-        }
-    }
 }
 
 /// User-facing reference to one specific entity to filter notifications by.
@@ -61,12 +54,6 @@ pub struct NotificationEntityRef {
     pub entity_type: NotificationItemType,
     /// Entity id. For `email`, this is the email thread id. For `message`, this is the channel message id.
     pub id: String,
-}
-
-impl NotificationEntityRef {
-    pub(crate) fn filter_token(&self) -> String {
-        format!("{}:{}", self.entity_type.filter_token(), self.id)
-    }
 }
 
 /// Request to send a notification.
@@ -320,6 +307,26 @@ pub struct UpdateNotificationsRequest<'a> {
     pub status: NotificationStatus,
 }
 
+/// Status operation supported when updating notifications by item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotificationItemUpdate {
+    /// Mark matching active unseen notifications as seen.
+    Seen,
+    /// Mark matching active notifications as done.
+    Done,
+}
+
+/// Request to update all matching active notifications for one or more items.
+#[derive(Debug)]
+pub struct UpdateNotificationsForItemsRequest<'a> {
+    /// The user whose notifications are being updated.
+    pub user_id: MacroUserIdStr<'a>,
+    /// User-facing item references whose notifications should be updated.
+    pub items: &'a [NotificationEntityRef],
+    /// Status operation to apply to the resolved notification IDs.
+    pub operation: NotificationItemUpdate,
+}
+
 /// Optional filters for listing user notifications.
 #[derive(Debug, Clone)]
 pub struct NotificationListFilters {
@@ -342,20 +349,6 @@ impl NotificationListFilters {
             include_types: Vec::new(),
             entities: Vec::new(),
         }
-    }
-
-    pub(crate) fn include_type_tokens(&self) -> Vec<String> {
-        self.include_types
-            .iter()
-            .map(|item_type| item_type.filter_token().to_string())
-            .collect()
-    }
-
-    pub(crate) fn entity_tokens(&self) -> Vec<String> {
-        self.entities
-            .iter()
-            .map(NotificationEntityRef::filter_token)
-            .collect()
     }
 }
 

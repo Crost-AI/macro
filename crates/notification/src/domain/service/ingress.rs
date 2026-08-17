@@ -14,8 +14,8 @@ use crate::domain::models::queue_message::{
 };
 use crate::domain::models::request::{
     BuildApnsOutput, GetNotificationsByEventItemIdsRequest, NotificationEntityRef,
-    NotificationListFilters, NotificationStatus, SendNotificationRequest,
-    UpdateNotificationsRequest,
+    NotificationItemUpdate, NotificationListFilters, NotificationStatus, SendNotificationRequest,
+    UpdateNotificationsForItemsRequest, UpdateNotificationsRequest,
 };
 use crate::domain::models::{
     DeviceEndpoint, DisabledNotificationType, Notification, NotificationResult,
@@ -66,6 +66,12 @@ pub trait NotificationReader: Send + Sync + 'static {
     fn update_notifications_and_return(
         &self,
         req: UpdateNotificationsRequest,
+    ) -> impl Future<Output = Result<Vec<UserNotificationRow<serde_json::Value>>, Report>> + Send;
+
+    /// Resolve notifications by item, update their status, and return authoritative rows.
+    fn update_notifications_for_items(
+        &self,
+        req: UpdateNotificationsForItemsRequest,
     ) -> impl Future<Output = Result<Vec<UserNotificationRow<serde_json::Value>>, Report>> + Send;
 
     /// Get a user's non-deleted notifications, paginated.
@@ -633,6 +639,50 @@ where
         req: UpdateNotificationsRequest<'_>,
     ) -> Result<Vec<UserNotificationRow<serde_json::Value>>, Report> {
         self.update_notifications_impl(req).await
+    }
+
+    #[tracing::instrument(err, skip(self))]
+    async fn update_notifications_for_items(
+        &self,
+        req: UpdateNotificationsForItemsRequest<'_>,
+    ) -> Result<Vec<UserNotificationRow<serde_json::Value>>, Report> {
+        let (filters, status) = match req.operation {
+            NotificationItemUpdate::Seen => (
+                NotificationListFilters {
+                    done: Some(false),
+                    seen: Some(false),
+                    include_types: Vec::new(),
+                    entities: req.items.to_vec(),
+                },
+                NotificationStatus::Seen,
+            ),
+            NotificationItemUpdate::Done => (
+                NotificationListFilters {
+                    done: Some(false),
+                    seen: None,
+                    include_types: Vec::new(),
+                    entities: req.items.to_vec(),
+                },
+                NotificationStatus::Done(true),
+            ),
+        };
+        let mut notification_ids = self
+            .repository
+            .get_notification_ids_for_entities(req.user_id.copied(), filters)
+            .await?;
+        let mut seen_ids = HashSet::new();
+        notification_ids.retain(|notification_id| seen_ids.insert(*notification_id));
+
+        if notification_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        self.update_notifications_impl(UpdateNotificationsRequest {
+            user_id: req.user_id,
+            notification_ids: &notification_ids,
+            status,
+        })
+        .await
     }
 
     #[tracing::instrument(err, skip(self))]

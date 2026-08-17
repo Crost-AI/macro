@@ -193,6 +193,13 @@ impl NotificationRepository for MockRepo {
             .map(|entity_ref| (entity_ref, Vec::new()))
             .collect())
     }
+    async fn get_notification_ids_for_entities(
+        &self,
+        _: MacroUserIdStr<'_>,
+        _: crate::domain::models::request::NotificationListFilters,
+    ) -> Result<Vec<uuid::Uuid>, Report> {
+        unimplemented!()
+    }
     async fn get_user_notification_by_id<T: serde::de::DeserializeOwned + Send>(
         &self,
         _: MacroUserIdStr<'_>,

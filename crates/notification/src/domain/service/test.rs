@@ -11,7 +11,8 @@ use crate::domain::models::queue_message::{
     RawQueueMessage, RealtimeNotif,
 };
 use crate::domain::models::request::{
-    NotificationEntityRef, NotificationItemType, NotificationStatus, UpdateNotificationsRequest,
+    NotificationEntityRef, NotificationItemType, NotificationItemUpdate, NotificationListFilters,
+    NotificationStatus, UpdateNotificationsForItemsRequest, UpdateNotificationsRequest,
 };
 use crate::domain::models::{
     DeviceEndpoint, Notification, NotificationExtEmail, NotificationExtIos,
@@ -19,8 +20,8 @@ use crate::domain::models::{
     RateLimitResult, SendNotificationRequestBuilder, TaggedContent, UserNotificationRow,
 };
 use crate::domain::ports::{
-    EmailSender, NotificationEgress, NotificationQueue, NotificationRepository, NotificationSender,
-    RealtimeSender, SnsEndpointManager,
+    EmailSender, NotificationEgress, NotificationQueue, NotificationRealtimePublisher,
+    NotificationRepository, NotificationSender, RealtimeSender, SnsEndpointManager,
 };
 use crate::domain::service::{
     NotificationEgressService, NotificationIngress, NotificationIngressService, NotificationReader,
@@ -113,6 +114,8 @@ struct MockRepository {
     digest_eligible_notification_ids: Option<HashSet<Uuid>>,
     entity_notifications:
         HashMap<NotificationEntityRef, Vec<UserNotificationRow<serde_json::Value>>>,
+    item_notification_ids: Vec<Uuid>,
+    item_lookup_calls: Mutex<Vec<(String, Vec<NotificationEntityRef>, NotificationListFilters)>>,
     mark_seen_calls: Mutex<Vec<(String, Vec<Uuid>)>>,
     mark_done_calls: Mutex<Vec<(String, Vec<Uuid>, bool)>>,
 }
@@ -129,6 +132,8 @@ impl MockRepository {
             basic_notifications: Vec::new(),
             digest_eligible_notification_ids: None,
             entity_notifications: HashMap::new(),
+            item_notification_ids: Vec::new(),
+            item_lookup_calls: Mutex::new(Vec::new()),
             mark_seen_calls: Mutex::new(Vec::new()),
             mark_done_calls: Mutex::new(Vec::new()),
         }
@@ -156,6 +161,11 @@ impl MockRepository {
         notifications: Vec<UserNotificationRow<serde_json::Value>>,
     ) -> Self {
         self.entity_notifications.insert(entity_ref, notifications);
+        self
+    }
+
+    fn with_item_notification_ids(mut self, notification_ids: Vec<Uuid>) -> Self {
+        self.item_notification_ids = notification_ids;
         self
     }
 
@@ -196,6 +206,36 @@ impl BulkDigestStateMachine for MockStateMachine {
     ) -> Result<crate::domain::models::email_notification_digest::StateMachineDecisionA, Report>
     {
         Err(report!("not implemented"))
+    }
+}
+
+#[derive(Clone, Default)]
+struct CapturingNotificationRealtimePublisher {
+    calls: Arc<Mutex<Vec<(String, Vec<Uuid>)>>>,
+}
+
+impl NotificationRealtimePublisher for CapturingNotificationRealtimePublisher {
+    async fn publish_updates(
+        &self,
+        payload: &crate::domain::models::NotificationStatusPayload<'_>,
+    ) -> Result<(), Report> {
+        let crate::domain::models::NotificationStatusPayload::UserNotifications { user, updates } =
+            payload
+        else {
+            panic!("expected user-scoped notification status updates");
+        };
+        let notification_ids = updates
+            .iter()
+            .filter_map(|update| match update {
+                crate::domain::models::PatchDelete::Patch { diff } => Some(diff.notification_id),
+                crate::domain::models::PatchDelete::Delete { .. } => None,
+            })
+            .collect();
+        self.calls
+            .lock()
+            .unwrap()
+            .push((user.to_string(), notification_ids));
+        Ok(())
     }
 }
 
@@ -382,6 +422,19 @@ impl NotificationRepository for MockRepository {
                 (entity_ref, notifications)
             })
             .collect())
+    }
+
+    async fn get_notification_ids_for_entities(
+        &self,
+        user_id: MacroUserIdStr<'_>,
+        filters: NotificationListFilters,
+    ) -> Result<Vec<Uuid>, Report> {
+        let item_refs = filters.entities.clone();
+        self.item_lookup_calls
+            .lock()
+            .unwrap()
+            .push((user_id.to_string(), item_refs, filters));
+        Ok(self.item_notification_ids.clone())
     }
 
     async fn get_user_notification_by_id<T: DeserializeOwned + Send>(
@@ -607,6 +660,16 @@ impl NotificationRepository for std::sync::Arc<MockRepository> {
     {
         (**self)
             .get_entity_notifications_batch(user_id, entity_refs)
+            .await
+    }
+
+    async fn get_notification_ids_for_entities(
+        &self,
+        user_id: MacroUserIdStr<'_>,
+        filters: crate::domain::models::request::NotificationListFilters,
+    ) -> Result<Vec<Uuid>, Report> {
+        (**self)
+            .get_notification_ids_for_entities(user_id, filters)
             .await
     }
 
@@ -1771,6 +1834,126 @@ async fn test_update_notifications_and_return_preserves_requested_order() {
             .iter()
             .all(|notification| notification.owner_id == user)
     );
+}
+
+#[tokio::test]
+async fn test_update_notifications_for_items_resolves_unseen_ids_and_reuses_seen_path() {
+    let user = test_user_id("items-seen@example.com");
+    let first = Uuid::now_v7();
+    let second = Uuid::now_v7();
+    let item = NotificationEntityRef {
+        entity_type: NotificationItemType::Document,
+        id: "doc-1".to_string(),
+    };
+    let repo = Arc::new(
+        MockRepository::new()
+            .with_item_notification_ids(vec![first, first, second])
+            .with_basic_notification(first, "item-collapse".to_string())
+            .with_device_endpoint(
+                user.clone(),
+                DeviceEndpoint::Ios(
+                    "arn:aws:sns:us-east-1:111:endpoint/APNS/app/items-seen".to_string(),
+                ),
+            ),
+    );
+    let queue = Arc::new(MockQueue::new());
+    let realtime = CapturingNotificationRealtimePublisher::default();
+    let realtime_calls = realtime.calls.clone();
+    let service = NotificationReaderService {
+        repository: repo.clone(),
+        queue: queue.clone(),
+        sns_endpoint: MockSnsEndpoint,
+        platform_config: test_platform_config(),
+        realtime,
+    };
+    let duplicate_items = [item.clone(), item.clone()];
+
+    let updated = service
+        .update_notifications_for_items(UpdateNotificationsForItemsRequest {
+            user_id: user.clone(),
+            items: &duplicate_items,
+            operation: NotificationItemUpdate::Seen,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        updated
+            .iter()
+            .map(|notification| notification.notification_id)
+            .collect::<Vec<_>>(),
+        vec![first, second]
+    );
+    assert_eq!(
+        repo.mark_seen_calls.lock().unwrap().as_slice(),
+        [(user.to_string(), vec![first, second])]
+    );
+    let lookup_calls = repo.item_lookup_calls.lock().unwrap();
+    assert_eq!(lookup_calls.len(), 1);
+    assert_eq!(lookup_calls[0].0, user.to_string());
+    assert_eq!(lookup_calls[0].1, duplicate_items);
+    assert_eq!(lookup_calls[0].2.done, Some(false));
+    assert_eq!(lookup_calls[0].2.seen, Some(false));
+    assert_eq!(queue.get_published().len(), 1);
+    assert_eq!(
+        realtime_calls.lock().unwrap().as_slice(),
+        [(user.to_string(), vec![first, second])]
+    );
+}
+
+#[tokio::test]
+async fn test_update_notifications_for_items_marks_active_rows_done_and_noops_without_matches() {
+    let user = test_user_id("items-done@example.com");
+    let notification_id = Uuid::now_v7();
+    let item = NotificationEntityRef {
+        entity_type: NotificationItemType::Message,
+        id: "message-1".to_string(),
+    };
+    let repo = Arc::new(MockRepository::new().with_item_notification_ids(vec![notification_id]));
+    let service = NotificationReaderService {
+        repository: repo.clone(),
+        queue: Arc::new(MockQueue::new()),
+        sns_endpoint: MockSnsEndpoint,
+        platform_config: test_platform_config(),
+        realtime: crate::domain::ports::NoopNotificationRealtimePublisher,
+    };
+
+    service
+        .update_notifications_for_items(UpdateNotificationsForItemsRequest {
+            user_id: user.clone(),
+            items: std::slice::from_ref(&item),
+            operation: NotificationItemUpdate::Done,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        repo.mark_done_calls.lock().unwrap().as_slice(),
+        [(user.to_string(), vec![notification_id], true)]
+    );
+    let lookup_calls = repo.item_lookup_calls.lock().unwrap();
+    assert_eq!(lookup_calls[0].2.done, Some(false));
+    assert_eq!(lookup_calls[0].2.seen, None);
+    drop(lookup_calls);
+
+    let empty_repo = Arc::new(MockRepository::new());
+    let empty_service = NotificationReaderService {
+        repository: empty_repo.clone(),
+        queue: Arc::new(MockQueue::new()),
+        sns_endpoint: MockSnsEndpoint,
+        platform_config: test_platform_config(),
+        realtime: crate::domain::ports::NoopNotificationRealtimePublisher,
+    };
+    let updated = empty_service
+        .update_notifications_for_items(UpdateNotificationsForItemsRequest {
+            user_id: user,
+            items: &[item],
+            operation: NotificationItemUpdate::Done,
+        })
+        .await
+        .unwrap();
+    assert!(updated.is_empty());
+    assert!(empty_repo.mark_done_calls.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

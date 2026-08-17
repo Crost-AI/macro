@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { BulkDeleteUserNotificationsV2Data, BulkDeleteUserNotificationsV2Errors, BulkDeleteUserNotificationsV2Responses, BulkGetTypedNotificationsByEventItemIdsData, BulkGetTypedNotificationsByEventItemIdsErrors, BulkGetTypedNotificationsByEventItemIdsResponses, BulkMarkNotificationsDoneData, BulkMarkNotificationsDoneErrors, BulkMarkNotificationsDoneResponses, BulkMarkNotificationsSeenData, BulkMarkNotificationsSeenErrors, BulkMarkNotificationsSeenResponses, BulkMarkNotificationsUndoneData, BulkMarkNotificationsUndoneErrors, BulkMarkNotificationsUndoneResponses, DeleteUserNotificationV2Data, DeleteUserNotificationV2Errors, DeleteUserNotificationV2Responses, DisableNotificationTypeData, DisableNotificationTypeErrors, DisableNotificationTypeResponses, EnableNotificationTypeData, EnableNotificationTypeErrors, EnableNotificationTypeResponses, GetNotificationTypePreferencesData, GetNotificationTypePreferencesErrors, GetNotificationTypePreferencesResponses, GetTypedNotificationByIdData, GetTypedNotificationByIdErrors, GetTypedNotificationByIdResponses, GetTypedNotificationsByEventItemIdData, GetTypedNotificationsByEventItemIdErrors, GetTypedNotificationsByEventItemIdResponses, GetUnsubscribesData, GetUnsubscribesErrors, GetUnsubscribesResponses, HealthHandlerData, HealthHandlerResponses, ListTypedNotificationsData, ListTypedNotificationsErrors, ListTypedNotificationsResponses, RemoveUnsubscribeAllData, RemoveUnsubscribeAllErrors, RemoveUnsubscribeAllResponses, RemoveUnsubscribeItemData, RemoveUnsubscribeItemErrors, RemoveUnsubscribeItemResponses, UnsubscribeAllData, UnsubscribeAllErrors, UnsubscribeAllResponses, UnsubscribeEmailData, UnsubscribeEmailErrors, UnsubscribeEmailResponses, UnsubscribeItemData, UnsubscribeItemErrors, UnsubscribeItemResponses } from './types.gen';
+import type { BulkDeleteUserNotificationsV2Data, BulkDeleteUserNotificationsV2Errors, BulkDeleteUserNotificationsV2Responses, BulkGetTypedNotificationsByEventItemIdsData, BulkGetTypedNotificationsByEventItemIdsErrors, BulkGetTypedNotificationsByEventItemIdsResponses, BulkMarkItemNotificationsDoneData, BulkMarkItemNotificationsDoneErrors, BulkMarkItemNotificationsDoneResponses, BulkMarkItemNotificationsSeenData, BulkMarkItemNotificationsSeenErrors, BulkMarkItemNotificationsSeenResponses, BulkMarkNotificationsDoneData, BulkMarkNotificationsDoneErrors, BulkMarkNotificationsDoneResponses, BulkMarkNotificationsSeenData, BulkMarkNotificationsSeenErrors, BulkMarkNotificationsSeenResponses, BulkMarkNotificationsUndoneData, BulkMarkNotificationsUndoneErrors, BulkMarkNotificationsUndoneResponses, DeleteUserNotificationV2Data, DeleteUserNotificationV2Errors, DeleteUserNotificationV2Responses, DisableNotificationTypeData, DisableNotificationTypeErrors, DisableNotificationTypeResponses, EnableNotificationTypeData, EnableNotificationTypeErrors, EnableNotificationTypeResponses, GetNotificationTypePreferencesData, GetNotificationTypePreferencesErrors, GetNotificationTypePreferencesResponses, GetTypedNotificationByIdData, GetTypedNotificationByIdErrors, GetTypedNotificationByIdResponses, GetTypedNotificationsByEventItemIdData, GetTypedNotificationsByEventItemIdErrors, GetTypedNotificationsByEventItemIdResponses, GetUnsubscribesData, GetUnsubscribesErrors, GetUnsubscribesResponses, HealthHandlerData, HealthHandlerResponses, ListTypedNotificationsData, ListTypedNotificationsErrors, ListTypedNotificationsResponses, RemoveUnsubscribeAllData, RemoveUnsubscribeAllErrors, RemoveUnsubscribeAllResponses, RemoveUnsubscribeItemData, RemoveUnsubscribeItemErrors, RemoveUnsubscribeItemResponses, UnsubscribeAllData, UnsubscribeAllErrors, UnsubscribeAllResponses, UnsubscribeEmailData, UnsubscribeEmailErrors, UnsubscribeEmailResponses, UnsubscribeItemData, UnsubscribeItemErrors, UnsubscribeItemResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -134,6 +134,34 @@ export class Sdk extends HeyApiClient {
         });
     }
     
+    /**
+     * Mark all active notifications matching the requested items as done.
+     */
+    public bulkMarkItemNotificationsDone<ThrowOnError extends boolean = false>(options: Options<BulkMarkItemNotificationsDoneData, ThrowOnError>): RequestResult<BulkMarkItemNotificationsDoneResponses, BulkMarkItemNotificationsDoneErrors, ThrowOnError> {
+        return (options.client ?? this.client).patch<BulkMarkItemNotificationsDoneResponses, BulkMarkItemNotificationsDoneErrors, ThrowOnError>({
+            url: '/v1/user_notifications/item/bulk/done',
+            ...options,
+            headers: {
+                'Content-Type': 'application/json',
+                ...options.headers
+            }
+        });
+    }
+
+    /**
+     * Mark all active unseen notifications matching the requested items as seen.
+     */
+    public bulkMarkItemNotificationsSeen<ThrowOnError extends boolean = false>(options: Options<BulkMarkItemNotificationsSeenData, ThrowOnError>): RequestResult<BulkMarkItemNotificationsSeenResponses, BulkMarkItemNotificationsSeenErrors, ThrowOnError> {
+        return (options.client ?? this.client).patch<BulkMarkItemNotificationsSeenResponses, BulkMarkItemNotificationsSeenErrors, ThrowOnError>({
+            url: '/v1/user_notifications/item/bulk/seen',
+            ...options,
+            headers: {
+                'Content-Type': 'application/json',
+                ...options.headers
+            }
+        });
+    }
+
     /**
      * Typed wrapper for getting notifications by a single event item ID.
      */

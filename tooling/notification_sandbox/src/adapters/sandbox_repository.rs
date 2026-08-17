@@ -165,6 +165,16 @@ impl NotificationRepository for SandboxNotificationRepository {
             .await
     }
 
+    async fn get_notification_ids_for_entities(
+        &self,
+        user_id: MacroUserIdStr<'_>,
+        filters: NotificationListFilters,
+    ) -> Result<Vec<Uuid>, Report> {
+        self.inner
+            .get_notification_ids_for_entities(user_id, filters)
+            .await
+    }
+
     async fn get_user_notification_by_id<T: DeserializeOwned + Send>(
         &self,
         user_id: MacroUserIdStr<'_>,

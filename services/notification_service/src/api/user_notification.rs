@@ -149,6 +149,14 @@ pub fn router<S: ::notification::domain::service::NotificationReader>()
             axum::routing::post(bulk_get_typed_notifications_by_event_item_ids::<S>),
         )
         .route(
+            "/item/bulk/seen",
+            axum::routing::patch(bulk_mark_typed_items_seen::<S>),
+        )
+        .route(
+            "/item/bulk/done",
+            axum::routing::patch(bulk_mark_typed_items_done::<S>),
+        )
+        .route(
             "/item/{event_item_id}",
             axum::routing::get(get_typed_by_event_item_id::<S>),
         )
@@ -231,6 +239,81 @@ async fn list_typed_notifications<S: ::notification::domain::service::Notificati
             .collect(),
         next_cursor: response.next_cursor,
     }))
+}
+
+/// Mark all active unseen notifications matching the requested items as seen.
+#[utoipa::path(
+    patch,
+    operation_id = "bulk_mark_item_notifications_seen",
+    path = "/v1/user_notifications/item/bulk/seen",
+    request_body = ::notification::inbound::http::NotificationItemBulkRequest,
+    responses(
+        (status = 200, body = Vec<ApiUserNotification>),
+        (status = 400, body = ErrorResponse),
+        (status = 401, body = ErrorResponse),
+        (status = 500, body = ErrorResponse),
+    )
+)]
+async fn bulk_mark_typed_items_seen<S: ::notification::domain::service::NotificationReader>(
+    state: axum::extract::State<
+        ::notification::inbound::http::NotificationRouterState<S, AuthorizationService>,
+    >,
+    user: MacroAuthorizationExtractor<AuthorizationService, UserOrInternal>,
+    body: axum::Json<::notification::inbound::http::NotificationItemBulkRequest>,
+) -> Result<
+    axum::Json<Vec<ApiUserNotification>>,
+    (
+        axum::http::StatusCode,
+        axum::Json<model_error_response::ErrorResponse<'static>>,
+    ),
+> {
+    let axum::Json(rows) =
+        ::notification::inbound::http::bulk_mark_items_seen(state, user, body).await?;
+    Ok(axum::Json(to_typed_api_notifications(rows)))
+}
+
+/// Mark all active notifications matching the requested items as done.
+#[utoipa::path(
+    patch,
+    operation_id = "bulk_mark_item_notifications_done",
+    path = "/v1/user_notifications/item/bulk/done",
+    request_body = ::notification::inbound::http::NotificationItemBulkRequest,
+    responses(
+        (status = 200, body = Vec<ApiUserNotification>),
+        (status = 400, body = ErrorResponse),
+        (status = 401, body = ErrorResponse),
+        (status = 500, body = ErrorResponse),
+    )
+)]
+async fn bulk_mark_typed_items_done<S: ::notification::domain::service::NotificationReader>(
+    state: axum::extract::State<
+        ::notification::inbound::http::NotificationRouterState<S, AuthorizationService>,
+    >,
+    user: MacroAuthorizationExtractor<AuthorizationService, UserOrInternal>,
+    body: axum::Json<::notification::inbound::http::NotificationItemBulkRequest>,
+) -> Result<
+    axum::Json<Vec<ApiUserNotification>>,
+    (
+        axum::http::StatusCode,
+        axum::Json<model_error_response::ErrorResponse<'static>>,
+    ),
+> {
+    let axum::Json(rows) =
+        ::notification::inbound::http::bulk_mark_items_done(state, user, body).await?;
+    Ok(axum::Json(to_typed_api_notifications(rows)))
+}
+
+fn to_typed_api_notifications(
+    rows: Vec<UserNotificationRow<serde_json::Value>>,
+) -> Vec<ApiUserNotification> {
+    rows.into_iter()
+        .filter_map(|row| {
+            to_typed_row(row)
+                .inspect_err(|e| tracing::warn!(error=?e, "failed to deserialize notification row"))
+                .ok()
+        })
+        .map(ApiUserNotification::from_notification)
+        .collect()
 }
 
 struct CleanUpNotificationsTask<S> {

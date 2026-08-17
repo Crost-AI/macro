@@ -29,8 +29,9 @@ use crate::domain::{
     models::{
         UserNotificationRow,
         request::{
-            GetNotificationsByEventItemIdsRequest, NotificationListFilters, NotificationStatus,
-            UpdateNotificationsRequest,
+            GetNotificationsByEventItemIdsRequest, NotificationEntityRef, NotificationItemType,
+            NotificationItemUpdate, NotificationListFilters, NotificationStatus,
+            UpdateNotificationsForItemsRequest, UpdateNotificationsRequest,
         },
     },
     service::NotificationReader,
@@ -259,12 +260,125 @@ pub async fn bulk_get_by_event_item_ids<
     }))
 }
 
+/// One item whose active notifications should be updated.
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationItemRefRequest {
+    /// User-facing item category.
+    pub item_type: NotificationItemType,
+    /// Item identifier.
+    #[schema(min_length = 1)]
+    pub item_id: String,
+}
+
+impl From<NotificationItemRefRequest> for NotificationEntityRef {
+    fn from(value: NotificationItemRefRequest) -> Self {
+        Self {
+            entity_type: value.item_type,
+            id: value.item_id,
+        }
+    }
+}
+
+/// Request body for updating notifications matching one or more items.
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationItemBulkRequest {
+    /// Items whose matching notifications should be updated.
+    #[schema(max_items = 100)]
+    pub items: Vec<NotificationItemRefRequest>,
+}
+
 /// the notification ids that we are bulk updating
 #[derive(Serialize, Deserialize, Debug, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct NotificationBulkRequest {
     /// The ids of the notifications to handle
     pub notification_ids: Vec<uuid::Uuid>,
+}
+
+/// Mark every active unseen notification matching the requested items as seen.
+pub async fn bulk_mark_items_seen<S: NotificationReader, Auth: MacroAuthorizationService>(
+    State(service): State<NotificationRouterState<S, Auth>>,
+    user: MacroAuthorizationExtractor<Auth, UserOrInternal>,
+    Json(req): Json<NotificationItemBulkRequest>,
+) -> Result<
+    Json<Vec<UserNotificationRow<serde_json::Value>>>,
+    (StatusCode, Json<ErrorResponse<'static>>),
+> {
+    bulk_update_items(
+        &service,
+        user.authorization.user.macro_user_id,
+        req,
+        NotificationItemUpdate::Seen,
+    )
+    .await
+}
+
+/// Mark every active notification matching the requested items as done.
+pub async fn bulk_mark_items_done<S: NotificationReader, Auth: MacroAuthorizationService>(
+    State(service): State<NotificationRouterState<S, Auth>>,
+    user: MacroAuthorizationExtractor<Auth, UserOrInternal>,
+    Json(req): Json<NotificationItemBulkRequest>,
+) -> Result<
+    Json<Vec<UserNotificationRow<serde_json::Value>>>,
+    (StatusCode, Json<ErrorResponse<'static>>),
+> {
+    bulk_update_items(
+        &service,
+        user.authorization.user.macro_user_id,
+        req,
+        NotificationItemUpdate::Done,
+    )
+    .await
+}
+
+async fn bulk_update_items<S: NotificationReader, Auth: MacroAuthorizationService>(
+    service: &NotificationRouterState<S, Auth>,
+    user_id: MacroUserIdStr<'static>,
+    req: NotificationItemBulkRequest,
+    operation: NotificationItemUpdate,
+) -> Result<
+    Json<Vec<UserNotificationRow<serde_json::Value>>>,
+    (StatusCode, Json<ErrorResponse<'static>>),
+> {
+    if req.items.len() > 100 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                message: "at most 100 notification items may be updated at once".into(),
+            }),
+        ));
+    }
+    if req.items.iter().any(|item| item.item_id.trim().is_empty()) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                message: "notification item IDs must not be empty".into(),
+            }),
+        ));
+    }
+
+    let items = req.items.into_iter().map(Into::into).collect::<Vec<_>>();
+    let notifications = service
+        .inner
+        .update_notifications_for_items(UpdateNotificationsForItemsRequest {
+            user_id,
+            items: &items,
+            operation,
+        })
+        .await
+        .map_err(|e| {
+            tracing::error!(error=?e, "failed to update notifications for items");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    message: "failed to update notifications".into(),
+                }),
+            )
+        })?;
+
+    Ok(Json(notifications))
 }
 
 /// Mark notifications as seen.

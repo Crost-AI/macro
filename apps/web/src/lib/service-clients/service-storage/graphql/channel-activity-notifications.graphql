@@ -17,3 +17,10 @@ mutation UpdateNotifications($input: UpdateNotificationsInput!) {
 		...SoupNotificationFields
 	}
 }
+
+mutation UpdateItemNotifications($input: UpdateItemNotificationsInput!) {
+	updateItemNotifications(input: $input) {
+		__typename
+		...SoupNotificationFields
+	}
+}

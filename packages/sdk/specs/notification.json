@@ -452,6 +452,130 @@
         }
       }
     },
+    "/v1/user_notifications/item/bulk/done": {
+      "patch": {
+        "tags": ["user_notification"],
+        "summary": "Mark all active notifications matching the requested items as done.",
+        "operationId": "bulk_mark_item_notifications_done",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationItemBulkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ApiUserNotification"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/user_notifications/item/bulk/seen": {
+      "patch": {
+        "tags": ["user_notification"],
+        "summary": "Mark all active unseen notifications matching the requested items as seen.",
+        "operationId": "bulk_mark_item_notifications_seen",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationItemBulkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ApiUserNotification"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/user_notifications/item/{event_item_id}": {
       "get": {
         "tags": ["user_notification"],
@@ -2379,6 +2503,54 @@
           }
         ],
         "description": "The sub type of a document in a notification.\nSerializes as `{ \"type\": \"task\" }` matching the storage service pattern."
+      },
+      "NotificationItemBulkRequest": {
+        "type": "object",
+        "description": "Request body for updating notifications matching one or more items.",
+        "required": ["items"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationItemRefRequest"
+            },
+            "description": "Items whose matching notifications should be updated.",
+            "maxItems": 100
+          }
+        }
+      },
+      "NotificationItemRefRequest": {
+        "type": "object",
+        "description": "One item whose active notifications should be updated.",
+        "required": ["itemType", "itemId"],
+        "properties": {
+          "itemId": {
+            "type": "string",
+            "description": "Item identifier.",
+            "minLength": 1
+          },
+          "itemType": {
+            "$ref": "#/components/schemas/NotificationItemType",
+            "description": "User-facing item category."
+          }
+        }
+      },
+      "NotificationItemType": {
+        "type": "string",
+        "description": "User-facing notification categories used for list filtering.",
+        "enum": [
+          "email",
+          "message",
+          "channel",
+          "document",
+          "project",
+          "chat",
+          "call",
+          "task",
+          "github",
+          "reminder",
+          "calendar"
+        ]
       },
       "NotificationServiceApiVersion": {
         "type": "string",

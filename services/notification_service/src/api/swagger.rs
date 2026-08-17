@@ -40,6 +40,8 @@ use crate::{
                 user_notification::bulk_get_typed_notifications_by_event_item_ids,
                 user_notification::get_typed_by_event_item_id,
                 user_notification::get_typed_notification_by_id,
+                user_notification::bulk_mark_typed_items_seen,
+                user_notification::bulk_mark_typed_items_done,
                 notification_crate::inbound::http::delete_notification,
                 notification_crate::inbound::http::bulk_delete_notifications,
                 notification_crate::inbound::http::bulk_mark_seen,
@@ -106,6 +108,9 @@ use crate::{
                         // WebSocket notification payload
                         notification_crate::domain::models::queue_message::ConnGatewayNotificationPayload,
                         notification_crate::inbound::http::BulkGetByEventItemIdsRequest,
+                        notification_crate::domain::models::request::NotificationItemType,
+                        notification_crate::inbound::http::NotificationItemRefRequest,
+                        notification_crate::inbound::http::NotificationItemBulkRequest,
                         notification_crate::inbound::http::preferences::GetNotificationTypePreferencesResponse,
                 ),
         ),

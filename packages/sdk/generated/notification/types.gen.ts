@@ -893,6 +893,35 @@ export type NotificationDocumentSubType = {
     type: 'skill';
 };
 
+/**
+ * Request body for updating notifications matching one or more items.
+ */
+export type NotificationItemBulkRequest = {
+    /**
+     * Items whose matching notifications should be updated.
+     */
+    items: Array<NotificationItemRefRequest>;
+};
+
+/**
+ * One item whose active notifications should be updated.
+ */
+export type NotificationItemRefRequest = {
+    /**
+     * Item identifier.
+     */
+    itemId: string;
+    /**
+     * User-facing item category.
+     */
+    itemType: NotificationItemType;
+};
+
+/**
+ * User-facing notification categories used for list filtering.
+ */
+export type NotificationItemType = 'email' | 'message' | 'channel' | 'document' | 'project' | 'chat' | 'call' | 'task' | 'github' | 'reminder' | 'calendar';
+
 export type NotificationServiceApiVersion = 'v1';
 
 /**
@@ -1251,6 +1280,48 @@ export type BulkGetTypedNotificationsByEventItemIdsResponses = {
 };
 
 export type BulkGetTypedNotificationsByEventItemIdsResponse = BulkGetTypedNotificationsByEventItemIdsResponses[keyof BulkGetTypedNotificationsByEventItemIdsResponses];
+
+export type BulkMarkItemNotificationsDoneData = {
+    body: NotificationItemBulkRequest;
+    path?: never;
+    query?: never;
+    url: '/v1/user_notifications/item/bulk/done';
+};
+
+export type BulkMarkItemNotificationsDoneErrors = {
+    400: ErrorResponse;
+    401: ErrorResponse;
+    500: ErrorResponse;
+};
+
+export type BulkMarkItemNotificationsDoneError = BulkMarkItemNotificationsDoneErrors[keyof BulkMarkItemNotificationsDoneErrors];
+
+export type BulkMarkItemNotificationsDoneResponses = {
+    200: Array<ApiUserNotification>;
+};
+
+export type BulkMarkItemNotificationsDoneResponse = BulkMarkItemNotificationsDoneResponses[keyof BulkMarkItemNotificationsDoneResponses];
+
+export type BulkMarkItemNotificationsSeenData = {
+    body: NotificationItemBulkRequest;
+    path?: never;
+    query?: never;
+    url: '/v1/user_notifications/item/bulk/seen';
+};
+
+export type BulkMarkItemNotificationsSeenErrors = {
+    400: ErrorResponse;
+    401: ErrorResponse;
+    500: ErrorResponse;
+};
+
+export type BulkMarkItemNotificationsSeenError = BulkMarkItemNotificationsSeenErrors[keyof BulkMarkItemNotificationsSeenErrors];
+
+export type BulkMarkItemNotificationsSeenResponses = {
+    200: Array<ApiUserNotification>;
+};
+
+export type BulkMarkItemNotificationsSeenResponse = BulkMarkItemNotificationsSeenResponses[keyof BulkMarkItemNotificationsSeenResponses];
 
 export type GetTypedNotificationsByEventItemIdData = {
     body?: never;
