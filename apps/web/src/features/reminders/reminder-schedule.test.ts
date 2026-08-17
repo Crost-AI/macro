@@ -803,3 +803,60 @@ describe('reminderEditPatch with recurrences', () => {
     ).toEqual({ schedule: daily, completed: false });
   });
 });
+
+describe('keeping a recurring schedule unchanged', () => {
+  const weekdays = {
+    type: 'recurring' as const,
+    cron: '0 0 9 * * 2-6',
+    timezone: 'America/New_York',
+  };
+
+  // The regression this guards is a data-loss one. The date list's lead row for
+  // a recurring reminder says "Keep repeating"; if activating it submitted the
+  // reminder's *next firing* instead of its schedule, one Enter would collapse
+  // a standing series into a single day.
+  it('sends no schedule when the existing recurrence is handed back', () => {
+    const patch = reminderEditPatch(
+      { description: 'Standup', schedule: weekdays, completed: false },
+      { description: 'Standup', schedule: weekdays }
+    );
+
+    expect(patch).toBeUndefined();
+  });
+
+  it('sends only the description when a recurring reminder is renamed', () => {
+    const patch = reminderEditPatch(
+      { description: 'Standup', schedule: weekdays, completed: false },
+      { description: 'Team standup', schedule: weekdays }
+    );
+
+    expect(patch).toEqual({ description: 'Team standup' });
+    expect(patch?.schedule).toBeUndefined();
+  });
+
+  // What it would look like if the keep row ever regressed to submitting a date.
+  it('treats the next firing as a real change, which is why keep must not send it', () => {
+    const nextFiring = onceSchedule(new Date('2026-08-10T13:00:00.000Z'));
+
+    expect(
+      reminderEditPatch(
+        { description: 'Standup', schedule: weekdays, completed: false },
+        { description: 'Standup', schedule: nextFiring }
+      )
+    ).toEqual({ schedule: nextFiring });
+  });
+
+  it('does not treat a re-spelled equivalent cron as a change', () => {
+    // `withoutDailyFrequency` rewrites daily as weekly-all-days for the
+    // automation picker, so the same schedule can arrive spelled either way.
+    const asDaily = { ...weekdays, cron: '0 0 9 * * *' };
+    const asEveryWeekday = { ...weekdays, cron: '0 0 9 * * 1,2,3,4,5,6,7' };
+
+    expect(
+      reminderEditPatch(
+        { description: 'Standup', schedule: asDaily, completed: false },
+        { description: 'Standup', schedule: asEveryWeekday }
+      )
+    ).toBeUndefined();
+  });
+});

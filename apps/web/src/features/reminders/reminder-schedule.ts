@@ -3,6 +3,7 @@ import {
   type CronParts,
   describeCron,
   getDefaultTimezone,
+  normalizeCron,
   parseCron,
   type ScheduleFrequency,
 } from '@core/util/cron';
@@ -134,7 +135,10 @@ export function describeReminderSchedule(
   schedule: ReminderSchedule
 ): string | undefined {
   if (!isRecurring(schedule)) return undefined;
-  const described = describeCron(parseCron(schedule.cron));
+  // The zone is part of the schedule, not decoration: "every day at 9:00 AM"
+  // means a different instant in Denver than in Berlin, and a reminder built in
+  // one and read in the other has to say which it fires by.
+  const described = describeCron(parseCron(schedule.cron), schedule.timezone);
   return described.charAt(0).toUpperCase() + described.slice(1);
 }
 
@@ -145,7 +149,14 @@ export function sameSchedule(
 ): boolean {
   if (a.type !== b.type) return false;
   if (isRecurring(a) && isRecurring(b)) {
-    return a.cron === b.cron && a.timezone === b.timezone;
+    // Normalized, not compared literally: two spellings of the same schedule
+    // must not read as an edit. Sending a schedule the owner did not change
+    // is not harmless — the backend treats any schedule write as a reschedule
+    // and clears the done flag with it.
+    return (
+      normalizeCron(a.cron) === normalizeCron(b.cron) &&
+      a.timezone === b.timezone
+    );
   }
   if (!isRecurring(a) && !isRecurring(b)) {
     // Compared as instants, not strings: the same moment can be written with a

@@ -6,9 +6,9 @@ use macro_user_id::user_id::MacroUserIdStr;
 use uuid::Uuid;
 
 use crate::domain::models::{
-    CreateReminder, DeliveryOutcome, DueFiring, DueReminder, NewReminder, Reminder, ReminderBatch,
-    ReminderDispatchMessage, ReminderError, ReminderFilter, ReminderForSoup, ReminderPage,
-    ReminderPatch, ReminderUpdate, SoupReminderQuery, SweepSummary,
+    Completion, CreateReminder, DeliveryOutcome, DueFiring, DueReminder, NewReminder, Reminder,
+    ReminderBatch, ReminderDispatchMessage, ReminderError, ReminderFilter, ReminderForSoup,
+    ReminderPage, ReminderPatch, ReminderUpdate, SoupReminderQuery, SweepSummary,
 };
 
 /// Source of the current time.
@@ -173,6 +173,10 @@ pub trait ReminderDispatchRepo: Send + Sync + 'static {
     /// Record the firing as delivered, and move a recurring reminder on to
     /// `advance_to`.
     ///
+    /// Named for both halves because it does both, and the pairing is the whole
+    /// point — a call site that reads this as "mark sent" alone is a call site
+    /// that will eventually drop the advance.
+    ///
     /// Marks the occurrence, not the reminder: delivery is not completion.
     /// `completed_at` is the owner saying they are finished with a reminder,
     /// and one that has just landed in their inbox is not. The sent occurrence
@@ -190,23 +194,32 @@ pub trait ReminderDispatchRepo: Send + Sync + 'static {
     ///
     /// Implementations must not advance a reminder whose `next_run_at` has
     /// moved off `scheduled_for`: that means the owner rescheduled mid-flight,
-    /// and their choice outranks the series.
-    fn complete_occurrence(
+    /// and their choice outranks the series. Declining to advance is reported
+    /// as [`Completion::Superseded`] rather than passed over in silence, so a
+    /// no-op that is expected cannot be mistaken for one that is not.
+    fn complete_occurrence_and_advance(
         &self,
         reminder_id: Uuid,
         scheduled_for: DateTime<Utc>,
         advance_to: Option<DateTime<Utc>>,
-    ) -> impl Future<Output = Result<(), Self::Err>> + Send;
+    ) -> impl Future<Output = Result<Completion, Self::Err>> + Send;
 
-    /// Retract the notifications this reminder's earlier firings produced.
+    /// Retract the notifications this reminder's firings before `before` left
+    /// behind.
     ///
-    /// Only recurring delivery calls this, immediately before notifying again,
-    /// so a daily reminder shows the firing its owner has not dealt with rather
-    /// than every one since they last looked. A one-shot has no earlier firing
-    /// to retract.
+    /// Only recurring delivery calls this, so a daily reminder shows the firing
+    /// its owner has not dealt with rather than every one since they last
+    /// looked. A one-shot has no earlier firing to retract.
+    ///
+    /// Bounded by `before` — the firing just delivered — rather than clearing
+    /// the reminder outright. Two things would otherwise be swept up with the
+    /// stale ones: the notification this delivery just created, and one a
+    /// concurrent delivery of a *later* firing created. Both are the current
+    /// state of the inbox, and neither is this call's to remove.
     fn retract_notifications(
         &self,
         reminder_id: Uuid,
+        before: DateTime<Utc>,
     ) -> impl Future<Output = Result<(), Self::Err>> + Send;
 }
 

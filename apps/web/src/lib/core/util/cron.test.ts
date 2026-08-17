@@ -5,6 +5,9 @@ import {
   type CronParts,
   DEFAULT_TIME,
   describeCron,
+  isValidCronParts,
+  isValidTime,
+  normalizeCron,
   parseCron,
   withoutDailyFrequency,
 } from './cron';
@@ -226,5 +229,88 @@ describe('describeCron', () => {
     expect(describeCron(daily, 'America/New_York')).toBe(
       `every day at ${NINE_AM} (America/New_York)`
     );
+  });
+});
+
+describe('isValidTime', () => {
+  it('accepts times in range', () => {
+    for (const time of ['00:00', '09:00', '13:45', '23:59']) {
+      expect(isValidTime(time)).toBe(true);
+    }
+  });
+
+  // The shape check alone let these through, which meant the repeat picker
+  // reported the schedule as valid, allowed it to be saved, and stored the
+  // default time instead — the UI and the stored schedule disagreeing.
+  it('rejects times out of range', () => {
+    for (const time of ['24:00', '99:99', '12:60', '25:30']) {
+      expect(isValidTime(time)).toBe(false);
+    }
+  });
+
+  it('rejects anything that is not two digits and two digits', () => {
+    for (const time of ['', '9:00', '09:0', 'nine', '09:00:00']) {
+      expect(isValidTime(time)).toBe(false);
+    }
+  });
+});
+
+describe('isValidCronParts', () => {
+  it('accepts each frequency at its defaults', () => {
+    for (const parts of [daily, weekly, monthly]) {
+      expect(isValidCronParts(parts)).toBe(true);
+    }
+  });
+
+  it('rejects any frequency with an unusable time', () => {
+    for (const parts of [daily, weekly, monthly]) {
+      expect(isValidCronParts({ ...parts, time: '24:00' })).toBe(false);
+    }
+  });
+
+  // `buildCron` maps an out-of-range day to the 1st, so without this the
+  // summary would say one thing and the saved schedule do another.
+  it('rejects a monthly day outside 1-31', () => {
+    for (const dayOfMonth of ['0', '32', '99', '', 'x', '1.5']) {
+      expect(isValidCronParts({ ...monthly, dayOfMonth })).toBe(false);
+    }
+  });
+
+  it('accepts the edges of the month', () => {
+    for (const dayOfMonth of ['1', '31']) {
+      expect(isValidCronParts({ ...monthly, dayOfMonth })).toBe(true);
+    }
+  });
+
+  // An empty weekly selection builds an every-day cron, which is the opposite
+  // of what unticking your last day is asking for.
+  it('rejects a weekly schedule with no days selected', () => {
+    expect(isValidCronParts({ ...weekly, daysOfWeek: [] })).toBe(false);
+  });
+
+  it('ignores the day fields the frequency does not use', () => {
+    expect(
+      isValidCronParts({ ...daily, dayOfMonth: '99', daysOfWeek: [] })
+    ).toBe(true);
+  });
+});
+
+describe('normalizeCron', () => {
+  it('gives the two spellings of every day the same form', () => {
+    // These are the same schedule, and a comparison that called them different
+    // would read a re-save as an edit.
+    expect(normalizeCron('0 0 9 * * 1,2,3,4,5,6,7')).toBe(
+      normalizeCron('0 0 9 * * *')
+    );
+  });
+
+  it('leaves a partial week alone', () => {
+    expect(normalizeCron('0 0 9 * * 2,4')).toBe('0 0 9 * * 2,4');
+  });
+
+  it('is stable when applied twice', () => {
+    for (const cron of ['0 0 9 * * *', '0 0 9 * * 2-6', '0 30 14 15 * *']) {
+      expect(normalizeCron(normalizeCron(cron))).toBe(normalizeCron(cron));
+    }
   });
 });

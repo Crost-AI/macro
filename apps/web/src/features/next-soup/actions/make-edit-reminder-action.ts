@@ -40,7 +40,11 @@ function scheduleOf(entity: ReminderEntity): ReminderSchedule {
     return {
       type: 'recurring',
       cron: entity.cron,
-      timezone: entity.timezone || getDefaultTimezone(),
+      // `??`, not `||`: only a genuinely absent zone falls back. Coercing a
+      // present-but-empty one would substitute the viewer's zone for the
+      // reminder's and change when it fires, which is worse than surfacing
+      // the bad data.
+      timezone: entity.timezone ?? getDefaultTimezone(),
     };
   }
   return { type: 'once', remindAt: new Date(entity.nextRunAt).toISOString() };

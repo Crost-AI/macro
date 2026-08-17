@@ -17,17 +17,18 @@ use uuid::Uuid;
 /// stay sane. Mirrored by the `reminder_description_max_length` DB constraint.
 pub const MAX_DESCRIPTION_LEN: usize = 2_000;
 
-/// How late a recurring firing may be and still mean anything.
+/// The outside limit on how late a recurring firing may be delivered.
 ///
-/// Past this it describes a moment gone by rather than one to act on, and the
-/// two use cases that care both take it as their cue to move the series on
-/// instead: dispatch rolls a stale firing forward without notifying, and
-/// reviving a reminder that spent months disabled recomputes its firing rather
-/// than leaving one in the past.
+/// A backstop for the long-period schedules, where the primary rule — a firing
+/// is stale once the next one has come due — would otherwise permit delivering
+/// a monthly reminder three weeks after the fact. Deliberately generous: an
+/// hour of queue backlog or a short outage must not cost anyone their daily
+/// reminder, so the threshold sits far above any delay healthy dispatch
+/// produces rather than close to it.
 ///
-/// Comfortably wider than any delay healthy dispatch produces, so a firing
-/// merely waiting its turn in the queue is never mistaken for an abandoned one.
-pub const MAX_RECURRING_LATENESS: chrono::Duration = chrono::Duration::hours(1);
+/// Also what marks a reminder revived from months out of service as needing a
+/// recomputed firing rather than the one it went quiet on.
+pub const MAX_RECURRING_LATENESS: chrono::Duration = chrono::Duration::hours(24);
 
 /// The closest together two firings of a recurring reminder may be.
 ///
@@ -604,6 +605,23 @@ pub enum ReminderDispatchOperation {
 pub struct SweepSummary {
     /// Firings fanned out onto the queue.
     pub dispatched: usize,
+}
+
+/// What finishing a firing did to the reminder behind it.
+///
+/// Reported rather than assumed because the advance is allowed to not happen,
+/// and "the owner rescheduled" and "the advance silently failed" leave exactly
+/// the same row behind. Without this the caller cannot tell them apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Completion {
+    /// Nothing to advance: a one-shot, or a series with no firing left.
+    NoAdvance,
+    /// The series moved on to the firing it was given.
+    Advanced,
+    /// The advance was declined because the reminder no longer sits on the
+    /// firing that was delivered — the owner rescheduled it mid-flight, and
+    /// their time outranks the series. Expected, not an error.
+    Superseded,
 }
 
 /// What became of one `Deliver` message.

@@ -470,10 +470,35 @@ fn flooring_leaves_an_already_flat_instant_alone() {
 #[test]
 fn flooring_leaves_a_cron_schedule_untouched() {
     // The seconds in a cron are the owner's, not an artifact of request timing.
+    //
+    // Also what lets the service validate a recurring schedule's interval
+    // against the floored cron: flooring cannot rewrite the expression, so the
+    // cron checked and the cron stored are necessarily the same one.
     let schedule = ReminderSchedule::Recurring {
         cron: ReminderCron::parse("30 0 9 * * *").expect("valid cron"),
         timezone: New_York,
     };
 
     assert_eq!(schedule.clone().floored_to_minute(), schedule);
+}
+
+#[test]
+fn next_run_after_is_strictly_after_the_instant_given() {
+    // Load-bearing for the minimum-interval check, which measures a schedule's
+    // period as the gap between its next two firings. If this returned the
+    // instant it was handed, that gap would be zero and every recurring
+    // reminder would be rejected as firing too often.
+    let cron = ReminderCron::parse(DAILY_9AM).expect("valid cron");
+    // 13:00 UTC is exactly 09:00 in New York on this date — a firing instant.
+    let on_a_firing = utc(2026, 7, 1, 13, 0);
+
+    let next = cron
+        .next_run_after(on_a_firing, New_York)
+        .expect("a daily cron always has a next firing");
+
+    assert!(
+        next > on_a_firing,
+        "must not return the instant it was given"
+    );
+    assert_eq!(next, utc(2026, 7, 2, 13, 0));
 }

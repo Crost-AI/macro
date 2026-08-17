@@ -3,7 +3,7 @@ import { registerHotkey, useHotkeyDOMScope } from '@core/hotkey/hotkeys';
 import {
   type CronParts,
   describeCron,
-  isValidTime,
+  isValidCronParts,
   type ScheduleFrequency,
   WEEKDAY_OPTIONS,
 } from '@core/util/cron';
@@ -151,13 +151,22 @@ export function ReminderComposerModal() {
     return false;
   };
 
-  /** Open the repeat picker, seeded from whatever schedule is in play. */
-  const openRepeatStep = () => {
+  /**
+   * Open the repeat picker, seeded from whatever is most specific.
+   *
+   * An existing recurrence first, so changing one starts where it is. Failing
+   * that the date the list is currently leading with, so typing "tomorrow 3pm"
+   * and then choosing to repeat gives a 3pm recurrence rather than discarding
+   * the time that was just asked for.
+   */
+  const openRepeatStep = (seed?: Date) => {
     const current = editing()?.schedule;
     setRepeatParts(
       current && isRecurring(current)
         ? repeatPartsFromSchedule(current)
-        : defaultRepeatParts()
+        : seed
+          ? repeatPartsFromDate(seed)
+          : defaultRepeatParts()
     );
     setStep('repeat');
   };
@@ -198,7 +207,13 @@ export function ReminderComposerModal() {
       if (current === 'description') {
         keybindings(descriptionStepKeybindings(advanceFromDescription));
       } else if (current === 'repeat') {
-        keybindings(listlessStepKeybindings(() => void submitRepeat()));
+        keybindings(
+          listlessStepKeybindings(() => {
+            // Enter must respect the same gate the button does, or the one
+            // path that skips validation is the fast one everybody uses.
+            if (isValidCronParts(repeatParts())) void submitRepeat();
+          })
+        );
       }
     })
   );
@@ -394,13 +409,16 @@ export function ReminderComposerModal() {
                   current={() => editing()?.remindAt}
                   currentRecurrence={() => {
                     const schedule = editing()?.schedule;
-                    return schedule && isRecurring(schedule)
-                      ? describeReminderSchedule(schedule)
-                      : undefined;
+                    if (!schedule || !isRecurring(schedule)) return undefined;
+                    return {
+                      schedule,
+                      description: describeReminderSchedule(schedule) ?? '',
+                    };
                   }}
                   selectedIndex={selectedIndex}
                   setSelectedIndex={setSelectedIndex}
                   onSubmit={(date) => void submit(date)}
+                  onKeep={(schedule) => void submitSchedule(schedule)}
                   onRepeat={openRepeatStep}
                   setKeybindings={keybindings}
                 />
@@ -513,18 +531,31 @@ function DescriptionStep(props: { onContinue: VoidFunction }) {
  */
 type WhenRow =
   | { kind: 'date'; option: DateOption }
+  /**
+   * Leave an existing recurring schedule exactly as it is.
+   *
+   * Its own kind rather than a relabelled date row. A recurring reminder's next
+   * firing is one instant out of a series, so activating it as a date would
+   * submit that instant as a one-shot — quietly collapsing the whole series
+   * into a single day, from a row that says "Keep repeating".
+   */
+  | { kind: 'keep'; schedule: ReminderSchedule; detail: string }
   | { kind: 'repeat'; label: string; detail?: string };
 
 function WhenList(props: {
   query: () => string;
   /** The firing an edited reminder already has, offered as "Keep current time". */
   current: () => Date | undefined;
-  /** An edited reminder's existing recurrence in words, when it has one. */
-  currentRecurrence: () => string | undefined;
+  /** An edited reminder's existing recurrence, when it has one. */
+  currentRecurrence: () =>
+    | { schedule: ReminderSchedule; description: string }
+    | undefined;
   selectedIndex: () => number;
   setSelectedIndex: (next: number | ((prev: number) => number)) => void;
   onSubmit: (date: Date) => void;
-  onRepeat: VoidFunction;
+  /** Submit an existing recurring schedule unchanged. */
+  onKeep: (schedule: ReminderSchedule) => void;
+  onRepeat: (seed?: Date) => void;
   setKeybindings: (actions: {
     next: VoidFunction;
     previous: VoidFunction;
@@ -551,37 +582,48 @@ function WhenList(props: {
   });
 
   const rows = createMemo<WhenRow[]>(() => {
-    const recurrence = props.currentRecurrence();
-    const dates: WhenRow[] = dateOptions().map((option, index) =>
-      // A reminder that already repeats has no single "current time" to keep —
-      // its schedule is the recurrence — so the lead option says so instead of
-      // offering the next firing as though that were the whole story.
-      index === 0 && recurrence && !props.query().trim()
-        ? {
-            kind: 'date',
-            option: {
-              ...option,
-              displayText: 'Keep repeating',
-              secondaryText: recurrence,
+    const existing = props.currentRecurrence();
+    const typing = !!props.query().trim();
+
+    // A reminder that already repeats has no single "current time" to keep —
+    // its schedule is the recurrence — so leading with a row that hands back
+    // that schedule untouched beats offering its next firing as if that were
+    // the whole story. Dropped while typing: a query is a request for a
+    // different time, and the keep row would sit above the answer.
+    const keep: WhenRow[] =
+      existing && !typing
+        ? [
+            {
+              kind: 'keep',
+              schedule: existing.schedule,
+              detail: existing.description,
             },
-          }
-        : { kind: 'date', option }
-    );
+          ]
+        : [];
+
+    const dates: WhenRow[] = dateOptions().map((option) => ({
+      kind: 'date',
+      option,
+    }));
 
     // Always last, so it never displaces the date someone is reaching for, and
     // Enter on a date still creates a one-shot in two keystrokes.
     return [
+      ...keep,
       ...dates,
       {
         kind: 'repeat',
-        label: recurrence ? 'Change repeat…' : 'Repeat…',
-        detail: recurrence,
+        label: existing ? 'Change repeat…' : 'Repeat…',
+        detail: existing?.description,
       },
     ];
   });
 
   const activate = (row: WhenRow) => {
-    if (row.kind === 'repeat') return props.onRepeat();
+    // Seeded from the first date offered, so "tomorrow 3pm" then Repeat gives a
+    // recurrence at 3pm rather than dropping back to a default morning.
+    if (row.kind === 'repeat') return props.onRepeat(dateOptions()[0]?.date);
+    if (row.kind === 'keep') return props.onKeep(row.schedule);
     props.onSubmit(row.option.date);
   };
 
@@ -641,7 +683,11 @@ function WhenList(props: {
               >
                 <div class="flex-1 text-left">
                   <p class="text-sm font-medium">
-                    {row.kind === 'date' ? row.option.displayText : row.label}
+                    {row.kind === 'date'
+                      ? row.option.displayText
+                      : row.kind === 'keep'
+                        ? 'Keep repeating'
+                        : row.label}
                   </p>
                 </div>
                 <span class="text-xs text-ink-muted">
@@ -706,7 +752,10 @@ function RepeatStep(props: {
   };
 
   const summary = () => describeCron(props.parts());
-  const isValid = () => isValidTime(props.parts().time);
+  // Gates submit on everything `buildCron` would otherwise substitute a
+  // fallback for — an out-of-range time, a day-of-month like 99 — so the
+  // schedule that gets stored is the one the summary above describes.
+  const isValid = () => isValidCronParts(props.parts());
 
   return (
     <>

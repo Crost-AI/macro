@@ -91,6 +91,19 @@ fn due_recurring_at(n: u8, scheduled_for: DateTime<Utc>) -> DueReminder {
     due
 }
 
+/// A recurring reminder on an arbitrary cron, due at `scheduled_for`.
+///
+/// Staleness depends on how far apart a schedule's firings are, so the tests
+/// covering it need periods other than the daily default.
+fn due_with_cron(n: u8, cron: &str, scheduled_for: DateTime<Utc>) -> DueReminder {
+    let mut due = due_recurring_at(n, scheduled_for);
+    due.reminder.schedule = ReminderSchedule::Recurring {
+        cron: ReminderCron::parse(cron).expect("valid cron"),
+        timezone: New_York,
+    };
+    due
+}
+
 /// Where `DAILY_9AM` in New York lands next, measured from [`now`].
 ///
 /// [`now`] is 12:00 UTC, which is 08:00 in New York on this date, so the next
@@ -116,7 +129,12 @@ struct FakeRepoState {
     released: Vec<Uuid>,
     /// Completed firings, each with the next firing it advanced the series to.
     completed: Vec<(Uuid, Option<DateTime<Utc>>)>,
-    retracted: Vec<Uuid>,
+    /// Retractions, each with the firing they were bounded by.
+    retracted: Vec<(Uuid, DateTime<Utc>)>,
+    retract_fails: bool,
+    /// Report every advance as declined, standing in for the owner having
+    /// rescheduled the reminder while the delivery was in flight.
+    advance_superseded: bool,
 }
 
 #[derive(Clone, Default)]
@@ -169,8 +187,18 @@ impl FakeRepo {
         self.0.lock().unwrap().completed.clone()
     }
 
-    fn retracted(&self) -> Vec<Uuid> {
+    fn retracted(&self) -> Vec<(Uuid, DateTime<Utc>)> {
         self.0.lock().unwrap().retracted.clone()
+    }
+
+    fn failing_retract(self) -> Self {
+        self.0.lock().unwrap().retract_fails = true;
+        self
+    }
+
+    fn superseding_advance(self) -> Self {
+        self.0.lock().unwrap().advance_superseded = true;
+        self
     }
 }
 
@@ -231,22 +259,31 @@ impl ReminderDispatchRepo for FakeRepo {
         Ok(())
     }
 
-    async fn complete_occurrence(
+    async fn complete_occurrence_and_advance(
         &self,
         reminder_id: Uuid,
         _scheduled_for: DateTime<Utc>,
         advance_to: Option<DateTime<Utc>>,
-    ) -> Result<(), Self::Err> {
-        self.0
-            .lock()
-            .unwrap()
-            .completed
-            .push((reminder_id, advance_to));
-        Ok(())
+    ) -> Result<Completion, Self::Err> {
+        let mut state = self.0.lock().unwrap();
+        state.completed.push((reminder_id, advance_to));
+        Ok(match (advance_to, state.advance_superseded) {
+            (None, _) => Completion::NoAdvance,
+            (Some(_), true) => Completion::Superseded,
+            (Some(_), false) => Completion::Advanced,
+        })
     }
 
-    async fn retract_notifications(&self, reminder_id: Uuid) -> Result<(), Self::Err> {
-        self.0.lock().unwrap().retracted.push(reminder_id);
+    async fn retract_notifications(
+        &self,
+        reminder_id: Uuid,
+        before: DateTime<Utc>,
+    ) -> Result<(), Self::Err> {
+        let mut state = self.0.lock().unwrap();
+        if state.retract_fails {
+            return Err(FakeErr);
+        }
+        state.retracted.push((reminder_id, before));
         Ok(())
     }
 }
@@ -454,8 +491,63 @@ async fn a_recurring_delivery_retracts_the_earlier_firings_notification() {
         .expect("delivery succeeds");
 
     // A daily reminder should leave one thing in the inbox, not one per day
-    // since its owner last looked.
-    assert_eq!(repo.retracted(), vec![uuid(1)]);
+    // since its owner last looked. Bounded by this firing, so the notification
+    // just created is not swept up with the ones it replaces.
+    assert_eq!(repo.retracted(), vec![(uuid(1), now())]);
+}
+
+#[tokio::test]
+async fn a_recurring_delivery_retracts_only_after_the_replacement_exists() {
+    // Ordering matters more than it looks. Retracting first and then failing to
+    // notify would take away the one notification the owner could still see and
+    // put nothing in its place.
+    let repo = FakeRepo::with_due(vec![due_recurring(1)]);
+    let notifier = FakeNotifier::failing_for(uuid(1));
+
+    let result = service(repo.clone(), notifier, FakeQueue::default())
+        .deliver(firing(1))
+        .await;
+
+    assert!(matches!(result, Err(ReminderError::Internal(_))));
+    assert!(
+        repo.retracted().is_empty(),
+        "a failed delivery must leave the previous firing's notification alone"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_retraction_does_not_fail_a_delivered_firing() {
+    // The notification has already gone out. Failing here would leave the
+    // firing uncompleted and redeliver it, notifying a second time to tidy up
+    // an inbox — which is worse than the untidy inbox.
+    let repo = FakeRepo::with_due(vec![due_recurring(1)]).failing_retract();
+    let notifier = FakeNotifier::default();
+
+    let outcome = service(repo.clone(), notifier.clone(), FakeQueue::default())
+        .deliver(firing(1))
+        .await
+        .expect("delivery succeeds despite the failed retraction");
+
+    assert_eq!(outcome, DeliveryOutcome::Delivered);
+    assert_eq!(notifier.notified(), vec![uuid(1)]);
+    assert_eq!(repo.advanced(), vec![(uuid(1), Some(next_daily_9am()))]);
+}
+
+#[tokio::test]
+async fn a_delivery_whose_advance_was_superseded_still_counts_as_delivered() {
+    // The owner rescheduled while this was in flight, so the advance was
+    // declined and their time stands. The notification still went out, so the
+    // message is done with — leaving it for redelivery would notify twice.
+    let repo = FakeRepo::with_due(vec![due_recurring(1)]).superseding_advance();
+    let notifier = FakeNotifier::default();
+
+    let outcome = service(repo.clone(), notifier.clone(), FakeQueue::default())
+        .deliver(firing(1))
+        .await
+        .expect("delivery succeeds");
+
+    assert_eq!(outcome, DeliveryOutcome::Delivered);
+    assert_eq!(notifier.notified(), vec![uuid(1)]);
 }
 
 #[tokio::test]
@@ -497,6 +589,102 @@ async fn a_stale_recurring_firing_rolls_forward_instead_of_notifying() {
     // Measured from now, not from the firing being skipped: advancing one day
     // from a two-day-old firing would land in the past and come straight back.
     assert_eq!(repo.advanced(), vec![(uuid(1), Some(next_daily_9am()))]);
+}
+
+#[tokio::test]
+async fn a_recurring_firing_merely_delayed_is_still_delivered() {
+    // The case a flat one-hour threshold got wrong. A daily reminder held up by
+    // an hour of queue backlog or a short outage is late, not abandoned, and
+    // dropping it silently would cost someone their reminder for that day.
+    let delayed = now() - Duration::hours(3);
+    let repo = FakeRepo::with_due(vec![due_recurring_at(1, delayed)]);
+    let notifier = FakeNotifier::default();
+
+    let outcome = service(repo.clone(), notifier.clone(), FakeQueue::default())
+        .deliver(DueFiring {
+            reminder_id: uuid(1),
+            scheduled_for: delayed,
+        })
+        .await
+        .expect("delivery succeeds");
+
+    assert_eq!(outcome, DeliveryOutcome::Delivered);
+    assert_eq!(notifier.notified(), vec![uuid(1)]);
+}
+
+#[tokio::test]
+async fn a_recurring_firing_the_next_one_has_overtaken_is_rolled_forward() {
+    // Staleness scales with the schedule rather than a fixed duration: once the
+    // firing *after* this one has itself come due, delivering would announce
+    // the previous occurrence while the current one waits behind it.
+    //
+    // Hourly, two hours late — so the following firing has been and gone while
+    // this one is still well inside the 24-hour outside limit. That is what
+    // isolates this rule from the backstop.
+    let overtaken = now() - Duration::hours(2);
+    let repo = FakeRepo::with_due(vec![due_with_cron(1, "0 0 * * * *", overtaken)]);
+    let notifier = FakeNotifier::default();
+
+    let outcome = service(repo.clone(), notifier.clone(), FakeQueue::default())
+        .deliver(DueFiring {
+            reminder_id: uuid(1),
+            scheduled_for: overtaken,
+        })
+        .await
+        .expect("delivery succeeds");
+
+    assert_eq!(outcome, DeliveryOutcome::RolledForward);
+    assert!(notifier.notified().is_empty());
+}
+
+#[tokio::test]
+async fn a_long_period_firing_past_the_outside_limit_is_rolled_forward() {
+    // The backstop, isolated from the rule above. A monthly reminder a month
+    // late has not been overtaken — its successor is still weeks away — but
+    // delivering it now would be reporting history.
+    let long_ago = now() - Duration::days(30);
+    let repo = FakeRepo::with_due(vec![due_with_cron(1, "0 0 9 1 * *", long_ago)]);
+    let notifier = FakeNotifier::default();
+
+    let outcome = service(repo.clone(), notifier.clone(), FakeQueue::default())
+        .deliver(DueFiring {
+            reminder_id: uuid(1),
+            scheduled_for: long_ago,
+        })
+        .await
+        .expect("delivery succeeds");
+
+    assert_eq!(outcome, DeliveryOutcome::RolledForward);
+    assert!(notifier.notified().is_empty());
+}
+
+#[tokio::test]
+async fn a_stale_series_with_no_firing_left_is_completed_without_advancing() {
+    // A year-qualified cron that has run out. `advance_to` is None, so the
+    // reminder stays where it is and stops coming due because its own
+    // occurrence is marked sent — subtle enough to be worth pinning, since
+    // nothing else would notice if it started coming due forever.
+    let schedule = ReminderSchedule::Recurring {
+        cron: ReminderCron::parse("0 0 9 * * * 2020").expect("valid cron"),
+        timezone: New_York,
+    };
+    let stale_at = now() - Duration::days(2);
+    let mut due = due_recurring_at(1, stale_at);
+    due.reminder.schedule = schedule;
+    let repo = FakeRepo::with_due(vec![due]);
+    let notifier = FakeNotifier::default();
+
+    let outcome = service(repo.clone(), notifier.clone(), FakeQueue::default())
+        .deliver(DueFiring {
+            reminder_id: uuid(1),
+            scheduled_for: stale_at,
+        })
+        .await
+        .expect("delivery succeeds");
+
+    assert_eq!(outcome, DeliveryOutcome::RolledForward);
+    assert!(notifier.notified().is_empty());
+    assert_eq!(repo.advanced(), vec![(uuid(1), None)]);
 }
 
 #[tokio::test]

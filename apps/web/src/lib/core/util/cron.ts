@@ -52,8 +52,38 @@ export function getDefaultTimezone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 }
 
+/**
+ * Whether `value` is a real `HH:MM` time, in range as well as in shape.
+ *
+ * The range check is the point: `buildCron` silently falls back to
+ * {@link DEFAULT_TIME} for anything it cannot use, so a picker that accepted
+ * `99:99` would report the schedule as valid, let it be saved, and store a
+ * different time than the one on screen.
+ */
 export function isValidTime(value: string): boolean {
-  return /^\d{2}:\d{2}$/.test(value);
+  const match = value.match(/^(\d{2}):(\d{2})$/);
+  if (!match) return false;
+
+  const [, hour, minute] = match;
+  return Number(hour) <= 23 && Number(minute) <= 59;
+}
+
+/**
+ * Whether these parts describe a schedule that will be stored as shown.
+ *
+ * Every field {@link buildCron} would quietly substitute a fallback for, so a
+ * picker can refuse to save rather than save something else. A weekly schedule
+ * with no days selected builds an every-day cron, which is not what clearing
+ * the last day is asking for.
+ */
+export function isValidCronParts(parts: CronParts): boolean {
+  if (!isValidTime(parts.time)) return false;
+  if (parts.frequency === 'week') return parts.daysOfWeek.length > 0;
+  if (parts.frequency === 'month') {
+    const day = Number(parts.dayOfMonth);
+    return Number.isInteger(day) && day >= 1 && day <= 31;
+  }
+  return true;
 }
 
 /** `HH:MM` from separate fields, falling back on anything out of range. */
@@ -249,6 +279,27 @@ export function parseCron(cron: string): CronParts {
 export function withoutDailyFrequency(parts: CronParts): CronParts {
   if (parts.frequency !== 'day') return parts;
   return { ...parts, frequency: 'week', daysOfWeek: [...DOW_VALUES] };
+}
+
+/**
+ * A cron expression in the one form the pickers write it.
+ *
+ * `0 0 9 * * *` and `0 0 9 * * 1,2,3,4,5,6,7` are the same schedule spelled two
+ * ways, and which one you hold depends on which picker last touched it. Callers
+ * comparing two expressions for "did this change?" want them to agree, since a
+ * difference that is only spelling still reads as an edit — and on a reminder
+ * an edit resets state the owner cares about.
+ *
+ * Anything the pickers cannot represent normalizes to whatever they would show
+ * for it, which is the same answer {@link parseCron} already gives.
+ */
+export function normalizeCron(cron: string): string {
+  const parts = parseCron(cron);
+  const collapsed: CronParts =
+    parts.frequency === 'week' && parts.daysOfWeek.length === DOW_VALUES.length
+      ? { ...parts, frequency: 'day' }
+      : parts;
+  return buildCron(collapsed);
 }
 
 /** Build the six-field expression the backend expects. */
