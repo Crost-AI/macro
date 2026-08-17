@@ -3,7 +3,9 @@ use std::sync::{Arc, Mutex};
 use async_graphql::{EmptySubscription, Object, Schema};
 use chrono::Utc;
 use model_entity::{Entity, EntityType};
-use model_notifications::{ChannelMessageSendMetadata, ChannelType, CommonChannelMetadata};
+use model_notifications::{
+    ChannelMessageSendMetadata, ChannelType, CommonChannelMetadata, NotifEvent,
+};
 use notification::domain::models::request::NotificationStatus;
 
 use super::*;
@@ -36,7 +38,7 @@ fn notification_row(
     notification_id: Uuid,
     entity: Entity<'static>,
     status: &NotificationStatus,
-) -> UserNotificationRow<serde_json::Value> {
+) -> UserNotificationRow<NotifEvent> {
     let now = Utc::now();
     UserNotificationRow {
         owner_id: user_id,
@@ -49,7 +51,7 @@ fn notification_row(
         viewed_at: matches!(status, NotificationStatus::Seen).then_some(now),
         updated_at: now,
         deleted_at: None,
-        notification_metadata: serde_json::to_value(ChannelMessageSendMetadata {
+        notification_metadata: NotifEvent::ChannelMessageSend(ChannelMessageSendMetadata {
             sender: None,
             sender_display_name: None,
             message_content: "Test message".to_string(),
@@ -60,8 +62,7 @@ fn notification_row(
                 channel_name: "Test channel".to_string(),
             },
             sender_profile_picture_url: None,
-        })
-        .unwrap(),
+        }),
         sender_id: None,
     }
 }
@@ -72,7 +73,7 @@ impl NotificationMutationService for CapturingNotificationService {
         user_id: MacroUserIdStr<'static>,
         notification_ids: Vec<Uuid>,
         status: NotificationStatus,
-    ) -> Result<Vec<UserNotificationRow<serde_json::Value>>, Report> {
+    ) -> Result<Vec<UserNotificationRow<NotifEvent>>, Report> {
         let operation = operation_name(&status);
         self.calls
             .lock()
@@ -96,7 +97,7 @@ impl NotificationMutationService for CapturingNotificationService {
         user_id: MacroUserIdStr<'static>,
         entity: Entity<'static>,
         status: NotificationStatus,
-    ) -> Result<Vec<UserNotificationRow<serde_json::Value>>, Report> {
+    ) -> Result<Vec<UserNotificationRow<NotifEvent>>, Report> {
         let operation = operation_name(&status);
         self.entity_calls.lock().unwrap().push((
             user_id.to_string(),

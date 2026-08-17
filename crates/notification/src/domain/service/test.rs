@@ -227,7 +227,7 @@ fn updated_notification(
         viewed_at,
         updated_at,
         deleted_at: None,
-        notification_metadata: json!({}),
+        notification_metadata: json!({ "message": "updated notification" }),
         sender_id: None,
     }
 }
@@ -1784,7 +1784,7 @@ async fn test_update_notifications_and_return_preserves_requested_order() {
     let notification_ids = [second, first];
 
     let updated = service
-        .update_notifications_and_return(UpdateNotificationsRequest {
+        .update_notifications_and_return::<TestNotifEvent>(UpdateNotificationsRequest {
             user_id: user.clone(),
             notification_ids: &notification_ids,
             status: NotificationStatus::Done(false),
@@ -1804,6 +1804,11 @@ async fn test_update_notifications_and_return_preserves_requested_order() {
             .iter()
             .all(|notification| notification.owner_id == user)
     );
+    assert!(updated.iter().all(|notification| matches!(
+        &notification.notification_metadata,
+        TestNotifEvent::TestNotification(TestNotification { message })
+            if message == "updated notification"
+    )));
 }
 
 #[tokio::test]
@@ -1821,7 +1826,7 @@ async fn test_update_notifications_for_entity_resolves_and_updates_all_matching_
     };
 
     let updated = service
-        .update_notifications_for_entity(UpdateNotificationsForEntityRequest {
+        .update_notifications_for_entity::<TestNotifEvent>(UpdateNotificationsForEntityRequest {
             user_id: user.clone(),
             entity: EntityType::ChannelMessage.with_entity_str("message-1"),
             status: NotificationStatus::Seen,
@@ -1864,7 +1869,7 @@ async fn test_update_notifications_for_entity_supports_done_status() {
     };
 
     service
-        .update_notifications_for_entity(UpdateNotificationsForEntityRequest {
+        .update_notifications_for_entity::<TestNotifEvent>(UpdateNotificationsForEntityRequest {
             user_id: user.clone(),
             entity: EntityType::Document.with_entity_str("document-1"),
             status: NotificationStatus::Done(true),
@@ -1891,7 +1896,7 @@ async fn test_update_notifications_for_entity_noops_when_no_notifications_match(
     };
 
     let updated = service
-        .update_notifications_for_entity(UpdateNotificationsForEntityRequest {
+        .update_notifications_for_entity::<TestNotifEvent>(UpdateNotificationsForEntityRequest {
             user_id: user,
             entity: EntityType::Document.with_entity_str("doc-without-notifications"),
             status: NotificationStatus::Done(true),

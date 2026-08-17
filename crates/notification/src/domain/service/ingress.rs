@@ -63,16 +63,16 @@ pub trait NotificationReader: Send + Sync + 'static {
     ) -> impl Future<Output = Result<(), Report>> + Send;
 
     /// Update notifications and return the authoritative active rows owned by the user.
-    fn update_notifications_and_return(
+    fn update_notifications_and_return<T: DeserializeOwned + Send>(
         &self,
         req: UpdateNotificationsRequest,
-    ) -> impl Future<Output = Result<Vec<UserNotificationRow<serde_json::Value>>, Report>> + Send;
+    ) -> impl Future<Output = Result<Vec<UserNotificationRow<T>>, Report>> + Send;
 
     /// Update every active notification associated with an entity for a user.
-    fn update_notifications_for_entity(
+    fn update_notifications_for_entity<T: DeserializeOwned + Send>(
         &self,
         req: UpdateNotificationsForEntityRequest,
-    ) -> impl Future<Output = Result<Vec<UserNotificationRow<serde_json::Value>>, Report>> + Send;
+    ) -> impl Future<Output = Result<Vec<UserNotificationRow<T>>, Report>> + Send;
 
     /// Get a user's non-deleted notifications, paginated.
     ///
@@ -501,10 +501,10 @@ where
     ///    b. Look up the user's iOS device endpoints
     ///    c. Publish silent background push messages to clear badges on devices
     #[tracing::instrument(err, skip(self))]
-    async fn update_notifications_impl(
+    async fn update_notifications_impl<T: DeserializeOwned + Send>(
         &self,
         req: UpdateNotificationsRequest<'_>,
-    ) -> Result<Vec<UserNotificationRow<serde_json::Value>>, Report> {
+    ) -> Result<Vec<UserNotificationRow<T>>, Report> {
         let changed = match &req.status {
             NotificationStatus::Seen => {
                 self.repository
@@ -535,7 +535,7 @@ where
         }
 
         if !req.status.should_clear_push_notifs() {
-            return Ok(changed);
+            return deserialize_updated_notifications(changed);
         }
 
         let notifications_with_keys = self
@@ -544,7 +544,7 @@ where
             .await?;
 
         if notifications_with_keys.is_empty() {
-            return Ok(changed);
+            return deserialize_updated_notifications(changed);
         }
 
         let device_endpoints = self
@@ -577,7 +577,7 @@ where
             .collect();
 
         if ios_endpoints.is_empty() {
-            return Ok(changed);
+            return deserialize_updated_notifications(changed);
         }
 
         let messages: Vec<QueueMessage<'_, ClearPushIdentifier, ClearPushIdentifier>> =
@@ -615,8 +615,19 @@ where
 
         self.queue.publish(messages).await?;
 
-        Ok(changed)
+        deserialize_updated_notifications(changed)
     }
+}
+
+/// Deserialize updated rows from their persisted event-tagged metadata representation.
+fn deserialize_updated_notifications<T: DeserializeOwned>(
+    notifications: Vec<UserNotificationRow<serde_json::Value>>,
+) -> Result<Vec<UserNotificationRow<T>>, Report> {
+    Ok(notifications
+        .into_iter()
+        .map(|notification| notification.into_tagged().deserialize_metadata::<T>())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| rootcause::report!(error))?)
 }
 
 impl<N, Q, S, R> NotificationReader for NotificationReaderService<N, Q, S, R>
@@ -630,22 +641,24 @@ where
         &self,
         req: UpdateNotificationsRequest<'_>,
     ) -> Result<(), Report> {
-        self.update_notifications_impl(req).await.map(|_| ())
+        self.update_notifications_impl::<serde_json::Value>(req)
+            .await
+            .map(|_| ())
     }
 
     #[tracing::instrument(err, skip(self))]
-    async fn update_notifications_and_return(
+    async fn update_notifications_and_return<T: DeserializeOwned + Send>(
         &self,
         req: UpdateNotificationsRequest<'_>,
-    ) -> Result<Vec<UserNotificationRow<serde_json::Value>>, Report> {
+    ) -> Result<Vec<UserNotificationRow<T>>, Report> {
         self.update_notifications_impl(req).await
     }
 
     #[tracing::instrument(err, skip(self))]
-    async fn update_notifications_for_entity(
+    async fn update_notifications_for_entity<T: DeserializeOwned + Send>(
         &self,
         req: UpdateNotificationsForEntityRequest<'_>,
-    ) -> Result<Vec<UserNotificationRow<serde_json::Value>>, Report> {
+    ) -> Result<Vec<UserNotificationRow<T>>, Report> {
         let notification_ids = self
             .repository
             .get_notification_ids_for_entity(req.user_id.copied(), &req.entity)

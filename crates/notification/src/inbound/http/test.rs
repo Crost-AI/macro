@@ -91,19 +91,17 @@ impl NotificationReader for AuthenticationTestService {
         async { unreachable!("should not be called") }
     }
 
-    fn update_notifications_and_return(
+    fn update_notifications_and_return<T: DeserializeOwned + Send>(
         &self,
         _req: UpdateNotificationsRequest,
-    ) -> impl Future<Output = Result<Vec<UserNotificationRow<serde_json::Value>>, Report>> + Send
-    {
+    ) -> impl Future<Output = Result<Vec<UserNotificationRow<T>>, Report>> + Send {
         async { unreachable!("should not be called") }
     }
 
-    fn update_notifications_for_entity(
+    fn update_notifications_for_entity<T: DeserializeOwned + Send>(
         &self,
         _req: UpdateNotificationsForEntityRequest,
-    ) -> impl Future<Output = Result<Vec<UserNotificationRow<serde_json::Value>>, Report>> + Send
-    {
+    ) -> impl Future<Output = Result<Vec<UserNotificationRow<T>>, Report>> + Send {
         async { unreachable!("should not be called") }
     }
 
@@ -578,19 +576,17 @@ impl NotificationReader for PresignedTestService {
         async { unreachable!() }
     }
 
-    fn update_notifications_and_return(
+    fn update_notifications_and_return<T: DeserializeOwned + Send>(
         &self,
         _req: UpdateNotificationsRequest,
-    ) -> impl Future<Output = Result<Vec<UserNotificationRow<serde_json::Value>>, Report>> + Send
-    {
+    ) -> impl Future<Output = Result<Vec<UserNotificationRow<T>>, Report>> + Send {
         async { unreachable!() }
     }
 
-    fn update_notifications_for_entity(
+    fn update_notifications_for_entity<T: DeserializeOwned + Send>(
         &self,
         _req: UpdateNotificationsForEntityRequest,
-    ) -> impl Future<Output = Result<Vec<UserNotificationRow<serde_json::Value>>, Report>> + Send
-    {
+    ) -> impl Future<Output = Result<Vec<UserNotificationRow<T>>, Report>> + Send {
         async { unreachable!() }
     }
 
