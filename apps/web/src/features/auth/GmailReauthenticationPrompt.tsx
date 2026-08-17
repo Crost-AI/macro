@@ -1,6 +1,5 @@
 import { useKeyedPersistentToasts } from '@core/component/Toast/useKeyedPersistentToasts';
 import { useAddInboxFlow } from '@core/email-link';
-import { isMobile } from '@core/mobile/isMobile';
 import {
   useEmailLinksQuery,
   useInboxHealthProbeQuery,
@@ -13,6 +12,18 @@ import {
  * out to every sharer automatically. Replaces the old mount-once, primary-only
  * `/link/gmail/status` check.
  */
+// TEMP(toast-restyle): fake dead inboxes so the reconnect toast is always
+// visible while restyling. One short and one long address to exercise
+// wrapping. Remove before merge.
+const FAKE_REAUTH_LINKS = [
+  { id: 'dev-reauth-1', email_address: 'work@example.com' },
+  {
+    id: 'dev-reauth-2',
+    email_address:
+      'a.very.long.address.for.wrapping@some-long-domain.example.com',
+  },
+];
+
 export function GmailReauthenticationPrompt() {
   const linksQuery = useEmailLinksQuery();
   const startAddInbox = useAddInboxFlow();
@@ -22,11 +33,12 @@ export function GmailReauthenticationPrompt() {
   useInboxHealthProbeQuery();
 
   useKeyedPersistentToasts({
-    items: () =>
-      (linksQuery.data?.links ?? []).filter((link) => link.needs_reauth),
+    items: () => [
+      // TEMP(toast-restyle): remove before merge.
+      ...FAKE_REAUTH_LINKS,
+      ...(linksQuery.data?.links ?? []).filter((link) => link.needs_reauth),
+    ],
     key: (link) => link.id,
-    // One at a time on a phone; the other dead inboxes queue behind it.
-    maxVisible: () => (isMobile() ? 1 : Number.POSITIVE_INFINITY),
     toast: (link, dismiss) => ({
       title: 'Reconnect Gmail',
       content(): string {

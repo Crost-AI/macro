@@ -1,7 +1,6 @@
 import { useCalendarUiFlag } from '@app/features/calendar/use-calendar-ui-flag';
 import { useKeyedPersistentToasts } from '@core/component/Toast/useKeyedPersistentToasts';
 import { useAddInboxFlow } from '@core/email-link';
-import { isMobile } from '@core/mobile/isMobile';
 import { useEmailLinksQuery } from '@queries/email/link';
 
 /**
@@ -18,27 +17,37 @@ import { useEmailLinksQuery } from '@queries/email/link';
  * is off, so re-asking every load is just nagging — Settings › Email keeps a
  * per-inbox "Enable calendar" button for whenever the user wants it.
  */
+// TEMP(toast-restyle): a fake link so the enable-calendar toast is always
+// visible while restyling, bypassing the calendar UI flag. The id is unique
+// per page load because this prompt's persistKey remembers closes in
+// localStorage — a stable id would vanish for good after one close. Stale
+// dev ids get cleaned out of storage automatically once they stop appearing.
+// Remove before merge.
+const FAKE_CALENDAR_LINKS = [
+  { id: `dev-calendar-${Date.now()}`, email_address: 'work@example.com' },
+];
+
 export function CalendarPermissionPrompt() {
   const calendarUiEnabled = useCalendarUiFlag();
   const linksQuery = useEmailLinksQuery();
   const startAddInbox = useAddInboxFlow();
 
   useKeyedPersistentToasts({
-    items: () =>
-      calendarUiEnabled()
+    items: () => [
+      // TEMP(toast-restyle): remove before merge.
+      ...FAKE_CALENDAR_LINKS,
+      ...(calendarUiEnabled()
         ? (linksQuery.data?.links ?? []).filter(
             (link) => link.needs_calendar_permission && !link.needs_reauth
           )
-        : [],
+        : []),
+    ],
     key: (link) => link.id,
     persistKey: 'macro:calendar-prompt:dismissed',
     // Until the flag resolves and the links land, the empty list above means
     // "don't know yet", not "no inbox needs this" — stored dismissals must
     // survive that window.
     itemsLoaded: () => calendarUiEnabled() && linksQuery.isSuccess,
-    // A phone has room for one of these above the dock; extra inboxes wait
-    // their turn rather than burying the screen.
-    maxVisible: () => (isMobile() ? 1 : Number.POSITIVE_INFINITY),
     toast: (link, dismiss) => ({
       title: 'Enable calendar',
       content(): string {

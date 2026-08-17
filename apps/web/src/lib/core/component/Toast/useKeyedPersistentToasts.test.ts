@@ -21,7 +21,11 @@ import { useKeyedPersistentToasts } from './useKeyedPersistentToasts';
 
 type Item = { id: string; label: string };
 
-type ToastOptions = { persistent?: boolean; onDismiss?: () => void };
+type ToastOptions = {
+  persistent?: boolean;
+  region?: string;
+  onDismiss?: () => void;
+};
 
 function toastOptionsAt(index: number): ToastOptions {
   return mocks.toastCustom.mock.calls[index]?.[1] as ToastOptions;
@@ -54,13 +58,11 @@ describe('useKeyedPersistentToasts', () => {
     initial: Item[],
     options?: {
       persistKey?: string;
-      maxVisible?: number;
       itemsLoaded?: boolean;
     }
   ) {
     let setItems!: (items: Item[]) => void;
     let setLoaded!: (loaded: boolean) => void;
-    let setMaxVisible!: (max: number) => void;
     let dispose!: () => void;
     createRoot((d) => {
       dispose = d;
@@ -68,31 +70,20 @@ describe('useKeyedPersistentToasts', () => {
       const [loaded, setLoadedSignal] = createSignal(
         options?.itemsLoaded ?? true
       );
-      const [maxVisible, setMaxVisibleSignal] = createSignal(
-        options?.maxVisible ?? Number.POSITIVE_INFINITY
-      );
       setItems = set;
       setLoaded = setLoadedSignal;
-      setMaxVisible = setMaxVisibleSignal;
       useKeyedPersistentToasts<Item>({
         items,
         key: (item) => item.id,
         persistKey: options?.persistKey,
         itemsLoaded: loaded,
-        maxVisible,
         toast: (item, dismiss) => ({
           title: item.label,
           actions: [{ label: 'Go', onClick: dismiss }],
         }),
       });
     });
-    return { setItems, setLoaded, setMaxVisible, dispose };
-  }
-
-  function titlesShown(): string[] {
-    return mocks.toastCustom.mock.calls.map(
-      (call) => (call[0] as { title: string }).title
-    );
+    return { setItems, setLoaded, dispose };
   }
 
   it('shows one persistent toast per item and no duplicates on re-run', () => {
@@ -108,6 +99,18 @@ describe('useKeyedPersistentToasts', () => {
       { id: 'b', label: 'B' },
     ]);
     expect(mocks.toastCustom).toHaveBeenCalledTimes(2);
+    dispose();
+  });
+
+  it('routes every prompt to the capped prompt region', () => {
+    // The region's `limit` is what caps and queues prompts, so toasts are
+    // created eagerly and must all target it. jsdom reports non-mobile.
+    const { dispose } = mount([
+      { id: 'a', label: 'A' },
+      { id: 'b', label: 'B' },
+    ]);
+    expect(toastOptionsAt(0).region).toBe('prompt-region');
+    expect(toastOptionsAt(1).region).toBe('prompt-region');
     dispose();
   });
 
@@ -147,6 +150,32 @@ describe('useKeyedPersistentToasts', () => {
     setItems([{ ...item }]);
     expect(mocks.toastCustom).toHaveBeenCalledTimes(1);
     dispose();
+  });
+
+  it('records nothing when a teardown unmounts synchronously inside dismiss', () => {
+    // Kobalte removes a programmatically-dismissed toast from the region in
+    // the same synchronous update, so its onDismiss fires inside
+    // toast.dismiss — that unmount must not read as a user close.
+    const optionsById = new Map<number, ToastOptions>();
+    mocks.toastCustom.mockImplementation((_config, options) => {
+      const id = nextToastId++;
+      optionsById.set(id, options as ToastOptions);
+      return id;
+    });
+    mocks.toastDismiss.mockImplementation((id: number) => {
+      optionsById.get(id)?.onDismiss?.();
+    });
+
+    const item = { id: 'a', label: 'A' };
+    const { setItems, dispose } = mount([item], { persistKey: PERSIST_KEY });
+    setItems([]);
+    expect(persistedKeys()).toEqual([]);
+
+    setItems([{ ...item }]);
+    // The teardown was ours, so the returning item prompts again.
+    expect(mocks.toastCustom).toHaveBeenCalledTimes(2);
+    dispose();
+    mocks.toastDismiss.mockImplementation(() => undefined);
   });
 
   it('dismisses all live toasts on owner cleanup', () => {
@@ -261,66 +290,6 @@ describe('useKeyedPersistentToasts', () => {
         persistKey: PERSIST_KEY,
       });
       expect(mocks.toastCustom).toHaveBeenCalledTimes(1);
-      dispose();
-    });
-  });
-
-  describe('with maxVisible', () => {
-    const three: Item[] = [
-      { id: 'a', label: 'A' },
-      { id: 'b', label: 'B' },
-      { id: 'c', label: 'C' },
-    ];
-
-    it('shows only up to the cap', () => {
-      const { dispose } = mount(three, { maxVisible: 1 });
-      expect(titlesShown()).toEqual(['A']);
-      dispose();
-    });
-
-    it('promotes the next queued item when one is closed', () => {
-      const { dispose } = mount(three, { maxVisible: 1 });
-      lastToastOptions().onDismiss?.();
-      expect(titlesShown()).toEqual(['A', 'B']);
-
-      lastToastOptions().onDismiss?.();
-      expect(titlesShown()).toEqual(['A', 'B', 'C']);
-      dispose();
-    });
-
-    it('promotes the next queued item when one takes its action', () => {
-      const { dispose } = mount(three, { maxVisible: 1 });
-      const config = mocks.toastCustom.mock.calls[0][0] as {
-        actions: { onClick: () => void }[];
-      };
-      config.actions[0].onClick();
-      expect(titlesShown()).toEqual(['A', 'B']);
-      dispose();
-    });
-
-    it('promotes the next queued item when one leaves the set', () => {
-      const { setItems, dispose } = mount(three, { maxVisible: 1 });
-      setItems(three.slice(1));
-      expect(titlesShown()).toEqual(['A', 'B']);
-      dispose();
-    });
-
-    it('retracts surplus prompts when the cap tightens', () => {
-      const { setMaxVisible, dispose } = mount(three);
-      expect(titlesShown()).toEqual(['A', 'B', 'C']);
-
-      // e.g. a tablet rotating into phone width with three prompts up.
-      setMaxVisible(1);
-      expect(mocks.toastDismiss.mock.calls.flat()).toEqual([2, 3]);
-      dispose();
-    });
-
-    it('re-shows a retracted prompt once the cap loosens again', () => {
-      const { setMaxVisible, dispose } = mount(three, { maxVisible: 1 });
-      expect(titlesShown()).toEqual(['A']);
-
-      setMaxVisible(3);
-      expect(titlesShown()).toEqual(['A', 'B', 'C']);
       dispose();
     });
   });

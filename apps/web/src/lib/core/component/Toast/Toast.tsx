@@ -408,7 +408,10 @@ function ToastContent(props: {
       class={cn(
         `relative overflow-visible pointer-events-auto
         transition-[transform,opacity] duration-100 ease-in data-closed:opacity-0 data-[swipe=move]:translate-x-(--kb-toast-swipe-move-x)
-        data-[swipe=cancel]:translate-x-0 data-[swipe=cancel]:ease-out data-[swipe=cancel]:duration-200 data-[swipe=end]:animate-swipe-out`,
+        data-[swipe=move]:transition-none
+        data-[swipe=cancel]:translate-x-0 data-[swipe=cancel]:ease-out data-[swipe=cancel]:duration-200
+        data-[swipe=end]:data-[swipe-direction=right]:animate-swipe-out
+        data-[swipe=end]:data-[swipe-direction=left]:animate-swipe-out-left`,
         !props.skipOpenAnimation && 'data-opened:animate-slide-in',
         props.mobile && 'w-full'
       )}
@@ -458,7 +461,7 @@ function ToastContent(props: {
                     </Show>
                     <Toast.Title
                       class={cn(
-                        'font-semibold grow shrink truncate text-left',
+                        'font-semibold grow shrink truncate text-left flex items-center',
                         props.mobile ? 'text-xs' : 'text-ink',
                         stacked() && 'text-sm'
                       )}
@@ -483,7 +486,7 @@ function ToastContent(props: {
                     <div
                       class={cn(
                         'my-2',
-                        props.mobile ? 'text-xs text-ink-muted' : 'ml-7'
+                        props.mobile && 'text-xs text-ink-muted'
                       )}
                     >
                       {customConfig().content?.()}

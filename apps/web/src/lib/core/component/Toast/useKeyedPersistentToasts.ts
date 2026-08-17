@@ -1,4 +1,5 @@
-import { type Accessor, createEffect, createSignal, onCleanup } from 'solid-js';
+import { isMobile } from '@core/mobile/isMobile';
+import { type Accessor, createEffect, onCleanup } from 'solid-js';
 import { type CustomToastConfig, toast } from './Toast';
 
 function readDismissed(storageKey: string): string[] {
@@ -35,8 +36,11 @@ function writeDismissed(storageKey: string, keys: Iterable<string>): void {
  * close the toast and suppress re-prompting for the session (e.g. after
  * kicking off a flow that will eventually remove the item from the set).
  *
- * `maxVisible` turns the set into a queue when there isn't room for all of it
- * at once, and `persistKey` carries closes across reloads — see each below.
+ * Every toast is created eagerly into the layout's prompt region, whose
+ * `limit` shows one prompt at a time and queues the rest in creation order —
+ * unrelated prompt hooks take turns instead of stacking, with mount order
+ * deciding who goes first. `persistKey` carries closes across reloads — see
+ * below.
  */
 export function useKeyedPersistentToasts<T>(options: {
   items: Accessor<readonly T[]>;
@@ -44,28 +48,21 @@ export function useKeyedPersistentToasts<T>(options: {
   toast: (item: T, dismiss: () => void) => CustomToastConfig;
   /**
    * localStorage key under which explicit user dismissals are remembered
-   * across reloads. Set it for advisory prompts, where re-asking on every load
-   * is nagging and the action stays reachable elsewhere (e.g. settings). Leave
-   * it unset for prompts that must keep re-surfacing until resolved, like a
-   * dead inbox grant.
+   * across reloads. Set it for advisory prompts, where re-asking on every
+   * load is nagging and the action stays reachable elsewhere (e.g.
+   * settings). Leave it unset for prompts that must keep re-surfacing until
+   * resolved, like a dead inbox grant.
    *
-   * Only a close counts: taking the action, or the toast being torn down for
-   * us, still re-prompts next session if the item is still there.
+   * Only a close counts: taking the action, or the toast being torn down
+   * for us, still re-prompts next session if the item is still there.
    */
   persistKey?: string;
   /**
-   * Cap on how many of these prompts are on screen at once. The rest queue up
-   * and take their turn as the visible ones are answered. Reactive, so a
-   * layout-dependent cap (a phone has room for one, a desktop corner for
-   * several) re-flows when it changes. Unset means show them all.
-   */
-  maxVisible?: Accessor<number>;
-  /**
-   * Whether `items` currently reflects real server state rather than a query
-   * that has not answered yet. Both look like an empty list from in here, and
-   * treating "still loading" as "the item is gone" would forget dismissals the
-   * moment the app starts. Defaults to true, which is right for a set that is
-   * synchronously derived.
+   * Whether `items` currently reflects real server state rather than a
+   * query that has not answered yet. Both look like an empty list from in
+   * here, and treating "still loading" as "the item is gone" would forget
+   * dismissals the moment the app starts. Defaults to true, which is right
+   * for a set that is synchronously derived.
    */
   itemsLoaded?: Accessor<boolean>;
 }): void {
@@ -81,8 +78,10 @@ export function useKeyedPersistentToasts<T>(options: {
   const dismissed = new Set<string>();
   /**
    * Toasts we tore down ourselves. Their `onDismiss` reports our own teardown
-   * — item left the set, action taken, cap tightened, owner disposed — rather
-   * than a user decision, so it must not be recorded as one.
+   * — item left the set, action taken, owner disposed — rather than a user
+   * decision, so it must not be recorded as one. An entry whose toast was
+   * still queued (never rendered) has no unmount and simply stays here;
+   * that's harmless.
    */
   const selfDismissed = new Set<LiveToast>();
 
@@ -90,17 +89,15 @@ export function useKeyedPersistentToasts<T>(options: {
   const persisted = new Set(persistKey ? readDismissed(persistKey) : []);
   for (const key of persisted) dismissed.add(key);
 
-  // Dismissals free a slot for whatever is queued behind them, but they happen
-  // outside the effect and mutate plain sets. This is what re-runs it.
-  const [dismissals, setDismissals] = createSignal(0);
-  const onUserDismissed = () => setDismissals((count) => count + 1);
-
   const dismissToast = (key: string) => {
     const entry = live.get(key);
     if (entry) {
       selfDismissed.add(entry);
-      toast.dismiss(entry.id);
+      // Kobalte tears a dismissed toast out of the region in the same
+      // synchronous update, so its onDismiss can fire inside this call —
+      // the entry must already be gone from `live` by then.
       live.delete(key);
+      toast.dismiss(entry.id);
     }
   };
 
@@ -112,9 +109,7 @@ export function useKeyedPersistentToasts<T>(options: {
   };
 
   createEffect(() => {
-    dismissals();
     const items = options.items();
-    const maxVisible = options.maxVisible?.() ?? Number.POSITIVE_INFINITY;
     const liveKeys = new Set(items.map(options.key));
 
     for (const key of [...live.keys()]) {
@@ -125,30 +120,27 @@ export function useKeyedPersistentToasts<T>(options: {
         if (!liveKeys.has(key)) forget(key);
       }
     }
-    // A cap can tighten under prompts that are already up — a tablet rotating
-    // into phone width, say. Retract the newest back into the queue rather
-    // than leaving them stacked on a layout with no room for them.
-    for (const key of [...live.keys()].slice(maxVisible)) dismissToast(key);
 
     for (const item of items) {
       const key = options.key(item);
       if (live.has(key) || dismissed.has(key)) continue;
-      if (live.size >= maxVisible) break;
 
       const suppress = () => {
         dismissed.add(key);
         dismissToast(key);
-        onUserDismissed();
       };
       const entry: LiveToast = { id: 0 };
       entry.id = toast.custom(options.toast(item, suppress), {
         persistent: true,
+        // The prompt region caps how many of these are visible and queues
+        // the rest, so every eligible item gets its toast created eagerly.
+        region: isMobile() ? 'mobile-prompt-region' : 'prompt-region',
         onDismiss: () => {
           // Only retract ourselves; the key may already hold a replacement.
           if (live.get(key) === entry) live.delete(key);
-          // Our own teardown already left `dismissed` how it wants it, and the
-          // unmount can land after the item was forgotten — re-adding here
-          // would strand a returning item.
+          // Our own teardown already left `dismissed` how it wants it, and
+          // the unmount can land after the item was forgotten — re-adding
+          // here would strand a returning item.
           if (selfDismissed.delete(entry)) return;
 
           dismissed.add(key);
@@ -156,7 +148,6 @@ export function useKeyedPersistentToasts<T>(options: {
             persisted.add(key);
             writeDismissed(persistKey, persisted);
           }
-          onUserDismissed();
         },
       });
       live.set(key, entry);
