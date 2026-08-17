@@ -264,7 +264,6 @@ export const storageExcluded = [
   'leaveOrEndCall',
   'listBotChannels',
   'patchViewHandler',
-  'postChannelBotWebhook',
   'postChannelMessages',
   'postItemsSoup',
   'postItemsSoupAst',
