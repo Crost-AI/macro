@@ -353,6 +353,10 @@ pub(crate) type DssChannelService = ChannelServiceImpl<
 pub(crate) type DssChannelsState =
     ChannelsRouterState<DssChannelService, EntityAccessService, AuthorizationService>;
 
+/// Type alias for the Crost service-token channels REST router.
+pub(crate) type DssCrostChannelsState =
+    crost_channels_api::CrostChannelsRouterState<DssChannelService>;
+
 /// Type alias for the bots service wired into DSS.
 pub(crate) type DssBotService = BotServiceImpl<PgBotsRepo, DssEventBroker>;
 
@@ -513,6 +517,7 @@ pub(crate) struct ApiContext {
     pub documents_state: DocumentsState,
     pub projects_state: ProjectsState,
     pub channels_state: DssChannelsState,
+    pub crost_channels_state: DssCrostChannelsState,
     /// Shared channel service, for calling channel domain operations outside
     /// the channels router (starter-doc seeding records mention backlinks).
     pub channel_service: Arc<DssChannelService>,

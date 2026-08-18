@@ -1,0 +1,43 @@
+[package]
+edition = "2024"
+name = "crost_channels_api"
+publish = false
+version = "0.1.0"
+
+[features]
+default = []
+inbound = [
+  "dep:axum",
+  "dep:channels",
+  "dep:macro_db_client",
+  "dep:macro_user_id",
+  "dep:sqlx",
+  "dep:tokio",
+  "dep:tracing",
+  "dep:uuid",
+]
+
+[dependencies]
+anyhow = { workspace = true }
+axum = { workspace = true, optional = true }
+channel_sender = { path = "../../crates/channel_sender" }
+channels = { path = "../../crates/channels", default-features = false, optional = true, features = [
+  "inbound",
+] }
+macro_db_client = { path = "../../crates/macro_db_client", optional = true }
+macro_user_id = { path = "../../crates/macro_user_id", optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true, optional = true, features = ["postgres", "runtime-tokio"] }
+tokio = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
+workspace-hack = { version = "0.1", path = "../../crates/workspace-hack" }
+
+[dev-dependencies]
+channels = { path = "../../crates/channels", default-features = false, features = [
+  "inbound",
+] }
+macro_user_id = { path = "../../crates/macro_user_id" }
+tokio = { workspace = true, features = ["macros", "rt"] }
+uuid = { workspace = true }

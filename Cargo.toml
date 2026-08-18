@@ -61,6 +61,7 @@ members = [
   "crates/webhook_emitter",
   "crates/worker-rs-otel",
   "crates/workspace-hack",
+  "crost/channels_api",
   "services/ai_projections_refresh_handler",
   "services/authentication_service",
   "services/call_recording_preview_handler",
