@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+GITHOOK_NAME="pre-push"
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+# shellcheck source=.githooks/lib.sh
+source "${ROOT}/.githooks/lib.sh"
+
+if ! ensure_nix_dev_env; then
+  exit 1
+fi
+
+echo "pre-push: Rust workspace (Crost CI rust job)" >&2
+export SQLX_OFFLINE=true
+if [[ -z "${NIX_REMOTE:-}" ]] && command -v nix >/dev/null 2>&1; then
+  export NIX_REMOTE=daemon
+fi
+cargo check --workspace --bins -j 2
+
+echo "pre-push: SolidJS app (Crost CI web job)" >&2
+ensure_web_prereqs
+(
+  cd apps/web
+  just build-dev
+)
