@@ -6,7 +6,7 @@ Bidirectional sync between GitHub Issues and Macro tasks for linked projects.
 
 - Per-project config: Macro `project_id` ↔ GitHub `owner/repo`
 - Sync directions: issue↔task create, title/body, state (open/closed ↔ configured status), labels, comments
-- Loop protection: `<!--macro-sync:<id>-->` on GitHub bodies; `crost_sync_origin` metadata on Macro tasks
+- Loop protection: hash/timestamp echo detection (standing `<!--macro-sync:…-->` markers do not block the other direction)
 - Conflicts: last-writer-wins per field using stored timestamps
 - Persistent sync-state SQLite database (`gh_issue` ↔ task id, field hashes)
 - `backfill` command imports existing open GitHub issues
@@ -52,6 +52,6 @@ Runs an in-process integration test proving create/edit/close/comment on both si
 
 Upstream Macro files are untouched. This module is additive under `crost/issue-sync/` and consumes:
 
-- Macro REST `/api/v1/tasks` (W2.4 client contract)
+- Macro REST `/api/v1/tasks` (W2.4 client contract) — see `DEFERRALS.md` for server surface / GH→Macro field updates
 - Macro outgoing webhooks (W2.7)
 - GitHub Issues REST + webhooks

@@ -22,13 +22,11 @@ pub enum GhIssueState {
 /// Canonical Macro task representation (W2.4 contract subset).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MacroTask {
-    pub id: String,
+    pub r#ref: String,
     pub title: String,
     pub body: String,
     pub status: String,
     pub labels: Vec<String>,
-    #[serde(default)]
-    pub metadata: std::collections::BTreeMap<String, String>,
     pub updated_at: DateTime<Utc>,
 }
 

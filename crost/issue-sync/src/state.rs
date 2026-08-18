@@ -85,7 +85,24 @@ impl StateStore {
         Ok(None)
     }
 
-    pub fn link_by_task(&self, project_id: &str, task_id: &str) -> Result<Option<SyncLink>> {
+    pub fn link_by_task_ref(&self, task_ref: &str) -> Result<Option<SyncLink>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT project_id, gh_owner, gh_repo, gh_issue_number, macro_task_id,
+                    title_hash, body_hash, state_hash, labels_hash,
+                    gh_updated_at, macro_updated_at
+             FROM sync_links
+             WHERE macro_task_id = ?1
+             LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![task_ref])?;
+        if let Some(row) = rows.next()? {
+            return Ok(Some(row_to_link(row)?));
+        }
+        Ok(None)
+    }
+
+    pub fn link_by_task(&self, project_id: &str, task_ref: &str) -> Result<Option<SyncLink>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT project_id, gh_owner, gh_repo, gh_issue_number, macro_task_id,
@@ -94,7 +111,7 @@ impl StateStore {
              FROM sync_links
              WHERE project_id = ?1 AND macro_task_id = ?2",
         )?;
-        let mut rows = stmt.query(params![project_id, task_id])?;
+        let mut rows = stmt.query(params![project_id, task_ref])?;
         if let Some(row) = rows.next()? {
             return Ok(Some(row_to_link(row)?));
         }
@@ -135,6 +152,23 @@ impl StateStore {
             ],
         )?;
         Ok(())
+    }
+
+    pub fn comment_by_macro(
+        &self,
+        project_id: &str,
+        macro_comment_id: &str,
+    ) -> Result<Option<(String, String)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT macro_comment_id, body_hash FROM sync_comments
+             WHERE project_id = ?1 AND macro_comment_id = ?2",
+        )?;
+        let mut rows = stmt.query(params![project_id, macro_comment_id])?;
+        if let Some(row) = rows.next()? {
+            return Ok(Some((row.get(0)?, row.get(1)?)));
+        }
+        Ok(None)
     }
 
     pub fn comment_by_gh(

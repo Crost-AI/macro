@@ -9,7 +9,6 @@ use crate::models::{GhComment, GhIssue, GhIssueState};
 
 #[derive(Clone)]
 pub struct GitHubClient {
-    token: String,
     base_url: String,
     http: reqwest::Client,
 }
@@ -31,15 +30,13 @@ impl GitHubClient {
             .default_headers(headers)
             .build()?;
         Ok(Self {
-            token: cfg.github_token.clone(),
             base_url: cfg.github_api_base_url.trim_end_matches('/').to_string(),
             http,
         })
     }
 
-    pub fn from_parts(token: String, base_url: String, http: reqwest::Client) -> Self {
+    pub fn from_parts(_token: String, base_url: String, http: reqwest::Client) -> Self {
         Self {
-            token,
             base_url: base_url.trim_end_matches('/').to_string(),
             http,
         }

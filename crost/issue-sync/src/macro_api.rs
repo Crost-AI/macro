@@ -1,18 +1,14 @@
-use std::collections::BTreeMap;
-
 use chrono::{DateTime, Utc};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
 use crate::error::{Result, SyncError};
-use crate::marker::MACRO_METADATA_KEY;
 use crate::models::MacroTask;
 
 #[derive(Clone)]
 pub struct MacroClient {
     base_url: String,
-    token: String,
     http: reqwest::Client,
 }
 
@@ -30,89 +26,46 @@ impl MacroClient {
             .build()?;
         Ok(Self {
             base_url: cfg.macro_base_url.trim_end_matches('/').to_string(),
-            token: cfg.macro_service_token.clone(),
             http,
         })
     }
 
-    pub fn from_parts(base_url: String, token: String, http: reqwest::Client) -> Self {
+    pub fn from_parts(base_url: String, _token: String, http: reqwest::Client) -> Self {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
-            token,
             http,
         }
     }
 
-    pub async fn create_task(
-        &self,
-        project_id: &str,
-        title: &str,
-        body: &str,
-        status: &str,
-        labels: &[String],
-        origin_id: &str,
-    ) -> Result<MacroTask> {
-        let mut metadata = BTreeMap::new();
-        metadata.insert(MACRO_METADATA_KEY.to_string(), origin_id.to_string());
-        let req = CreateTaskRequest {
-            title: title.to_string(),
-            body: body.to_string(),
-            project_id: project_id.to_string(),
-            status: status.to_string(),
-            labels: labels.to_vec(),
-            metadata,
-        };
+    /// `POST /api/v1/tasks` → `{ref}` (W2.4).
+    pub async fn create_task(&self, req: &CreateTaskRequest) -> Result<CreateTaskResponse> {
         let resp = self
             .http
             .post(format!("{}/api/v1/tasks", self.base_url))
-            .json(&req)
+            .json(req)
             .send()
             .await?;
         parse_macro_response(resp).await
     }
 
-    pub async fn get_task(&self, task_id: &str) -> Result<MacroTask> {
+    /// `GET /api/v1/tasks/{ref}` (W2.4).
+    pub async fn get_task(&self, task_ref: &str) -> Result<MacroTask> {
         let resp = self
             .http
-            .get(format!("{}/api/v1/tasks/{task_id}", self.base_url))
+            .get(format!("{}/api/v1/tasks/{task_ref}", self.base_url))
             .send()
             .await?;
         parse_macro_response(resp).await
     }
 
-    pub async fn update_task(
-        &self,
-        task_id: &str,
-        title: Option<&str>,
-        body: Option<&str>,
-        status: Option<&str>,
-        labels: Option<&[String]>,
-        origin_id: &str,
-    ) -> Result<MacroTask> {
-        let req = UpdateTaskRequest {
-            title: title.map(str::to_string),
-            body: body.map(str::to_string),
-            status: status.map(str::to_string),
-            labels: labels.map(|v| v.to_vec()),
-            metadata: BTreeMap::from([(MACRO_METADATA_KEY.to_string(), origin_id.to_string())]),
-        };
-        let resp = self
-            .http
-            .patch(format!("{}/api/v1/tasks/{task_id}", self.base_url))
-            .json(&req)
-            .send()
-            .await?;
-        parse_macro_response(resp).await
-    }
-
-    pub async fn update_status(&self, task_id: &str, status: &str, origin_id: &str) -> Result<()> {
+    /// `POST /api/v1/tasks/{ref}/status {status}` (W2.4).
+    pub async fn update_status(&self, task_ref: &str, status: &str) -> Result<()> {
         let req = StatusRequest {
             status: status.to_string(),
-            metadata: BTreeMap::from([(MACRO_METADATA_KEY.to_string(), origin_id.to_string())]),
         };
         let resp = self
             .http
-            .post(format!("{}/api/v1/tasks/{task_id}/status", self.base_url))
+            .post(format!("{}/api/v1/tasks/{task_ref}/status", self.base_url))
             .json(&req)
             .send()
             .await?;
@@ -128,77 +81,68 @@ impl MacroClient {
         }
     }
 
-    pub async fn add_comment(
-        &self,
-        task_id: &str,
-        text: &str,
-        origin_id: &str,
-    ) -> Result<CommentResponse> {
+    /// `POST /api/v1/tasks/{ref}/comment {text}` (W2.4).
+    pub async fn add_comment(&self, task_ref: &str, text: &str) -> Result<CommentResponse> {
         let req = CommentRequest {
             text: text.to_string(),
-            metadata: BTreeMap::from([(MACRO_METADATA_KEY.to_string(), origin_id.to_string())]),
         };
         let resp = self
             .http
-            .post(format!("{}/api/v1/tasks/{task_id}/comment", self.base_url))
+            .post(format!("{}/api/v1/tasks/{task_ref}/comment", self.base_url))
             .json(&req)
             .send()
             .await?;
         parse_macro_response(resp).await
     }
 
-    pub async fn list_open_tasks(&self, project_id: &str) -> Result<Vec<MacroTask>> {
+    /// `GET /api/v1/tasks?label=` → `{tasks:[...]}` (W2.4).
+    pub async fn list_tasks_by_label(&self, label: &str) -> Result<Vec<MacroTask>> {
         let resp = self
             .http
             .get(format!(
-                "{}/api/v1/tasks?project_id={project_id}&status=open",
+                "{}/api/v1/tasks?label={label}",
                 self.base_url
             ))
             .send()
             .await?;
-        parse_macro_response(resp).await
+        let body: ListTasksResponse = parse_macro_response(resp).await?;
+        Ok(body.tasks)
     }
 }
 
 #[derive(Debug, Serialize)]
-struct CreateTaskRequest {
-    title: String,
-    body: String,
-    project_id: String,
-    status: String,
-    labels: Vec<String>,
-    metadata: BTreeMap<String, String>,
+pub struct CreateTaskRequest {
+    pub title: String,
+    pub body: String,
+    pub project_id: String,
+    pub status: String,
+    pub labels: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
-struct UpdateTaskRequest {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    title: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    body: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    status: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    labels: Option<Vec<String>>,
-    metadata: BTreeMap<String, String>,
+#[derive(Debug, Deserialize)]
+pub struct CreateTaskResponse {
+    pub r#ref: String,
 }
 
 #[derive(Debug, Serialize)]
 struct StatusRequest {
     status: String,
-    metadata: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Serialize)]
 struct CommentRequest {
     text: String,
-    metadata: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct CommentResponse {
     pub comment_id: String,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ListTasksResponse {
+    tasks: Vec<MacroTask>,
 }
 
 async fn parse_macro_response<T: for<'de> Deserialize<'de>>(resp: reqwest::Response) -> Result<T> {

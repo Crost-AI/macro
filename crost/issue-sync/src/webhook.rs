@@ -10,7 +10,6 @@ use axum::{
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
-use crate::error::SyncError;
 use crate::models::{GitHubIssuesWebhook, MacroWebhookEvent};
 use crate::sync::SyncEngine;
 
@@ -50,7 +49,6 @@ async fn github_handler(
     match serde_json::from_slice::<GitHubIssuesWebhook>(&body) {
         Ok(payload) => match state.engine.handle_github_webhook(payload).await {
             Ok(()) => StatusCode::OK,
-            Err(SyncError::Echo { .. }) => StatusCode::OK,
             Err(err) => {
                 tracing::warn!(error = %err, "github webhook sync failed");
                 StatusCode::INTERNAL_SERVER_ERROR
@@ -76,7 +74,6 @@ async fn macro_handler(
     match serde_json::from_slice::<MacroWebhookEvent>(&body) {
         Ok(event) => match state.engine.handle_macro_webhook(event).await {
             Ok(()) => StatusCode::OK,
-            Err(SyncError::Echo { .. }) => StatusCode::OK,
             Err(err) => {
                 tracing::warn!(error = %err, "macro webhook sync failed");
                 StatusCode::INTERNAL_SERVER_ERROR
@@ -102,14 +99,25 @@ fn verify_github_signature(secret: &str, headers: &HeaderMap, body: &[u8]) -> bo
     verify_hmac(secret, body, hex)
 }
 
+/// W2.7: `X-Macro-Signature: v1=<hex>` over `{X-Macro-Timestamp}.{body}`.
 fn verify_macro_signature(secret: &str, headers: &HeaderMap, body: &[u8]) -> bool {
-    let Some(sig) = headers
+    let Some(sig_header) = headers
         .get("x-macro-signature")
         .and_then(|v| v.to_str().ok())
     else {
         return false;
     };
-    verify_hmac(secret, body, sig)
+    let Some(hex) = sig_header.strip_prefix("v1=") else {
+        return false;
+    };
+    let Some(timestamp) = headers
+        .get("x-macro-timestamp")
+        .and_then(|v| v.to_str().ok())
+    else {
+        return false;
+    };
+    let signed_payload = format!("{timestamp}.{}", String::from_utf8_lossy(body));
+    verify_hmac(secret, signed_payload.as_bytes(), hex)
 }
 
 fn verify_hmac(secret: &str, body: &[u8], expected_hex: &str) -> bool {
@@ -121,4 +129,26 @@ fn verify_hmac(secret: &str, body: &[u8], expected_hex: &str) -> bool {
         return false;
     };
     mac.verify_slice(&expected).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn macro_signature_matches_w27_format() {
+        let secret = "test-secret";
+        let body = br#"{"event_type":"task.comment"}"#;
+        let timestamp = "1700000000";
+        let payload = format!("{timestamp}.{}", String::from_utf8_lossy(body));
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(payload.as_bytes());
+        let sig = hex::encode(mac.finalize().into_bytes());
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-macro-timestamp", timestamp.parse().unwrap());
+        headers.insert("x-macro-signature", format!("v1={sig}").parse().unwrap());
+
+        assert!(verify_macro_signature(secret, &headers, body));
+    }
 }
