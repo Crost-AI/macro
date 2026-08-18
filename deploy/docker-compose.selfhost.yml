@@ -1,0 +1,41 @@
+# Crost self-host Macro stack.
+#
+# Brings up the full Macro product via the stack orchestrator (`just stack up`).
+# Requires Docker Engine on the host (socket mounted into the runner).
+#
+# Run from the repository root (see deploy/README.md):
+#   docker compose -f deploy/docker-compose.selfhost.yml up
+#
+# The repo bind-mount uses the host path (${PWD}) so inner `docker compose`
+# invocations from xtask resolve the same checkout on the host daemon.
+#
+# IMPORTANT: the outer project name must differ from the inner xtask project
+# (`macro-selfhost` for instance `selfhost`). Otherwise `just stack up` tears
+# down the runner container during its initial `docker compose down`.
+
+name: crost-selfhost-runner
+
+services:
+  macro:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.stack-runner
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      MACRO_INSTANCE: ${MACRO_INSTANCE:-selfhost}
+      MACRO_PORT_BASE: ${MACRO_PORT_BASE:-31000}
+      MACRO_REPO_ROOT: ${PWD}
+      MACRO_ENV_FILE: ${PWD}/deploy/.env
+      MACRO_SELFHOST_KEEPALIVE: ${MACRO_SELFHOST_KEEPALIVE:-true}
+    volumes:
+      - ${PWD}:${PWD}
+      - /var/run/docker.sock:/var/run/docker.sock
+    working_dir: ${PWD}
+    restart: "no"
+
+networks:
+  default:
+    name: crost-selfhost-runner
+    driver: bridge

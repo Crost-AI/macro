@@ -3,12 +3,14 @@
 **/.env*
 **/*.env
 **/*.env.*
+!deploy/.env.example
 **/.dev.vars*
 .idea/
 **/.DS_Store
 .run/
 .claude/.local
 temp/
+deploy/backups/
 run-local.fish
 **/node_modules
 **/.wrangler
