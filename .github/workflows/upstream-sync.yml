@@ -54,6 +54,9 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Run upstream sync automation
+        # GITHUB_TOKEN cannot trigger downstream workflows (Crost CI on the opened PR).
+        # A PAT or GitHub App installation token is required for CI-on-PR; that is a
+        # human/Infisical decision — do not store credential paths in crost-config.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPSTREAM_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.upstream_tag || '' }}

@@ -50,8 +50,7 @@ list_upstream_tags_newest_first() {
     | awk '{print $2}' \
     | sed 's|refs/tags/||' \
     | grep -v '\^{}$' \
-    | sort -V \
-    | tac
+    | sort -Vr
 }
 
 pick_newest_upstream_tag() {
@@ -94,6 +93,24 @@ extract_range_diff() {
   ' "$output_file"
 }
 
+classify_sync_failure() {
+  local sync_log="$1"
+  if grep -q 'error: rebase conflict' "$sync_log"; then
+    echo "rebase-conflict"
+  elif grep -q 'error: tag not found:' "$sync_log" \
+    || grep -q "couldn't find remote ref refs/tags/" "$sync_log"; then
+    echo "tag-not-found"
+  elif grep -q 'Refusing to sync backwards' "$sync_log"; then
+    echo "backwards-tag"
+  elif grep -q 'disallowed workflow files present after sync' "$sync_log"; then
+    echo "workflow-slimming"
+  elif grep -q 'cannot determine old upstream base' "$sync_log"; then
+    echo "missing-base"
+  else
+    echo "sync-failed"
+  fi
+}
+
 ensure_conflict_label() {
   if [[ "$DRY_RUN" == "1" ]]; then
     return 0
@@ -105,35 +122,93 @@ ensure_conflict_label() {
       --description 'Upstream sync rebase conflict — resolve manually'
 }
 
-open_conflict_issue() {
+open_sync_failure_issue() {
   local tag="$1"
-  local body_file
-  body_file="$(mktemp)"
-  cat > "$body_file" <<EOF
-Automated upstream sync to \`${tag}\` failed: \`scripts/sync-upstream.sh\` hit a rebase conflict and aborted.
+  local failure_kind="$2"
+  local sync_log="$3"
+  local title body_file gh_args=()
 
+  case "$failure_kind" in
+    rebase-conflict)
+      title="Upstream sync conflict: ${tag}"
+      gh_args=(--label upstream-conflict)
+      ;;
+    tag-not-found)
+      title="Upstream sync failed (tag not found): ${tag}"
+      ;;
+    backwards-tag)
+      title="Upstream sync failed (backwards tag): ${tag}"
+      ;;
+    workflow-slimming)
+      title="Upstream sync failed (workflow slimming): ${tag}"
+      ;;
+    missing-base)
+      title="Upstream sync failed (missing base marker): ${tag}"
+      ;;
+    *)
+      title="Upstream sync failed: ${tag}"
+      ;;
+  esac
+
+  body_file="$(mktemp)"
+  {
+    echo "Automated upstream sync to \`${tag}\` failed."
+    echo ""
+    echo "**Failure kind:** \`${failure_kind}\`"
+    echo ""
+    if [[ "$failure_kind" == "rebase-conflict" ]]; then
+      cat <<'EOF'
 ## Next steps
 
-1. Check out \`${MAIN_BRANCH}\` and create a branch.
-2. Run \`./scripts/sync-upstream.sh ${tag}\` locally and resolve conflicts.
-3. Complete the rebase, verify \`git range-diff\`, and open a PR manually.
+1. Check out `main` and create a branch.
+2. Run `./scripts/sync-upstream.sh <tag>` locally and resolve conflicts.
+3. Complete the rebase, verify `git range-diff`, and open a PR manually.
 4. Close this issue when the sync lands.
 
-See \`UPSTREAM.md\` for the standing delta checklist.
+See `UPSTREAM.md` for the standing delta checklist.
 EOF
+    else
+      echo "## sync-upstream.sh output"
+      echo ""
+      echo '```'
+      cat "$sync_log"
+      echo '```'
+    fi
+  } > "$body_file"
 
   if [[ "$DRY_RUN" == "1" ]]; then
-    echo "dry-run: would open upstream-conflict issue for ${tag}"
+    echo "dry-run: would open issue (${failure_kind}): ${title}"
     rm -f "$body_file"
     return 0
   fi
 
-  ensure_conflict_label
+  if [[ "$failure_kind" == "rebase-conflict" ]]; then
+    ensure_conflict_label
+  fi
   "$GH" issue create \
-    --title "Upstream sync conflict: ${tag}" \
-    --label upstream-conflict \
+    --title "$title" \
+    "${gh_args[@]}" \
     --body-file "$body_file"
   rm -f "$body_file"
+}
+
+commit_upstream_base_marker() {
+  local tag="$1"
+  local head_marker worktree_marker
+
+  worktree_marker="$(tr -d '[:space:]' < "$BASE_TAG_FILE")"
+  if [[ "$worktree_marker" != "$tag" ]]; then
+    echo "error: ${BASE_TAG_FILE} is ${worktree_marker:-<empty>}, expected ${tag}" >&2
+    return 1
+  fi
+
+  head_marker="$(git show "HEAD:${BASE_TAG_FILE}" 2>/dev/null | tr -d '[:space:]' || true)"
+  if [[ "$head_marker" == "$tag" ]] && [[ -z "$(git status --porcelain -- "$BASE_TAG_FILE")" ]]; then
+    return 0
+  fi
+
+  git add "$BASE_TAG_FILE"
+  git commit -m "chore: record upstream base ${tag}"
 }
 
 open_sync_pr() {
@@ -180,7 +255,7 @@ open_sync_pr() {
 
 run_sync() {
   local tag="$1"
-  local branch sync_log sync_status range_diff
+  local branch sync_log sync_status range_diff failure_kind
 
   branch="crost/upstream-sync-${tag//\//-}"
 
@@ -199,10 +274,11 @@ run_sync() {
 
   if [[ $sync_status -ne 0 ]]; then
     cat "$sync_log" >&2
+    failure_kind="$(classify_sync_failure "$sync_log")"
     git checkout "$MAIN_BRANCH"
     git branch -D "$branch" >/dev/null 2>&1 || true
+    open_sync_failure_issue "$tag" "$failure_kind" "$sync_log"
     rm -f "$sync_log"
-    open_conflict_issue "$tag"
     return 0
   fi
 
@@ -217,9 +293,12 @@ run_sync() {
 
   range_diff="$(extract_range_diff "$sync_log")"
   cat "$sync_log"
+
+  commit_upstream_base_marker "$tag"
+
   rm -f "$sync_log"
 
-  if [[ -z "$(git status --porcelain)" ]] && [[ -z "$(git log "${MAIN_BRANCH}..HEAD" --oneline)" ]]; then
+  if [[ -z "$(git log "${MAIN_BRANCH}..HEAD" --oneline)" ]]; then
     git checkout "$MAIN_BRANCH"
     git branch -D "$branch" >/dev/null 2>&1 || true
     echo "Sync produced no branch delta; skipping PR."
