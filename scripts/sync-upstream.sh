@@ -10,6 +10,31 @@ cd "$REPO_ROOT"
 UPSTREAM_REMOTE="${UPSTREAM_REMOTE:-upstream}"
 UPSTREAM_URL="${UPSTREAM_URL:-https://github.com/macro-inc/macro.git}"
 BASE_TAG_FILE="${BASE_TAG_FILE:-.upstream-base}"
+CROST_ALLOWED_WORKFLOW="ci.yml"
+
+verify_workflow_slimming() {
+  local unexpected=()
+  local f base
+
+  if [[ ! -d .github/workflows ]]; then
+    return 0
+  fi
+
+  for f in .github/workflows/*; do
+    [[ -e "$f" ]] || continue
+    base="$(basename "$f")"
+    [[ "$base" == "$CROST_ALLOWED_WORKFLOW" ]] && continue
+    unexpected+=("$base")
+  done
+
+  if ((${#unexpected[@]} > 0)); then
+    echo "error: disallowed workflow files present after sync:" >&2
+    printf '  - %s\n' "${unexpected[@]}" >&2
+    echo "This fork keeps only .github/workflows/${CROST_ALLOWED_WORKFLOW} (see UPSTREAM.md)." >&2
+    echo "Re-apply the workflow slimming patch or update the standing delta deliberately." >&2
+    exit 1
+  fi
+}
 
 usage() {
   echo "Usage: $0 <upstream-tag>" >&2
@@ -108,6 +133,8 @@ fi
 echo ""
 echo "=== git range-diff ${OLD_BASE_COMMIT}..${OLD_HEAD} ${NEW_BASE_COMMIT}..HEAD ==="
 git range-diff "${OLD_BASE_COMMIT}..${OLD_HEAD}" "${NEW_BASE_COMMIT}..HEAD" || true
+
+verify_workflow_slimming
 
 echo "$TAG" > "$BASE_TAG_FILE"
 echo ""

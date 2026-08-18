@@ -40,6 +40,21 @@ On conflict:
 - The script runs `git rebase --abort`.
 - Fix conflicts locally if needed, complete the rebase, update `.upstream-base`, and push.
 
+## Standing deltas (do not resurrect on sync)
+
+### GitHub Actions workflow slimming
+
+Upstream ships ~35 workflow files under `.github/workflows/` (Fly deploys, Pulumi, FusionAuth, desktop builds, etc.). **This fork keeps only `ci.yml` (Crost CI).** All other upstream workflow files are intentionally deleted — disabling them in the GitHub UI is not durable; an upstream tag sync would restore them.
+
+| Keep | Remove (standing delete) |
+| --- | --- |
+| `.github/workflows/ci.yml` | Every other file under `.github/workflows/` |
+| Local actions Crost CI calls (`setup-nix`, `setup-nix-dev-shell`, `setup-reqs-web`, …) | Upstream deploy/preview/build workflows listed in the CROS-58 issue |
+
+`scripts/sync-upstream.sh` aborts after a successful rebase if any disallowed workflow file is present. Re-apply the slimming commit or update this table before accepting new upstream workflows.
+
+After merge to `main`, ensure Crost CI is enabled: `gh workflow enable "Crost CI"`.
+
 ## What belongs in the patch series
 
 | In scope (Crost fork) | Out of scope (upstream or later waves) |
@@ -48,6 +63,7 @@ On conflict:
 | `scripts/sync-upstream.sh`, `UPSTREAM.md` | Broker integration / webhooks glue |
 | `research/` verification probes (W0.1) | Product feature changes without upstream path |
 | `.github/workflows/ci.yml` (Crost CI gate) | Rewriting upstream service internals |
+| Workflow slimming (delete upstream `.github/workflows/*` except `ci.yml`) | Restoring Fly/Pulumi/deploy workflows without a human decision |
 
 ## Review checklist
 
