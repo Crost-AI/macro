@@ -57,10 +57,6 @@ jobs:
         env:
           NIX_REMOTE: daemon
 
-      - name: Teardown Nix
-        if: always()
-        uses: ./.github/actions/teardown-nix
-
   web:
     name: SolidJS app
     runs-on: ubuntu-latest
@@ -77,10 +73,6 @@ jobs:
       - name: Build frontend (production)
         run: just build-dev
         working-directory: apps/web
-
-      - name: Teardown Nix
-        if: always()
-        uses: ./.github/actions/teardown-nix
 
   status:
     name: Crost CI status
