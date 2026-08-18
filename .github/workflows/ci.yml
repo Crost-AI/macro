@@ -32,10 +32,19 @@ jobs:
 
       - name: Add swap (link needs headroom on ubuntu-latest)
         run: |
-          sudo fallocate -l 8G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          set -euo pipefail
+          if swapon --show=NAME 2>/dev/null | grep -qx '/swapfile'; then
+            echo "swap already active at /swapfile"
+          elif [[ -f /swapfile ]]; then
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile
+            sudo swapon /swapfile
+          else
+            sudo fallocate -l 8G /swapfile
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile
+            sudo swapon /swapfile
+          fi
 
       - name: Setup Nix
         uses: ./.github/actions/setup-nix

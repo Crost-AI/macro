@@ -16,9 +16,8 @@ fi
 INSTANCE="${MACRO_INSTANCE:-selfhost}"
 PORT_BASE="${MACRO_PORT_BASE:-31000}"
 STACK_PROJECT="${MACRO_STACK_PROJECT:-${COMPOSE_PROJECT_NAME:-macro-${INSTANCE}}}"
-BACKUP_DIR="${1:-deploy/backups/$(date -u +%Y%m%dT%H%M%SZ)}"
-
-mkdir -p "$BACKUP_DIR"
+BACKUP_DIR_REL="${1:-deploy/backups/$(date -u +%Y%m%dT%H%M%SZ)}"
+BACKUP_DIR="$(mkdir -p "$BACKUP_DIR_REL" && cd "$BACKUP_DIR_REL" && pwd)"
 
 log() {
   printf '[macro-backup] %s\n' "$*"

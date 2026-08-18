@@ -28,6 +28,11 @@ export COMPOSE_PROJECT_NAME="$STACK_PROJECT"
 export MACRO_ENV_FILE="${MACRO_ENV_FILE:-${REPO_ROOT}/deploy/.env}"
 export MACRO_REPO_ROOT="$REPO_ROOT"
 
+# docker compose run macro just … passes a command; do not re-run full stack up.
+if [[ $# -gt 0 ]]; then
+  exec "$@"
+fi
+
 # xtask always reads binaries from ./target/<triple>/debug (not CARGO_TARGET_DIR).
 # When the repo is bind-mounted from macOS, stale host metadata in that tree breaks
 # in-container zigbuild — drop only the linux cross-target dirs inside the runner.
