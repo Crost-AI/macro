@@ -35,12 +35,18 @@ impl Worker {
             tokio::select! {
                 biased;
                 () = cancellation_token.cancelled() => return,
-                () = self.tick() => {}
+                () = self.tick_inner() => {}
             }
         }
     }
 
-    async fn tick(&self) {
+    /// Process one worker polling iteration (used by integration tests).
+    #[cfg(test)]
+    pub(crate) async fn tick(&self) {
+        self.tick_inner().await;
+    }
+
+    async fn tick_inner(&self) {
         match self.outbox.claim_due(BATCH_SIZE).await {
             Ok(rows) if rows.is_empty() => {
                 tokio::time::sleep(POLL_INTERVAL).await;

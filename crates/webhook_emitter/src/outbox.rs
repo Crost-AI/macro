@@ -14,6 +14,8 @@ use crate::events::WebhookEnvelope;
 pub const MAX_ATTEMPTS: i32 = 6;
 /// Fixed retry delay between attempts.
 pub const RETRY_DELAY_SECS: i64 = 30;
+/// Lease applied when a row is claimed so concurrent workers cannot double-deliver.
+pub const CLAIM_LEASE_SECS: i64 = 120;
 
 /// One pending or terminal outbox row.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,21 +78,29 @@ impl PgOutbox {
         Ok(exists)
     }
 
-    /// Claim due pending rows for delivery.
+    /// Claim due pending rows for delivery, leasing each row until delivery completes.
     pub async fn claim_due(&self, limit: i64) -> anyhow::Result<Vec<OutboxRow>> {
         let rows = sqlx::query(
             r#"
-            SELECT event_id, event_type, payload, attempt_count, next_attempt_at
-            FROM crost_webhook_outbox
-            WHERE delivered_at IS NULL
-              AND dead_letter = FALSE
-              AND next_attempt_at <= NOW()
-            ORDER BY next_attempt_at
-            LIMIT $1
-            FOR UPDATE SKIP LOCKED
+            WITH picked AS (
+                SELECT event_id
+                FROM crost_webhook_outbox
+                WHERE delivered_at IS NULL
+                  AND dead_letter = FALSE
+                  AND next_attempt_at <= NOW()
+                ORDER BY next_attempt_at
+                LIMIT $1
+                FOR UPDATE SKIP LOCKED
+            )
+            UPDATE crost_webhook_outbox AS o
+            SET next_attempt_at = NOW() + ($2::bigint * INTERVAL '1 second')
+            FROM picked AS p
+            WHERE o.event_id = p.event_id
+            RETURNING o.event_id, o.event_type, o.payload, o.attempt_count, o.next_attempt_at
             "#,
         )
         .bind(limit)
+        .bind(CLAIM_LEASE_SECS)
         .fetch_all(&self.pool)
         .await?;
 

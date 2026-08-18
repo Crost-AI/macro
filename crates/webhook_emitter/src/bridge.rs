@@ -1,4 +1,7 @@
-//! Kafka bridge: map `macro.documents` / `macro.channels` events to Crost webhooks.
+//! Kafka bridge: map broker topics into Crost webhook events.
+
+#[cfg(test)]
+mod test;
 
 use channels::domain::broker_events::{ChannelMacroEvent, ChannelTopicEvent};
 use document_sub_type::DocumentSubType;
@@ -7,10 +10,13 @@ use kafka_util::{GroupName, KafkaEventConsumer};
 use macro_event_broker::{
     KafkaConsumerAdapter, MacroEvent as _, MacroEventCollection as _, MacroEventConsumerService,
 };
+use models_properties::{EntityType, service::property_value::PropertyValue};
+use properties::domain::events::{PropertyMacroEvent, PropertyTopicEvent};
 use rdkafka::consumer::CommitMode;
 use rdkafka::message::{BorrowedMessage, Message};
 use serde_json::json;
 use sqlx::PgPool;
+use system_properties::SystemPropertyKey;
 
 use crate::{
     events::{self, WebhookEnvelope},
@@ -27,6 +33,7 @@ impl GroupName for CrostWebhookEmitterConsumerGroup {
 macro_event_broker::declare_topics!(
     DeclaredMacroEvent: DocumentMacroEvent,
     ChannelMacroEvent,
+    PropertyMacroEvent,
 );
 
 type BridgeKafkaAdapter =
@@ -111,10 +118,13 @@ async fn map_event(
         DeclaredMacroEvent::ChannelMacroEvent(event) => {
             Ok(map_channel_event(event.event().event.clone()))
         }
+        DeclaredMacroEvent::PropertyMacroEvent(event) => {
+            Ok(map_property_event(event.event().event.clone()))
+        }
     }
 }
 
-async fn map_document_event(
+pub(crate) async fn map_document_event(
     outbox: &PgOutbox,
     event: DocumentTopicEvent,
 ) -> anyhow::Result<Option<WebhookEnvelope>> {
@@ -164,7 +174,7 @@ async fn map_document_event(
     }
 }
 
-fn map_channel_event(event: ChannelTopicEvent) -> Option<WebhookEnvelope> {
+pub(crate) fn map_channel_event(event: ChannelTopicEvent) -> Option<WebhookEnvelope> {
     let ChannelTopicEvent::MessagePosted(metadata) = event else {
         return None;
     };
@@ -193,6 +203,52 @@ fn map_channel_event(event: ChannelTopicEvent) -> Option<WebhookEnvelope> {
             "created_at": metadata.created_at,
         }),
     ))
+}
+
+pub(crate) fn map_property_event(event: PropertyTopicEvent) -> Option<WebhookEnvelope> {
+    let PropertyTopicEvent::EntityPropertyUpdated(metadata) = event else {
+        return None;
+    };
+    if metadata.entity_type != EntityType::Task {
+        return None;
+    }
+
+    let mut body = json!({
+        "task_id": metadata.entity_id,
+        "property_definition_id": metadata.property_definition_id,
+        "actor_user_id": metadata.actor_user_id,
+        "updated_at": metadata.updated_at,
+    });
+
+    if let Some(value) = &metadata.value {
+        body["value"] = serde_json::to_value(value).ok()?;
+    }
+    if let Some(previous_value) = &metadata.previous_value {
+        body["previous_value"] = serde_json::to_value(previous_value).ok()?;
+    }
+
+    if metadata.property_definition_id == SystemPropertyKey::STATUS_UUID {
+        append_status_fields(&mut body, &metadata.value, &metadata.previous_value);
+    }
+
+    Some(WebhookEnvelope::new(events::TASK_UPDATED, body))
+}
+
+fn append_status_fields(
+    body: &mut serde_json::Value,
+    value: &Option<PropertyValue>,
+    previous_value: &Option<PropertyValue>,
+) {
+    if let Some(PropertyValue::SelectOption(options)) = value
+        && let Some(status_id) = options.first()
+    {
+        body["status"] = json!(status_id.to_string());
+    }
+    if let Some(PropertyValue::SelectOption(options)) = previous_value
+        && let Some(status_id) = options.first()
+    {
+        body["previous_status"] = json!(status_id.to_string());
+    }
 }
 
 fn commit_logged(consumer: &BridgeKafkaConsumer, message: &BorrowedMessage<'_>) {

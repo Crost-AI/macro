@@ -12,8 +12,10 @@ bridge = [
   "dep:kafka_util",
   "dep:macro_event_broker",
   "dep:macro_event_topics",
+  "dep:models_properties",
+  "dep:properties",
   "dep:rdkafka",
-  "dep:tokio-retry",
+  "dep:system_properties",
 ]
 default = ["bridge", "worker"]
 worker = ["dep:reqwest", "dep:tokio", "dep:tokio-util"]
@@ -31,20 +33,23 @@ macro_event_broker = { path = "../macro_event_broker", default-features = false,
   "outbound",
 ], optional = true }
 macro_event_topics = { path = "../macro_event_topics", optional = true }
+models_properties = { path = "../models_properties", optional = true }
+properties = { path = "../properties", default-features = false, optional = true }
 rdkafka = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 sqlx = { workspace = true }
-thiserror = { workspace = true }
+system_properties = { path = "../system_properties", optional = true }
 tokio = { workspace = true, features = ["macros", "time"], optional = true }
-tokio-retry = { workspace = true, optional = true }
 tokio-util = { workspace = true, optional = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
+macro_db_migrator = { path = "../macro_db_migrator" }
+sqlx = { workspace = true, features = ["runtime-tokio", "postgres"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 wiremock = { workspace = true }

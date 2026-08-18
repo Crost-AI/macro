@@ -16,7 +16,13 @@ Deliveries use `X-Macro-Signature: v1=<hex>` over
 `event_id` (UUID v7) for broker idempotency; retries reuse the same id.
 
 At-least-once semantics: rows live in `crost_webhook_outbox` until delivered or
-dead-lettered after six failed attempts (30s between retries).
+dead-lettered after six failed attempts (30s between retries). Claimed rows are
+leased for 120s so concurrent workers cannot double-deliver.
+
+## Deferred (follow-up)
+
+- `task.comment` on comment edit/delete paths (create-only hook today).
+- Narrow `document_is_task` lookup if a cheaper task-id signal becomes available.
 
 ## Configuration
 

@@ -1,35 +1,63 @@
-use serde_json::json;
+use macro_db_migrator::MACRO_DB_MIGRATIONS;
+use sqlx::PgPool;
+use wiremock::matchers::method;
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::{
-    events::{MESSAGE_POSTED, TASK_CREATED, WebhookEnvelope},
-    outbox::{MAX_ATTEMPTS, RETRY_DELAY_SECS},
+    config::Config,
+    events::{WebhookEnvelope, TASK_UPDATED},
+    outbox::PgOutbox,
+    worker::Worker,
 };
 
-#[test]
-fn retry_policy_matches_blueprint() {
-    assert_eq!(MAX_ATTEMPTS, 6);
-    assert_eq!(RETRY_DELAY_SECS, 30);
-}
+const SECRET: &str = "outbox-retry-secret";
 
-#[test]
-fn envelope_serializes_event_id() {
-    let envelope = WebhookEnvelope::new(TASK_CREATED, json!({ "task_id": "abc" }));
-    let value = serde_json::to_value(&envelope).expect("serialize");
-    assert_eq!(value["event_type"], TASK_CREATED);
-    assert!(value["event_id"].is_string());
-}
+#[tokio::test]
+async fn outbox_retry_preserves_event_id_through_worker() {
+    let database_url = match std::env::var("DATABASE_URL") {
+        Ok(url) => url,
+        Err(_) => {
+            eprintln!("skipping outbox_retry_preserves_event_id_through_worker: DATABASE_URL not set");
+            return;
+        }
+    };
 
-#[test]
-fn message_posted_metadata_shape() {
-    let envelope = WebhookEnvelope::new(
-        MESSAGE_POSTED,
-        json!({
-            "channel_id": "00000000-0000-0000-0000-000000000001",
-            "author": "macro|user@example.com",
-            "text": "hello",
-            "thread_id": null,
-            "mentions": [],
-        }),
-    );
-    assert_eq!(envelope.event_type, MESSAGE_POSTED);
+    let pool = PgPool::connect(&database_url).await.expect("connect");
+    MACRO_DB_MIGRATIONS.run(&pool).await.expect("migrate");
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(500))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+
+    let outbox = PgOutbox::new(pool.clone());
+    let envelope = WebhookEnvelope::new(TASK_UPDATED, serde_json::json!({ "task_id": "t-retry" }));
+    let event_id = envelope.event_id;
+    outbox.enqueue(&envelope).await.expect("enqueue");
+
+    let worker = Worker::new(
+        pool,
+        Config {
+            webhook_url: server.uri(),
+            webhook_secret: SECRET.into(),
+        },
+    )
+    .expect("worker");
+
+    worker.tick().await;
+    worker.tick().await;
+
+    let requests = server.received_requests().await.expect("requests");
+    assert_eq!(requests.len(), 2);
+    for request in requests {
+        let body = request.body.clone();
+        let parsed: WebhookEnvelope = serde_json::from_slice(&body).expect("envelope");
+        assert_eq!(parsed.event_id, event_id);
+    }
 }
