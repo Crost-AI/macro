@@ -43,6 +43,17 @@ ensure_nix_dev_env() {
     return 1
   fi
 
+  # Prefer rustup's toolchain when the host ships a separate rustc (e.g. Homebrew).
+  if command -v rustup >/dev/null 2>&1; then
+    rustup_bin="$(dirname "$(rustup which rustc 2>/dev/null || true)")"
+    if [[ -n "$rustup_bin" && -d "$rustup_bin" ]]; then
+      export PATH="${rustup_bin}:${PATH}"
+      if ! rustup target list --installed | grep -qx wasm32-unknown-unknown; then
+        rustup target add wasm32-unknown-unknown
+      fi
+    fi
+  fi
+
   return 0
 }
 
