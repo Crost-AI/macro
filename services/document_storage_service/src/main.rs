@@ -796,6 +796,65 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    if let Some(crost_webhook_config) = webhook_emitter::config::Config::from_env() {
+        let crost_webhook_pool = db.clone();
+        let crost_webhook_worker = webhook_emitter::worker::Worker::new(
+            crost_webhook_pool.clone(),
+            crost_webhook_config,
+        )
+        .context("failed to create crost webhook emitter worker")?;
+        let crost_worker_cancel = consumer_cancellation_token.clone();
+        tokio::spawn(async move {
+            tracing::info!("starting crost webhook emitter worker");
+            crost_webhook_worker.run(crost_worker_cancel).await;
+        });
+
+        let crost_bridge_brokers = config.kafka_brokers.as_ref().to_string();
+        consumer_tracker.spawn({
+            let cancellation_token = consumer_cancellation_token.clone();
+            let pool = crost_webhook_pool;
+            async move {
+                loop {
+                    if cancellation_token.is_cancelled() {
+                        break;
+                    }
+
+                    tracing::info!("starting crost webhook emitter kafka bridge");
+                    let result = webhook_emitter::bridge::run_kafka_bridge(
+                        &crost_bridge_brokers,
+                        pool.clone(),
+                        cancellation_token.cancelled(),
+                    )
+                    .await;
+
+                    if cancellation_token.is_cancelled() {
+                        break;
+                    }
+
+                    match result {
+                        Ok(()) => {
+                            tracing::error!("crost webhook emitter kafka bridge exited unexpectedly")
+                        }
+                        Err(error) => tracing::error!(
+                            error = ?error,
+                            "crost webhook emitter kafka bridge exited unexpectedly"
+                        ),
+                    }
+
+                    tokio::select! {
+                        biased;
+                        _ = cancellation_token.cancelled() => break,
+                        _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                    }
+                }
+            }
+        });
+    } else {
+        tracing::info!(
+            "crost webhook emitter disabled (set WEBHOOK_URL and WEBHOOK_SECRET to enable)"
+        );
+    }
+
     let activity_consumer_brokers = config.kafka_brokers.as_ref().to_string();
     consumer_tracker.spawn({
         let cancellation_token = consumer_cancellation_token.clone();
