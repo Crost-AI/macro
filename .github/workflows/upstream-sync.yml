@@ -1,0 +1,63 @@
+# Weekly upstream tag sync: rebase Crost patches, open PR (range-diff body) or conflict issue.
+name: Upstream sync
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: Upstream release tag (optional; auto-detect latest new tag if empty)
+        required: false
+        type: string
+      fixture_mode:
+        description: Run bundled fixture smoke test (no real upstream fetch)
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: upstream-sync-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  fixture-test:
+    if: github.event_name == 'workflow_dispatch' && inputs.fixture_mode == true
+    name: Fixture smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run upstream sync fixture tests
+        run: ./scripts/upstream-sync-fixture-test.sh
+
+  sync:
+    if: github.event_name != 'workflow_dispatch' || inputs.fixture_mode != true
+    name: Sync upstream release tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Run upstream sync automation
+        # GITHUB_TOKEN cannot trigger downstream workflows (Crost CI on the opened PR).
+        # A PAT or GitHub App installation token is required for CI-on-PR; that is a
+        # human/Infisical decision — do not store credential paths in crost-config.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.upstream_tag || '' }}
+        run: ./scripts/upstream-sync-automation.sh

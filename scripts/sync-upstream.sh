@@ -10,7 +10,16 @@ cd "$REPO_ROOT"
 UPSTREAM_REMOTE="${UPSTREAM_REMOTE:-upstream}"
 UPSTREAM_URL="${UPSTREAM_URL:-https://github.com/macro-inc/macro.git}"
 BASE_TAG_FILE="${BASE_TAG_FILE:-.upstream-base}"
-CROST_ALLOWED_WORKFLOW="ci.yml"
+CROST_ALLOWED_WORKFLOWS=(ci.yml upstream-sync.yml)
+
+workflow_allowed() {
+  local base="$1"
+  local allowed
+  for allowed in "${CROST_ALLOWED_WORKFLOWS[@]}"; do
+    [[ "$base" == "$allowed" ]] && return 0
+  done
+  return 1
+}
 
 verify_workflow_slimming() {
   local unexpected=()
@@ -23,14 +32,14 @@ verify_workflow_slimming() {
   for f in .github/workflows/*; do
     [[ -e "$f" ]] || continue
     base="$(basename "$f")"
-    [[ "$base" == "$CROST_ALLOWED_WORKFLOW" ]] && continue
+    workflow_allowed "$base" && continue
     unexpected+=("$base")
   done
 
   if ((${#unexpected[@]} > 0)); then
     echo "error: disallowed workflow files present after sync:" >&2
     printf '  - %s\n' "${unexpected[@]}" >&2
-    echo "This fork keeps only .github/workflows/${CROST_ALLOWED_WORKFLOW} (see UPSTREAM.md)." >&2
+    echo "This fork keeps only .github/workflows/{ci.yml,upstream-sync.yml} (see UPSTREAM.md)." >&2
     echo "Re-apply the workflow slimming patch or update the standing delta deliberately." >&2
     exit 1
   fi
