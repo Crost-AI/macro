@@ -17,9 +17,14 @@ RUN apt-get update \
     docker.io \
     git \
     libssl-dev \
+    libsasl2-dev \
+    libcurl4-openssl-dev \
     mold \
+    openssh-client \
     pkg-config \
+    socat \
     unzip \
+    xz-utils \
   && rm -rf /var/lib/apt/lists/*
 
 # zig (cargo-zigbuild)
@@ -29,10 +34,23 @@ RUN set -eux; \
     amd64) zigarch=x86_64 ;; \
     *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
   esac; \
-  curl -fsSL "https://ziglang.org/download/0.16.0/zig-linux-${zigarch}-0.16.0.tar.xz" \
+  curl -fsSL "https://ziglang.org/download/0.13.0/zig-linux-${zigarch}-0.13.0.tar.xz" \
     | tar -xJ -C /usr/local; \
-  mv /usr/local/zig-linux-"${zigarch}"-0.16.0 /usr/local/zig
+  mv /usr/local/zig-linux-"${zigarch}"-0.13.0 /usr/local/zig
 ENV PATH="/usr/local/zig:${PATH}"
+
+# Docker Compose v2 plugin (debian docker.io lacks the plugin)
+RUN set -eux; \
+  arch="$(dpkg --print-architecture)"; \
+  case "$arch" in \
+    arm64) compose_arch=aarch64 ;; \
+    amd64) compose_arch=x86_64 ;; \
+    *) echo "unsupported arch: $arch" >&2; exit 1 ;; \
+  esac; \
+  mkdir -p /usr/lib/docker/cli-plugins; \
+  curl -fsSL "https://github.com/docker/compose/releases/download/v2.32.4/docker-compose-linux-${compose_arch}" \
+    -o /usr/lib/docker/cli-plugins/docker-compose; \
+  chmod +x /usr/lib/docker/cli-plugins/docker-compose
 
 # bun + Rust toolchain (matches rust-toolchain.toml 1.94.0)
 RUN curl -fsSL https://bun.sh/install | bash
