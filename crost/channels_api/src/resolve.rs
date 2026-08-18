@@ -2,14 +2,46 @@ use crate::error::ApiError;
 use macro_db_client::user::get::get_user_by_email::get_user_by_email;
 use macro_user_id::user_id::MacroUserIdStr;
 use sqlx::PgPool;
+use std::future::Future;
+use std::pin::Pin;
 
-/// Resolve a Crost `user_or_agent_ref` to a Macro user id.
-///
+/// Resolves Crost `user_or_agent_ref` values to Macro user ids.
+pub trait UserResolver: Send + Sync {
+    /// Resolve a ref and verify the user exists.
+    fn resolve_user_ref(
+        &self,
+        user_ref: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<MacroUserIdStr<'static>, ApiError>> + Send + '_>>;
+}
+
+/// Production resolver backed by MacroDB.
+#[derive(Clone)]
+pub struct DbUserResolver {
+    pool: PgPool,
+}
+
+impl DbUserResolver {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+impl UserResolver for DbUserResolver {
+    fn resolve_user_ref(
+        &self,
+        user_ref: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<MacroUserIdStr<'static>, ApiError>> + Send + '_>> {
+        let pool = self.pool.clone();
+        let user_ref = user_ref.to_owned();
+        Box::pin(async move { resolve_user_ref(&pool, &user_ref).await })
+    }
+}
+
 /// Accepted forms (W2.4 / W2.8 contract):
 /// - `macro|user@example.com` — canonical Macro user id
 /// - `user@example.com` — email shorthand (must exist in `User` table)
 /// - `agent-claude`, `team-acme`, … — slug shorthand → `macro|{slug}@agents.crost.local`
-pub async fn resolve_user_ref(
+async fn resolve_user_ref(
     db: &PgPool,
     user_ref: &str,
 ) -> Result<MacroUserIdStr<'static>, ApiError> {

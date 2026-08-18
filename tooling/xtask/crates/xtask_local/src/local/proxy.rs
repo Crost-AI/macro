@@ -138,7 +138,8 @@ const SPECIAL_ROUTES: &str = r#"    @websocket path /websocket /websocket/*
         reverse_proxy ai-editing-worker:8933
     }
     # Crost W2.8 service-token channels REST API (no prefix strip).
-    handle /api/v1/channels /api/v1/channels/* {
+    @crost_channels path /api/v1/channels /api/v1/channels/*
+    handle @crost_channels {
         reverse_proxy document_storage_service:8080
     }
 "#;

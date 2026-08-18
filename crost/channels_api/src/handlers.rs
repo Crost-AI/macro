@@ -4,7 +4,6 @@ use crate::{
         AddMemberBody, CreateChannelBody, CreateChannelResponse, PostMessageBody,
         PostMessageResponse,
     },
-    resolve::resolve_user_ref,
     router::CrostChannelsRouterState,
 };
 use axum::{
@@ -15,7 +14,7 @@ use axum::{
 };
 use channel_sender::ChannelSender;
 use channels::domain::{
-        models::{
+    models::{
         AddParticipantsRequest, ChannelType, CreateChannelRequest, PostMessageNotificationPolicy,
         PostMessageRequest, RemoveParticipantsRequest,
     },
@@ -29,9 +28,11 @@ use uuid::Uuid;
 pub const SERVICE_ACTOR_USER_ID: &str = "macro|INTERNAL@macro.com";
 
 fn service_actor() -> ChannelSender<'static> {
-    ChannelSender::new_from_user(
-        MacroUserIdStr::parse_from_str(SERVICE_ACTOR_USER_ID).expect("valid internal user id"),
-    )
+    ChannelSender::new_from_user(service_actor_user_id())
+}
+
+fn service_actor_user_id() -> MacroUserIdStr<'static> {
+    MacroUserIdStr::parse_from_str(SERVICE_ACTOR_USER_ID).expect("valid internal user id")
 }
 
 pub async fn create_channel<Svc>(
@@ -51,12 +52,18 @@ where
         ChannelType::Public
     };
 
+    let mut participants = HashSet::new();
+    if !body.private {
+        // Public channels require at least one participant besides the implicit owner.
+        participants.insert(service_actor_user_id());
+    }
+
     let req = CreateChannelRequest {
         name: Some(body.name),
         channel_type,
         team_id: None,
         auto_join_team: false,
-        participants: HashSet::new(),
+        participants,
     };
 
     let res = state
@@ -84,10 +91,7 @@ where
         .service
         .delete_channel(service_actor(), channel_id)
         .await
-        .map_err(|err| match err {
-            ChannelMutationErr::NotFound(_) => ApiError::not_found("channel not found"),
-            other => map_mutation_err(other),
-        })?;
+        .map_err(map_mutation_err)?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -102,7 +106,10 @@ where
 {
     ensure_channel_exists(&state, channel_id).await?;
 
-    let user_id = resolve_user_ref(&state.db, &body.user_or_agent_ref).await?;
+    let user_id = state
+        .user_resolver
+        .resolve_user_ref(&body.user_or_agent_ref)
+        .await?;
 
     let participants = state
         .service
@@ -136,7 +143,7 @@ where
 {
     ensure_channel_exists(&state, channel_id).await?;
 
-    let user_id = resolve_user_ref(&state.db, &member_ref).await?;
+    let user_id = state.user_resolver.resolve_user_ref(&member_ref).await?;
 
     let participants = state
         .service
@@ -174,10 +181,7 @@ where
     let thread_id = match body.thread {
         None => None,
         Some(ref raw) if raw.is_empty() => None,
-        Some(ref raw) => Some(
-            Uuid::parse_str(raw)
-                .map_err(|_| ApiError::bad_request("invalid thread id"))?,
-        ),
+        Some(ref raw) => Uuid::parse_str(raw).ok(),
     };
 
     let req = PostMessageRequest {
@@ -211,10 +215,12 @@ async fn ensure_channel_exists<Svc>(
 where
     Svc: ChannelService,
 {
-    match state.service.get_channel_participants(channel_id).await {
-        Ok(_) => Ok(()),
-        Err(err) => Err(map_messages_err(err)),
-    }
+    state
+        .service
+        .get_channel_metadata(channel_id, service_actor_user_id())
+        .await
+        .map_err(map_messages_err)
+        .map(|_| ())
 }
 
 fn map_mutation_err(err: ChannelMutationErr) -> ApiError {
@@ -223,6 +229,9 @@ fn map_mutation_err(err: ChannelMutationErr) -> ApiError {
         ChannelMutationErr::BadRequest(message) => ApiError::bad_request(message),
         ChannelMutationErr::Unauthorized(message) => ApiError::bad_request(message),
         ChannelMutationErr::Forbidden(message) => ApiError::bad_request(message),
+        ChannelMutationErr::Repo(repo_err) if is_not_found(&repo_err) => {
+            ApiError::not_found("channel not found")
+        }
         other => {
             tracing::error!(error=?other, "channel mutation failed");
             ApiError::internal("channel mutation failed")
@@ -235,14 +244,20 @@ fn map_messages_err(err: channels::domain::ports::ChannelMessagesErr) -> ApiErro
         channels::domain::ports::ChannelMessagesErr::MessageNotFound(_) => {
             ApiError::not_found("channel not found")
         }
+        channels::domain::ports::ChannelMessagesErr::Repo(repo_err) if is_not_found(&repo_err) => {
+            ApiError::not_found("channel not found")
+        }
         channels::domain::ports::ChannelMessagesErr::Repo(repo_err) => {
-            let message = repo_err.to_string();
-            if message.contains("not found") || message.contains("does not exist") {
-                ApiError::not_found("channel not found")
-            } else {
-                tracing::error!(error=?repo_err, "channel read failed");
-                ApiError::internal("channel read failed")
-            }
+            tracing::error!(error=?repo_err, "channel read failed");
+            ApiError::internal("channel read failed")
         }
     }
+}
+
+fn is_not_found(err: &anyhow::Error) -> bool {
+    let message = err.to_string().to_lowercase();
+    message.contains("not found")
+        || message.contains("no rows")
+        || message.contains("does not exist")
+        || message.contains("not deleted")
 }

@@ -16,7 +16,12 @@ pub mod resolve;
 #[cfg(feature = "inbound")]
 pub mod router;
 
+#[cfg(all(feature = "inbound", test))]
+mod test;
+
 #[cfg(feature = "inbound")]
 pub use auth::ServiceApiToken;
+#[cfg(feature = "inbound")]
+pub use resolve::{DbUserResolver, UserResolver};
 #[cfg(feature = "inbound")]
 pub use router::{CrostChannelsRouterState, crost_channels_router};

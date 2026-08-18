@@ -35,9 +35,17 @@ uuid = { workspace = true, optional = true }
 workspace-hack = { version = "0.1", path = "../../crates/workspace-hack" }
 
 [dev-dependencies]
+anyhow = { workspace = true }
+axum = { workspace = true }
+channel_sender = { path = "../../crates/channel_sender" }
 channels = { path = "../../crates/channels", default-features = false, features = [
   "inbound",
 ] }
+chrono = { workspace = true }
+http-body-util = { workspace = true }
 macro_user_id = { path = "../../crates/macro_user_id" }
+models_pagination = { path = "../../crates/models_pagination" }
+sqlx = { workspace = true, features = ["postgres", "runtime-tokio"] }
 tokio = { workspace = true, features = ["macros", "rt"] }
+tower = { workspace = true }
 uuid = { workspace = true }

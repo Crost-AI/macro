@@ -1,6 +1,7 @@
 use crate::{
     auth::{ServiceApiToken, require_service_token},
     handlers,
+    resolve::UserResolver,
 };
 use axum::{
     Router,
@@ -14,6 +15,7 @@ use std::sync::Arc;
 pub struct CrostChannelsRouterState<Svc> {
     pub service: Arc<Svc>,
     pub db: PgPool,
+    pub user_resolver: Arc<dyn UserResolver>,
     pub service_token: ServiceApiToken,
 }
 
@@ -22,16 +24,23 @@ impl<Svc> Clone for CrostChannelsRouterState<Svc> {
         Self {
             service: Arc::clone(&self.service),
             db: self.db.clone(),
+            user_resolver: Arc::clone(&self.user_resolver),
             service_token: self.service_token.clone(),
         }
     }
 }
 
 impl<Svc> CrostChannelsRouterState<Svc> {
-    pub fn new(service: Arc<Svc>, db: PgPool, service_token: ServiceApiToken) -> Self {
+    pub fn new(
+        service: Arc<Svc>,
+        db: PgPool,
+        user_resolver: Arc<dyn UserResolver>,
+        service_token: ServiceApiToken,
+    ) -> Self {
         Self {
             service,
             db,
+            user_resolver,
             service_token,
         }
     }

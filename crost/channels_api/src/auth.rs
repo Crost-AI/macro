@@ -1,8 +1,10 @@
+use crate::error::ErrorBody;
 use axum::{
+    Json,
     extract::Request,
     http::{StatusCode, header::AUTHORIZATION},
     middleware::Next,
-    response::Response,
+    response::{IntoResponse, Response},
 };
 use std::sync::Arc;
 
@@ -29,7 +31,7 @@ pub async fn require_service_token(
     axum::extract::State(expected): axum::extract::State<ServiceApiToken>,
     request: Request,
     next: Next,
-) -> Result<Response, StatusCode> {
+) -> Response {
     let authorized = request
         .headers()
         .get(AUTHORIZATION)
@@ -37,8 +39,14 @@ pub async fn require_service_token(
         .and_then(|value| value.strip_prefix("Bearer "))
         .is_some_and(|provided| provided == expected.0.as_ref());
     if authorized {
-        Ok(next.run(request).await)
+        next.run(request).await
     } else {
-        Err(StatusCode::UNAUTHORIZED)
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorBody {
+                error: "unauthorized".into(),
+            }),
+        )
+            .into_response()
     }
 }
