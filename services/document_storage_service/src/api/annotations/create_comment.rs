@@ -235,6 +235,24 @@ pub async fn create_comment_handler(
                         .await
                         .inspect_err(|e| tracing::error!(error =? e, "couldn't send document comment notification"));
                 }
+
+                if document_context.sub_type == Some(document_sub_type::DocumentSubType::Task) {
+                    let pool = db.clone();
+                    let task_id = document_id.clone();
+                    let comment_id = comment.comment_id.to_string();
+                    let author = user_id.clone();
+                    let text = req.text.clone();
+                    tokio::spawn(async move {
+                        webhook_emitter::emit::emit_task_comment_if_configured(
+                            &pool,
+                            &task_id,
+                            &comment_id,
+                            &author,
+                            &text,
+                        )
+                        .await;
+                    });
+                }
             }
             update_live_comment_state(
                 &conn_gateway_client,

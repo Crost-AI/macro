@@ -4566,6 +4566,7 @@ dependencies = [
  "utoipa-swagger-ui",
  "uuid",
  "webhook",
+ "webhook_emitter",
  "workspace-hack",
  "zip 2.4.2",
 ]
@@ -16319,6 +16320,36 @@ dependencies = [
  "url",
  "utoipa",
  "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "webhook_emitter"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "channels",
+ "chrono",
+ "document_sub_type",
+ "documents",
+ "hex",
+ "hmac 0.12.1",
+ "kafka_util",
+ "macro_event_broker",
+ "macro_event_topics",
+ "rdkafka",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-retry",
+ "tokio-util",
+ "tracing",
+ "uuid",
+ "wiremock",
  "workspace-hack",
 ]
 
