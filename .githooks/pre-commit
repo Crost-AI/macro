@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+GITHOOK_NAME="pre-commit"
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+# shellcheck source=.githooks/lib.sh
+source "${ROOT}/.githooks/lib.sh"
+
+mapfile -t staged < <(git diff --cached --name-only --diff-filter=ACMR)
+
+rust_files=()
+for file in "${staged[@]}"; do
+  case "$file" in
+    *.rs)
+      rust_files+=("$file")
+      ;;
+  esac
+done
+
+if ((${#rust_files[@]} == 0)); then
+  exit 0
+fi
+
+if ! ensure_nix_dev_env; then
+  exit 1
+fi
+
+cargo fmt -- --check "${rust_files[@]}"

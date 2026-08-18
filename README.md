@@ -205,6 +205,14 @@ To run the full app on your machine, follow [Running locally](docs/RUNNING_LOCAL
 
 To contribute, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
+After clone or checkout, install the Crost git hooks:
+
+```bash
+./scripts/install-git-hooks.sh
+```
+
+Hooks use the Nix dev shell when `cargo`/`just` are not already on `PATH` (`nix develop`). They mirror the Crost CI `rust` and `web` jobs (`SQLX_OFFLINE=true cargo check --workspace --bins -j 2` and `just build-dev` in `apps/web`).
+
 <br />
 
 # Layout
