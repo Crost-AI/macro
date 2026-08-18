@@ -44,6 +44,7 @@ fn analytics_proxy_route_is_present() {
     assert!(caddy.contains("reverse_proxy analytics-proxy:8098"));
 }
 
+/// Document content services that are not in the Rust inventory.
 #[test]
 fn document_content_services_are_available_through_the_proxy() {
     let caddy = caddyfile(Mode::Local, false);
@@ -54,6 +55,15 @@ fn document_content_services_are_available_through_the_proxy() {
     assert!(caddy.contains("reverse_proxy lexical-service:8096"));
     assert!(caddy.contains("handle_path /ai-editing/*"));
     assert!(caddy.contains("reverse_proxy ai-editing-worker:8933"));
+}
+
+/// Crost channels REST API is proxied without stripping the path prefix.
+#[test]
+fn crost_channels_api_route_uses_named_matcher() {
+    let caddy = caddyfile(Mode::Local, false);
+    assert!(caddy.contains("@crost_channels path /api/v1/channels /api/v1/channels/*"));
+    assert!(caddy.contains("handle @crost_channels {"));
+    assert!(caddy.contains("reverse_proxy document_storage_service:8080"));
 }
 
 /// The static-file block is the one route that differs by mode: LocalStack S3

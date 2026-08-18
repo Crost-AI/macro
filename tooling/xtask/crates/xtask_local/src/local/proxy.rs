@@ -137,6 +137,11 @@ const SPECIAL_ROUTES: &str = r#"    @websocket path /websocket /websocket/*
     handle_path /ai-editing/* {
         reverse_proxy ai-editing-worker:8933
     }
+    # Crost W2.8 service-token channels REST API (no prefix strip).
+    @crost_channels path /api/v1/channels /api/v1/channels/*
+    handle @crost_channels {
+        reverse_proxy document_storage_service:8080
+    }
 "#;
 
 const MAILPIT_ROUTE: &str = r#"    # Mailpit serves itself under /mailpit (MP_WEBROOT), so no prefix strip —

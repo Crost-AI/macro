@@ -247,6 +247,7 @@ struct ServiceAuthEnv {
     doc_perm_jwt: String,
     internal_call: String,
     url_signing: String,
+    service_api: String,
 }
 
 impl ServiceAuthEnv {
@@ -259,6 +260,7 @@ impl ServiceAuthEnv {
             doc_perm_jwt: "local".to_string(),
             internal_call: identity::instance_secret("internal-call", name),
             url_signing: identity::instance_secret("url-signing", name),
+            service_api: identity::instance_secret("service-api", name),
         }
     }
 
@@ -289,6 +291,7 @@ impl ServiceAuthEnv {
         env.insert("DOCUMENT_PERMISSION_JWT".into(), self.doc_perm_jwt.clone());
         env.insert("INTERNAL_CALL_SECRET".into(), self.internal_call.clone());
         env.insert("URL_SIGNING_HMAC".into(), self.url_signing.clone());
+        env.insert("SERVICE_API_TOKEN".into(), self.service_api.clone());
     }
 }
 

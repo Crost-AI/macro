@@ -88,6 +88,7 @@ fn items_router(state: ApiContext) -> Router<ApiContext> {
 }
 
 fn api_router(state: ApiContext) -> Router {
+    let crost_channels_state = state.crost_channels_state.clone();
     let github_sync_service_router_state = GithubSyncRouterState {
         service: state.github_sync_service.clone(),
         entity_access_service: state.entity_access_service.clone(),
@@ -287,4 +288,8 @@ fn api_router(state: ApiContext) -> Router {
     Router::new()
         .merge(dss_router.clone())
         .nest("/dss", dss_router)
+        .nest(
+            "/api/v1/channels",
+            crost_channels_api::crost_channels_router(crost_channels_state),
+        )
 }

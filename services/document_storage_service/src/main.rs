@@ -1325,9 +1325,15 @@ async fn main() -> anyhow::Result<()> {
         config: Arc::new(config),
         channel_service: channels_service.clone(),
         channels_state: ChannelsRouterState::from_arc(
-            channels_service,
+            channels_service.clone(),
             (*entity_access_service).clone(),
             authorization_state.clone(),
+        ),
+        crost_channels_state: crost_channels_api::CrostChannelsRouterState::new(
+            channels_service.clone(),
+            db.clone(),
+            Arc::new(crost_channels_api::DbUserResolver::new(db.clone())),
+            crost_channels_api::ServiceApiToken::from_env(),
         ),
         bots_state: bots::inbound::axum_router::BotsRouterState::new(
             bots_service.clone(),

@@ -65,6 +65,42 @@ Verify:
 curl -fsS "http://localhost:31009/auth/health"
 ```
 
+### Crost channels REST API (W2.8)
+
+Service-token lifecycle against the self-host proxy (`SERVICE_API_TOKEN` in `deploy/.env` must match the stack — default `local-selfhost-service-api`):
+
+```bash
+BASE="http://localhost:31009"
+TOKEN="${SERVICE_API_TOKEN:-local-selfhost-service-api}"
+AUTH="Authorization: Bearer ${TOKEN}"
+
+# create → members → message → archive
+CHANNEL_ID="$(
+  curl -fsS -X POST "${BASE}/api/v1/channels" \
+    -H "${AUTH}" -H 'Content-Type: application/json' \
+    -d '{"name":"crost-demo","private":true}' \
+  | jq -r .id
+)"
+echo "channel=${CHANNEL_ID}"
+
+curl -fsS -X POST "${BASE}/api/v1/channels/${CHANNEL_ID}/members" \
+  -H "${AUTH}" -H 'Content-Type: application/json' \
+  -d '{"user_or_agent_ref":"bob@seed.macro.local"}'
+
+MSG_ID="$(
+  curl -fsS -X POST "${BASE}/api/v1/channels/${CHANNEL_ID}/messages" \
+    -H "${AUTH}" -H 'Content-Type: application/json' \
+    -d '{"text":"hello from crost"}' \
+  | jq -r .message_id
+)"
+echo "message=${MSG_ID}"
+
+curl -fsS -o /dev/null -w '%{http_code}\n' -X POST \
+  "${BASE}/api/v1/channels/${CHANNEL_ID}/archive" \
+  -H "${AUTH}"
+# expect 204
+```
+
 ### Login (first-run admin)
 
 With `MACRO_SELFHOST_SEED=true` (default), the `team-perms` scenario creates persona accounts. After seeding, the orchestrator log includes login links such as:
