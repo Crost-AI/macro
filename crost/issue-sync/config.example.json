@@ -1,0 +1,19 @@
+{
+  "state_db_path": "/var/lib/crost/issue-sync.db",
+  "macro_base_url": "http://localhost:31015",
+  "macro_service_token": "replace-me",
+  "github_token": "ghp_replace",
+  "github_webhook_secret": "replace-github-webhook-secret",
+  "macro_webhook_secret": "replace-macro-webhook-secret",
+  "listen_addr": "127.0.0.1:8789",
+  "projects": [
+    {
+      "project_id": "00000000-0000-0000-0000-000000000001",
+      "gh_owner": "Crost-AI",
+      "gh_repo": "macro",
+      "open_status": "todo",
+      "closed_status": "done",
+      "label": "github-sync"
+    }
+  ]
+}

@@ -2,6 +2,7 @@
 resolver = "2"
 
 members = [
+  "crost/issue-sync",
   "crates/activity",
   "crates/agent",
   "crates/agent_runtime_protocol",
