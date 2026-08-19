@@ -1,0 +1,33 @@
+# CROS-63 — Macro Crost CI on the Mac Buildkite agent (Nix dev shell + SolidJS build).
+env:
+  SQLX_OFFLINE: "true"
+  # launchd agent PATH omits Nix, rustup, bun, and mise install paths.
+  PATH: "/nix/var/nix/profiles/default/bin:/Users/karl/.local/bin:/Users/karl/.cargo/bin:/Users/karl/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+agents:
+  queue: default
+  os: macos
+  gh: "1"
+
+steps:
+  - label: ":no_entry_sign: Fail demo"
+    if: build.env('CI_FAIL_DEMO') == 'true'
+    command: |
+      echo "Intentional failure for CI verification (set CI_FAIL_DEMO=true)."
+      exit 1
+
+  - label: ":rust: Rust workspace"
+    key: rust
+    command: |
+      set -euo pipefail
+      source .buildkite/scripts/nix-dev-env.sh
+      SQLX_OFFLINE=true cargo check --workspace --bins -j 2
+
+  - label: ":javascript: SolidJS app"
+    key: web
+    command: |
+      set -euo pipefail
+      source .buildkite/scripts/nix-dev-env.sh
+      ensure_web_prereqs
+      cd apps/web
+      just build-dev

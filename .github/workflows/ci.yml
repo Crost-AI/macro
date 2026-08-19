@@ -1,26 +1,12 @@
-# Crost fork CI — build Rust workspace + SolidJS on pull requests.
-name: Crost CI
+# Deprecated: required checks moved to Buildkite (CROS-63).
+# Kept for manual workflow_dispatch only — do not re-enable push/PR triggers.
+name: Crost CI (manual only)
 
 on:
-  pull_request:
-    branches:
-      - main
-    types:
-      - opened
-      - synchronize
-      - reopened
-      - ready_for_review
-  push:
-    branches:
-      - main
-      - 'crost/**'
+  workflow_dispatch:
 
 permissions:
   contents: read
-
-concurrency:
-  group: crost-ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   rust:
@@ -73,22 +59,3 @@ jobs:
       - name: Build frontend (production)
         run: just build-dev
         working-directory: apps/web
-
-  status:
-    name: Crost CI status
-    runs-on: ubuntu-latest
-    needs:
-      - rust
-      - web
-    if: always()
-    steps:
-      - name: Check job results
-        run: |
-          echo "rust: ${{ needs.rust.result }}"
-          echo "web: ${{ needs.web.result }}"
-          if [[ "${{ needs.rust.result }}" == "failure" ]] || \
-             [[ "${{ needs.web.result }}" == "failure" ]]; then
-            echo "One or more jobs failed"
-            exit 1
-          fi
-          echo "All jobs passed"
