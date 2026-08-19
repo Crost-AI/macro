@@ -10,6 +10,12 @@ agents:
   gh: "1"
 
 steps:
+  - label: ":no_entry_sign: Fail demo"
+    if: build.env('CI_FAIL_DEMO') == 'true'
+    command: |
+      echo "Intentional failure for CI verification (set CI_FAIL_DEMO=true)."
+      exit 1
+
   - label: ":rust: Rust workspace"
     key: rust
     command: |

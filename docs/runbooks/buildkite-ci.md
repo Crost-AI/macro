@@ -40,3 +40,4 @@ Pre-push hooks mirror this gate (`./scripts/install-git-hooks.sh`). GitHub Actio
 | Validate pipeline YAML | `bk pipeline validate -F .buildkite/pipeline.yml` |
 | List recent builds | `bk build list --pipeline macro-ci --limit 10` |
 | Re-run failed build | Buildkite UI or `bk build rebuild <build-url>` |
+| Intentional fail demo | `bk build create -p macro-ci -b <branch> -e CI_FAIL_DEMO=true -m "fail demo"` |
