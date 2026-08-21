@@ -38,7 +38,7 @@ fi
 # in-container zigbuild — drop only the linux cross-target dirs inside the runner.
 if [[ -f /.dockerenv ]]; then
   # xtask probes curl http://localhost:<port-base+N>; stack ports publish on the host daemon.
-  host_ip="$(getent ahostsv4 host.docker.internal 2>/dev/null | awk 'NR==1 {print $1}')"
+  host_ip="$(getent ahostsv4 host.docker.internal 2>/dev/null | awk 'NR==1 {print $1}' || true)"
   if [[ -n "$host_ip" ]]; then
     log "forwarding localhost:$PORT_BASE-$((PORT_BASE + 29)) -> ${host_ip} (compose runner)"
     for offset in $(seq 0 29); do
