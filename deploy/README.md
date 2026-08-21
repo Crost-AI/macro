@@ -187,6 +187,14 @@ Writes `macrodb.sql` (via the running Postgres container) plus tarballs for the 
 
 ## Health check
 
+The offline config regression verifies that the example env is container-safe and that the wrapper passes it to the inner xtask stack:
+
+```bash
+bash deploy/test-selfhost-config.sh
+```
+
+For a running stack:
+
 ```bash
 docker compose -f deploy/docker-compose.selfhost.yml run --rm --no-deps macro \
   just stack status --json --instance selfhost --port-base 31000
