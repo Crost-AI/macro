@@ -1,3 +1,17 @@
+## Crost fork (factory work)
+
+This repository is a [rebase-style fork](UPSTREAM.md) of upstream Macro. For Crost Build Blueprint tasks in this repo:
+
+- **Branch:** `crost/<task-id>-<short-slug>` (example: `crost/w2-9-issue-sync`)
+- **PR title:** `W<n> — <title>` (example: `W2.9 — GitHub Issues 2-way sync`)
+- **PR body:** include `Closes CROS-N` for the Multica issue
+
+Sync upstream release tags per [UPSTREAM.md](UPSTREAM.md); do not merge `macro-inc/macro` into `main`.
+
+After clone, install hooks: `./scripts/install-git-hooks.sh` (mirrors Crost CI).
+
+---
+
 # Contributing to Macro
 
 Thanks for your interest in contributing! Macro is fully open source under the

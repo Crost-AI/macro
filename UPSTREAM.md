@@ -60,13 +60,16 @@ After merge to `main`, ensure Crost CI is enabled: `gh workflow enable "Crost CI
 
 | In scope (Crost fork) | Out of scope (upstream or later waves) |
 | --- | --- |
-| `deploy/` self-host compose, backup, README | GitHub Issues 2-way sync (W2.7–W2.9) |
-| `scripts/sync-upstream.sh`, `UPSTREAM.md` | Broker integration / webhooks glue |
-| `research/` verification probes (W0.1) | Product feature changes without upstream path |
-| `.github/workflows/ci.yml` (Crost CI gate) | Rewriting upstream service internals |
+| `deploy/` self-host compose, backup, README | Product feature changes without upstream path |
+| `scripts/sync-upstream.sh`, `UPSTREAM.md` | Rewriting upstream service internals |
+| `research/` verification probes (W0.1) | Restoring Fly/Pulumi/deploy workflows without a human decision |
+| `.github/workflows/ci.yml` (Crost CI / Buildkite gate) | |
 | `.github/workflows/upstream-sync.yml` (weekly tag sync automation) | |
 | `scripts/upstream-sync-automation.sh` | |
-| Workflow slimming (delete upstream `.github/workflows/*` except `ci.yml` + `upstream-sync.yml`) | Restoring Fly/Pulumi/deploy workflows without a human decision |
+| Workflow slimming (delete upstream `.github/workflows/*` except `ci.yml` + `upstream-sync.yml`, CROS-58) | |
+| Outgoing webhooks to Crost broker (`crates/webhook_emitter/`, W2.7) | |
+| Channels REST API (`crost/channels_api/`, W2.8) | |
+| GitHub Issues 2-way sync (`crost/issue-sync/`, W2.9) | |
 
 ## Review checklist
 

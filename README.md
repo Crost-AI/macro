@@ -1,3 +1,17 @@
+> **Crost fork** — This is [`Crost-AI/macro`](https://github.com/Crost-AI/macro), a rebase-style fork of [`macro-inc/macro`](https://github.com/macro-inc/macro). We keep upstream Macro as the product base and apply a minimal additive patch series for Crost agent operations.
+>
+> | Topic | Where |
+> | --- | --- |
+> | Upstream sync policy | [UPSTREAM.md](UPSTREAM.md) |
+> | Self-hosted Macro (Docker Compose) | [deploy/README.md](deploy/README.md) |
+> | Outgoing webhooks (broker events, W2.7) | [crates/webhook_emitter/README.md](crates/webhook_emitter/README.md) |
+> | Channels REST API (service token, W2.8) | [deploy/README.md#crost-channels-rest-api-w28](deploy/README.md#crost-channels-rest-api-w28) · `crost/channels_api/` |
+> | GitHub Issues 2-way sync (W2.9) | [crost/issue-sync/README.md](crost/issue-sync/README.md) |
+>
+> Product documentation at [docs.macro.com](https://docs.macro.com) describes upstream Macro, not Crost deployment or integrations. For this fork, see [Running it locally](#running-it-locally) and [CONTRIBUTING.md](CONTRIBUTING.md).
+
+<br />
+
 <div align="center">
   <a target="_blank" href="https://macro.com">
     <img width="2195" height="721" alt="Frame 11" src="https://github.com/user-attachments/assets/50405352-785e-4984-b24f-544e89731acb" />
