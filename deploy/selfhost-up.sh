@@ -103,6 +103,11 @@ fi
 
 log "starting stack (no-doppler, headless)"
 stack_args=(--no-doppler --instance "$INSTANCE" --port-base "$PORT_BASE")
+if [[ -f "$ENV_FILE" ]]; then
+  # Sourcing makes values available to this wrapper; --env-file is also required
+  # because xtask intentionally ignores process-env keys it does not already know.
+  stack_args+=(--env-file "$ENV_FILE")
+fi
 if [[ -f "${REPO_ROOT}/apps/web/dist/index.html" ]]; then
   log "using prebuilt frontend at apps/web/dist"
   stack_args+=(--frontend-dist "${REPO_ROOT}/apps/web/dist")
