@@ -38,7 +38,7 @@ fi
 # in-container zigbuild — drop only the linux cross-target dirs inside the runner.
 if [[ -f /.dockerenv ]]; then
   # xtask probes curl http://localhost:<port-base+N>; stack ports publish on the host daemon.
-  host_ip="$(getent ahostsv4 host.docker.internal 2>/dev/null | awk 'NR==1 {print $1}')"
+  host_ip="$(getent ahostsv4 host.docker.internal 2>/dev/null | awk 'NR==1 {print $1}' || true)"
   if [[ -n "$host_ip" ]]; then
     log "forwarding localhost:$PORT_BASE-$((PORT_BASE + 29)) -> ${host_ip} (compose runner)"
     for offset in $(seq 0 29); do
@@ -103,6 +103,11 @@ fi
 
 log "starting stack (no-doppler, headless)"
 stack_args=(--no-doppler --instance "$INSTANCE" --port-base "$PORT_BASE")
+if [[ -f "$ENV_FILE" ]]; then
+  # Sourcing makes values available to this wrapper; --env-file is also required
+  # because xtask intentionally ignores process-env keys it does not already know.
+  stack_args+=(--env-file "$ENV_FILE")
+fi
 if [[ -f "${REPO_ROOT}/apps/web/dist/index.html" ]]; then
   log "using prebuilt frontend at apps/web/dist"
   stack_args+=(--frontend-dist "${REPO_ROOT}/apps/web/dist")
