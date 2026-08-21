@@ -51,11 +51,13 @@ exit 0
 EOF
 chmod +x "${stub_bin}/bun"
 
-PATH="${stub_bin}:/usr/bin:/bin" \
-SELFHOST_TEST_LOG="$log_file" \
-MACRO_REPO_ROOT="$REPO_ROOT" \
-MACRO_ENV_FILE="$env_file" \
-bash "$UP_SCRIPT" >/dev/null
+if ! PATH="${stub_bin}:/usr/bin:/bin" \
+  SELFHOST_TEST_LOG="$log_file" \
+  MACRO_REPO_ROOT="$REPO_ROOT" \
+  MACRO_ENV_FILE="$env_file" \
+  bash "$UP_SCRIPT" >"${tmp_dir}/stdout.log" 2>"${tmp_dir}/stderr.log"; then
+  fail "selfhost wrapper failed: $(tr '\\n' ';' <"${tmp_dir}/stderr.log")"
+fi
 
 expected="just <stack> <up> <--no-doppler> <--instance> <config-test> <--port-base> <32000> <--env-file> <${env_file}>"
 grep -Fqx "$expected" "$log_file" \
