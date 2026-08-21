@@ -31,3 +31,9 @@ steps:
       ensure_web_prereqs
       cd apps/web
       just build-dev
+
+  - label: ":docker: Self-host deploy contract"
+    key: selfhost-deploy
+    command: |
+      set -euo pipefail
+      bash deploy/test-selfhost-config.sh
