@@ -37,7 +37,7 @@ cd apps/web && bun install && \
 cp deploy/.env.example deploy/.env
 ```
 
-Edit `deploy/.env` only if you need a different `MACRO_PORT_BASE`, want to disable auto-seed (`MACRO_SELFHOST_SEED=false`), or are enabling real integration keys.
+`deploy/.env` is passed to the inner stack as an explicit `--env-file`. Do not put a host-loopback `MACRO_DB_URL` in it: the same value is injected into service containers, where `localhost` is the container itself. The generated local-stack environment already uses `postgres:5432` for service discovery; the host-only operator URL is `postgres://user:password@localhost:31000/macrodb`.
 
 ## Start
 
@@ -63,6 +63,36 @@ Verify:
 
 ```bash
 curl -fsS "http://localhost:31009/auth/health"
+```
+
+### Private-network access
+
+The built-in URLs use `localhost`, which is correct when the browser runs on the Docker host. To open Macro from another machine over Tailscale, WireGuard, or another private network, set all three browser-facing auth values in `deploy/.env` before first boot:
+
+```dotenv
+BASE_URL=http://100.64.0.20:31011
+FUSIONAUTH_PUBLIC_URL=http://100.64.0.20:31005
+FUSIONAUTH_OAUTH_REDIRECT_URI=http://100.64.0.20:31011/oauth/redirect
+```
+
+Replace `100.64.0.20` with the machost private IP. With the default `MACRO_PORT_BASE=31000`, the proxy/app is `:31009`, FusionAuth is `:31005`, and the authentication callback is `:31011`. These values are part of FusionAuth's first-boot configuration, so if you change them after the stack was initialized, tear down and recreate the self-host stack.
+
+### Macro → Crost webhooks
+
+Macro's Crost webhook emitter is environment-driven; there is no UI toggle. Add both values to `deploy/.env`:
+
+```dotenv
+WEBHOOK_URL=http://100.64.0.20:8080/webhooks/macro
+WEBHOOK_SECRET=replace-with-the-same-secret-as-brokerd
+```
+
+The URL must be reachable from the Macro service containers. On the two-host Crost deployment, use the machost private IP where brokerd is listening; `http://broker:8080` does not work because brokerd is a host systemd service, not a Macro Compose service.
+
+Apply an env or URL change by recreating the outer runner. It invokes `stack up` with `deploy/.env`, which recreates affected inner services:
+
+```bash
+docker compose -f deploy/docker-compose.selfhost.yml up -d --force-recreate macro
+docker compose -f deploy/docker-compose.selfhost.yml logs -f macro
 ```
 
 ### Crost channels REST API (W2.8)
@@ -164,6 +194,8 @@ curl -fsS "http://localhost:31009/auth/health"
 curl -fsS "http://localhost:31009/app/" | head
 ```
 
+For the crost-config platform role, Macro is ready only after `GET /auth/health` through the proxy returns 200 and `POST /api/v1/channels` accepts the configured service token. The outer runner being `running` is not a Macro health signal; first boot can still be compiling or migrating the inner stack.
+
 ## Upstream sync
 
 See `UPSTREAM.md`. Rebase Crost patches onto a new upstream tag:
@@ -182,6 +214,8 @@ See `UPSTREAM.md`. Rebase Crost patches onto a new upstream tag:
 | Stale containers from a prior run | `docker compose -p macro-selfhost down -v` then `docker compose -f deploy/docker-compose.selfhost.yml up` again. |
 | `sccache: Compiler killed by signal 9` on first boot | Docker VM ran out of RAM during zigbuild. Give Docker Desktop ≥12 GB RAM, or set `CARGO_BUILD_JOBS=1` in `deploy/.env` and retry. |
 | Mixed macOS/Linux `target/` after host `just stack up` | `rm -rf target/aarch64-unknown-linux-gnu target/zig-cache` then retry compose. |
+| Remote login redirects to localhost | Set `BASE_URL`, `FUSIONAUTH_PUBLIC_URL`, and `FUSIONAUTH_OAUTH_REDIRECT_URI` together before first boot, then recreate the stack. |
+| Macro events never reach brokerd | Set both `WEBHOOK_URL` and `WEBHOOK_SECRET` in `deploy/.env`, recreate the runner, and confirm the broker URL is container-reachable. |
 | Runner exits immediately | Expected when keepalive is off; inner stack keeps running. Use `curl` / `docker compose -p macro-selfhost ps` to verify. |
 
 Pull requests run `.github/workflows/ci.yml` (Rust workspace check + SolidJS production build).
